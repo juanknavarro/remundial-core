@@ -1,0 +1,16 @@
+version: '3.8'
+services:
+  db:
+    image: postgres:15-alpine
+    container_name: remundial_postgres
+    environment:
+      POSTGRES_USER: remundial_admin
+      POSTGRES_PASSWORD: admin123
+      POSTGRES_DB: remundial_db
+    ports:
+      - "5444:5432"
+    volumes:
+      - remundial_pgdata:/var/lib/postgresql/data
+
+volumes:
+  remundial_pgdata:
