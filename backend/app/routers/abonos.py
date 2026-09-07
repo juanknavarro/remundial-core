@@ -16,6 +16,7 @@ from app.models.usuario import RolUsuario, Usuario
 from app.schemas.abono import (
     AbonoCreate,
     AbonoResponse,
+    CierreCajaResponse,
     ConciliacionRutaRequest,
     ConciliacionRutaResponse,
 )
@@ -69,6 +70,28 @@ async def listar_abonos_por_credito(
     return await crud_abono.get_abonos_by_credito(
         db=db,
         credito_id=credito_id,
+        skip=skip,
+        limit=limit,
+    )
+
+
+@router.get(
+    "/cierres-caja",
+    response_model=List[CierreCajaResponse],
+    summary="Listar actas históricas de cierre de caja (Supervisor o Secretaria)",
+    status_code=status.HTTP_200_OK,
+)
+async def listar_cierres_caja(
+    cobrador_id: Optional[UUID] = Query(None, description="Filtrar por cobrador asignado"),
+    skip: int = Query(0, ge=0, description="Paginación: registros a omitir"),
+    limit: int = Query(100, ge=1, le=200, description="Límite de registros"),
+    db: AsyncSession = Depends(get_db),
+    current_user: Usuario = Depends(require_supervisor_o_secretaria),
+):
+    """Retorna las actas históricas de arqueo y cierre de caja realizadas en secretaría."""
+    return await crud_abono.get_cierres_caja_list(
+        db=db,
+        cobrador_id=cobrador_id,
         skip=skip,
         limit=limit,
     )
@@ -140,5 +163,6 @@ async def conciliar_ruta(
         db=db,
         cobrador_id=datos.cobrador_id,
         efectivo_entregado=datos.efectivo_entregado,
+        responsable_id=current_user.id,
         notas=datos.notas,
     )

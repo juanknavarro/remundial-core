@@ -7,7 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
 from app.core.deps import get_current_user, require_supervisor
-from app.crud import crud_cliente
+from app.crud import crud_cliente, crud_credito
 from app.models.usuario import Usuario
 from app.schemas.cliente import ClienteCreate, ClienteResponse, ClienteUpdate
 
@@ -172,15 +172,23 @@ async def eliminar_cliente(
             detail=f"Cliente con ID '{cliente_id}' no encontrado",
         )
 
+    # Validar que no tenga créditos o cartera activa asociados
+    creditos_asociados = await crud_credito.get_creditos(db=db, cliente_id=cliente_id, limit=1)
+    if creditos_asociados:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"No es posible eliminar al cliente '{cliente.nombres}' porque registra contratos de crédito o cartera asociados en el sistema.",
+        )
+
     try:
         await crud_cliente.delete_cliente(db=db, db_cliente=cliente)
-        return {"message": f"Cliente '{cliente.nombres}' (ID: {cliente_id}) eliminado correctamente"}
+        return {"message": f"Cliente '{cliente.nombres}' eliminado correctamente"}
     except IntegrityError as exc:
         await db.rollback()
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=(
-                "No es posible eliminar el cliente porque posee contratos de crédito asociados "
-                "(Restricción de integridad referencial ON DELETE RESTRICT)"
+                f"No es posible eliminar al cliente '{cliente.nombres}' porque posee referencias o contratos en el sistema "
+                "(Restricción de integridad referencial)"
             ),
         ) from exc

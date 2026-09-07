@@ -8,7 +8,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from app.models.abono import Abono, EstadoAbono
+from app.models.abono import Abono, CierreCaja, EstadoAbono
 from app.models.credito import Credito, EstadoCredito
 from app.models.usuario import Usuario
 from app.schemas.abono import AbonoCreate
@@ -56,6 +56,7 @@ async def get_abonos_by_credito(
     for a in abonos:
         if a.credito and a.credito.cliente:
             setattr(a, "cliente_nombre", a.credito.cliente.nombres)
+            setattr(a, "cliente_cedula", a.credito.cliente.cedula)
     return abonos
 
 
@@ -89,6 +90,7 @@ async def get_abonos_list(
     for a in abonos:
         if a.credito and a.credito.cliente:
             setattr(a, "cliente_nombre", a.credito.cliente.nombres)
+            setattr(a, "cliente_cedula", a.credito.cliente.cedula)
     return abonos
 
 
@@ -96,9 +98,11 @@ async def conciliar_ruta_abonos(
     db: AsyncSession,
     cobrador_id: UUID,
     efectivo_entregado: Decimal,
+    responsable_id: UUID,
     notas: Optional[str] = None,
 ) -> dict:
-    """Concilia todos los abonos en estado 'registrado' del cobrador y actualiza su estado a 'conciliado'."""
+    """Concilia todos los abonos en estado 'registrado' del cobrador, actualiza su estado a 'conciliado'
+    y registra el acta contable de cierre en la tabla 'cierres_caja' para auditoría gerencial."""
     query = (
         select(Abono)
         .where(
@@ -112,6 +116,9 @@ async def conciliar_ruta_abonos(
     cobrador = await db.get(Usuario, cobrador_id)
     cobrador_nombre = cobrador.nombre if cobrador else "Cobrador"
 
+    responsable = await db.get(Usuario, responsable_id)
+    responsable_nombre = responsable.nombre if responsable else "Secretaría"
+
     total_esperado = sum((a.valor_abonado for a in abonos_pendientes), Decimal("0.00"))
     diferencia = efectivo_entregado - total_esperado
 
@@ -122,22 +129,88 @@ async def conciliar_ruta_abonos(
     else:
         cuadre_estado = "sobrante"
 
+    # Registrar el acta oficial en cierres_caja
+    nuevo_cierre = CierreCaja(
+        cobrador_id=cobrador_id,
+        responsable_id=responsable_id,
+        fecha_cierre=datetime.now(),
+        total_esperado=total_esperado,
+        efectivo_entregado=efectivo_entregado,
+        diferencia=diferencia,
+        cuadre_estado=cuadre_estado,
+        abonos_conciliados_count=len(abonos_pendientes),
+        notas=notas,
+    )
+    db.add(nuevo_cierre)
+    await db.flush()  # Obtener el ID generado para relacionar los abonos
+
     for a in abonos_pendientes:
         a.estado = EstadoAbono.CONCILIADO
+        a.cierre_caja_id = nuevo_cierre.id
 
     await db.commit()
+    await db.refresh(nuevo_cierre)
 
     return {
+        "id": nuevo_cierre.id,
         "cobrador_id": cobrador_id,
         "cobrador_nombre": cobrador_nombre,
+        "responsable_id": responsable_id,
+        "responsable_nombre": responsable_nombre,
         "total_esperado": total_esperado,
         "efectivo_entregado": efectivo_entregado,
         "diferencia": diferencia,
         "cuadre_estado": cuadre_estado,
         "abonos_conciliados_count": len(abonos_pendientes),
-        "fecha_conciliacion": datetime.now(),
+        "fecha_conciliacion": nuevo_cierre.fecha_cierre,
         "mensaje": f"Conciliación finalizada: {len(abonos_pendientes)} abonos conciliados. Estado de caja: {cuadre_estado}.",
+        "notas": notas,
     }
+
+
+async def get_cierres_caja_list(
+    db: AsyncSession,
+    cobrador_id: Optional[UUID] = None,
+    skip: int = 0,
+    limit: int = 100,
+) -> List[dict]:
+    """Lista las actas históricas de cierre de caja registradas para auditoría."""
+    query = (
+        select(CierreCaja)
+        .options(
+            selectinload(CierreCaja.cobrador),
+            selectinload(CierreCaja.responsable),
+        )
+        .offset(skip)
+        .limit(limit)
+        .order_by(CierreCaja.fecha_cierre.desc())
+    )
+
+    if cobrador_id:
+        query = query.where(CierreCaja.cobrador_id == cobrador_id)
+
+    result = await db.execute(query)
+    cierres = list(result.scalars().all())
+
+    items = []
+    for c in cierres:
+        items.append({
+            "id": c.id,
+            "cobrador_id": c.cobrador_id,
+            "cobrador_nombre": c.cobrador.nombre if c.cobrador else "Cobrador",
+            "responsable_id": c.responsable_id,
+            "responsable_nombre": c.responsable.nombre if c.responsable else "Secretaría",
+            "fecha_cierre": c.fecha_cierre,
+            "total_esperado": c.total_esperado,
+            "efectivo_entregado": c.efectivo_entregado,
+            "diferencia": c.diferencia,
+            "cuadre_estado": c.cuadre_estado,
+            "abonos_conciliados_count": c.abonos_conciliados_count,
+            "notas": c.notas,
+            "creado_en": c.creado_en,
+        })
+    return items
+
 
 
 async def create_abono(db: AsyncSession, abono_in: AbonoCreate) -> Abono:

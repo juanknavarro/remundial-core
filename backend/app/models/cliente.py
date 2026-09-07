@@ -1,14 +1,21 @@
+import enum
 import re
 import uuid
 from datetime import datetime
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
-from sqlalchemy import DateTime, String, Text, func
-from sqlalchemy.dialects.postgresql import UUID
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy import DateTime, ForeignKey, String, Text, func
+from sqlalchemy.dialects.postgresql import ENUM as PG_ENUM, UUID
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.types import UserDefinedType
 
 from app.core.database import Base
+
+
+class TipoReferenciaEnum(str, enum.Enum):
+    """Tipos de contacto de respaldo del cliente."""
+    FAMILIAR = "familiar"
+    CODEUDOR = "codeudor"
 
 
 class PointType(UserDefinedType):
@@ -123,8 +130,74 @@ class Cliente(Base):
         nullable=False,
     )
 
+    # Relaciones ORM
+    referencias: Mapped[List["ReferenciaCliente"]] = relationship(
+        "ReferenciaCliente",
+        back_populates="cliente",
+        cascade="all, delete-orphan",
+        lazy="selectin",
+    )
+
     def __repr__(self) -> str:
         return (
             f"<Cliente(id={self.id}, cedula='{self.cedula}', "
             f"nombres='{self.nombres}', ciudad='{self.ciudad}')>"
+        )
+
+
+class ReferenciaCliente(Base):
+    """Modelo ORM para la tabla 'referencias_cliente' (codeudores y referencias familiares)."""
+
+    __tablename__ = "referencias_cliente"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        primary_key=True,
+        default=uuid.uuid4,
+        server_default=func.gen_random_uuid(),
+    )
+    cliente_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("clientes.id", ondelete="CASCADE", onupdate="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    tipo: Mapped[TipoReferenciaEnum] = mapped_column(
+        PG_ENUM(
+            TipoReferenciaEnum,
+            name="tipo_referencia_enum",
+            create_type=False,
+            values_callable=lambda x: [e.value for e in x],
+        ),
+        nullable=False,
+    )
+    nombre: Mapped[str] = mapped_column(
+        String(150),
+        nullable=False,
+    )
+    cedula: Mapped[Optional[str]] = mapped_column(
+        String(30),
+        nullable=True,
+    )
+    telefono: Mapped[Optional[str]] = mapped_column(
+        String(25),
+        nullable=True,
+    )
+    direccion: Mapped[Optional[str]] = mapped_column(
+        Text,
+        nullable=True,
+    )
+    creado_en: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        nullable=False,
+    )
+
+    # Relaciones ORM
+    cliente: Mapped["Cliente"] = relationship("Cliente", back_populates="referencias")
+
+    def __repr__(self) -> str:
+        return (
+            f"<ReferenciaCliente(id={self.id}, tipo='{self.tipo}', "
+            f"nombre='{self.nombre}', cliente_id={self.cliente_id})>"
         )

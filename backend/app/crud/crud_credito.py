@@ -1,17 +1,51 @@
+from datetime import date
 from decimal import Decimal
 from typing import List, Optional
 from uuid import UUID
 
 from fastapi import HTTPException, status
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from app.models.cliente import Cliente
+from app.models.cliente import Cliente, ReferenciaCliente, TipoReferenciaEnum
 from app.models.credito import Credito, CreditoDetalle, EstadoCredito
 from app.models.producto import Producto
 from app.models.usuario import Usuario
-from app.schemas.credito import CreditoCreate
+from app.schemas.credito import CreditoCreate, CreditoUpdate
+
+
+def _poblar_codeudor_y_referencia(credito: Optional[Credito]) -> Optional[Credito]:
+    """Asigna los objetos de codeudor y referencia familiar si el cliente titular los tiene registrados."""
+    if not credito or not credito.cliente:
+        return credito
+    referencias = getattr(credito.cliente, "referencias", None)
+    if referencias:
+        for ref in referencias:
+            if ref.tipo == TipoReferenciaEnum.CODEUDOR and not getattr(credito, "codeudor", None):
+                credito.codeudor = {
+                    "nombre": ref.nombre,
+                    "cedula": ref.cedula,
+                    "telefono": ref.telefono,
+                    "direccion": ref.direccion,
+                }
+            elif ref.tipo == TipoReferenciaEnum.FAMILIAR and not getattr(credito, "referencia", None):
+                parentesco = None
+                direccion_limpia = ref.direccion
+                if ref.direccion and "Parentesco:" in ref.direccion:
+                    partes = ref.direccion.split(" • ")
+                    for p in partes:
+                        if p.startswith("Parentesco:"):
+                            parentesco = p.replace("Parentesco:", "").strip()
+                        else:
+                            direccion_limpia = p
+                credito.referencia = {
+                    "nombre": ref.nombre,
+                    "telefono": ref.telefono,
+                    "parentesco": parentesco,
+                    "direccion": direccion_limpia,
+                }
+    return credito
 
 
 async def get_credito(db: AsyncSession, id_contrato: UUID) -> Optional[Credito]:
@@ -20,7 +54,7 @@ async def get_credito(db: AsyncSession, id_contrato: UUID) -> Optional[Credito]:
         select(Credito)
         .options(
             selectinload(Credito.detalles).selectinload(CreditoDetalle.producto),
-            selectinload(Credito.cliente),
+            selectinload(Credito.cliente).selectinload(Cliente.referencias),
             selectinload(Credito.vendedor),
             selectinload(Credito.supervisor),
             selectinload(Credito.cobrador),
@@ -28,7 +62,7 @@ async def get_credito(db: AsyncSession, id_contrato: UUID) -> Optional[Credito]:
         .where(Credito.id_contrato == id_contrato)
     )
     result = await db.execute(query)
-    return result.scalar_one_or_none()
+    return _poblar_codeudor_y_referencia(result.scalar_one_or_none())
 
 
 async def get_creditos(
@@ -39,14 +73,17 @@ async def get_creditos(
     vendedor_id: Optional[UUID] = None,
     cobrador_id: Optional[UUID] = None,
     estado: Optional[EstadoCredito] = None,
+    fecha: Optional[date] = None,
 ) -> List[Credito]:
     """Lista créditos con opciones de paginación y filtros operativos."""
     query = (
         select(Credito)
         .options(
             selectinload(Credito.detalles).selectinload(CreditoDetalle.producto),
-            selectinload(Credito.cliente),
+            selectinload(Credito.cliente).selectinload(Cliente.referencias),
             selectinload(Credito.vendedor),
+            selectinload(Credito.supervisor),
+            selectinload(Credito.cobrador),
         )
         .offset(skip)
         .limit(limit)
@@ -61,9 +98,15 @@ async def get_creditos(
         query = query.where(Credito.cobrador_id == cobrador_id)
     if estado:
         query = query.where(Credito.estado == estado)
+    if fecha:
+        query = query.where(func.date(Credito.creado_en) == fecha)
 
     result = await db.execute(query)
-    return list(result.scalars().all())
+    creditos = list(result.scalars().all())
+    for c in creditos:
+        _poblar_codeudor_y_referencia(c)
+    return creditos
+
 
 
 async def create_credito(db: AsyncSession, credito_in: CreditoCreate) -> Credito:
@@ -195,7 +238,36 @@ async def create_credito(db: AsyncSession, credito_in: CreditoCreate) -> Credito
             )
             db.add(db_detalle)
 
-        # C. Confirmación única atómica (Commit)
+        # C. Insertar datos de respaldo (Codeudor y Referencia Familiar) si se proporcionaron
+        if credito_in.codeudor and credito_in.codeudor.nombre:
+            ref_codeudor = ReferenciaCliente(
+                cliente_id=credito_in.cliente_id,
+                tipo=TipoReferenciaEnum.CODEUDOR,
+                nombre=credito_in.codeudor.nombre.strip(),
+                cedula=credito_in.codeudor.cedula.strip() if credito_in.codeudor.cedula else None,
+                telefono=credito_in.codeudor.telefono.strip() if credito_in.codeudor.telefono else None,
+                direccion=credito_in.codeudor.direccion.strip() if credito_in.codeudor.direccion else None,
+            )
+            db.add(ref_codeudor)
+
+        if credito_in.referencia and credito_in.referencia.nombre:
+            partes_dir = []
+            if credito_in.referencia.parentesco:
+                partes_dir.append(f"Parentesco: {credito_in.referencia.parentesco.strip()}")
+            if credito_in.referencia.direccion:
+                partes_dir.append(credito_in.referencia.direccion.strip())
+            dir_final = " • ".join(partes_dir) if partes_dir else None
+
+            ref_familiar = ReferenciaCliente(
+                cliente_id=credito_in.cliente_id,
+                tipo=TipoReferenciaEnum.FAMILIAR,
+                nombre=credito_in.referencia.nombre.strip(),
+                telefono=credito_in.referencia.telefono.strip() if credito_in.referencia.telefono else None,
+                direccion=dir_final,
+            )
+            db.add(ref_familiar)
+
+        # D. Confirmación única atómica (Commit)
         await db.commit()
     except Exception:
         # Reversión completa en caso de cualquier excepción
@@ -209,4 +281,76 @@ async def create_credito(db: AsyncSession, credito_in: CreditoCreate) -> Credito
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Error al recuperar el crédito recién originado",
         )
+
+    # Garantizar presencia de codeudor y referencia en la respuesta inmediata
+    if credito_in.codeudor:
+        credito_creado.codeudor = credito_in.codeudor
+    if credito_in.referencia:
+        credito_creado.referencia = credito_in.referencia
+
     return credito_creado
+
+
+
+async def update_credito(
+    db: AsyncSession,
+    id_contrato: UUID,
+    credito_in: CreditoUpdate,
+    supervisor_id: Optional[UUID] = None,
+) -> Optional[Credito]:
+    """Actualiza de forma persistente los datos administrativos o el estado de un crédito."""
+    credito = await db.get(Credito, id_contrato)
+    if not credito:
+        return None
+
+    if credito_in.estado is not None:
+        credito.estado = credito_in.estado
+        if credito_in.estado == EstadoCredito.ACTIVO and supervisor_id is not None:
+            credito.supervisor_id = supervisor_id
+
+    if supervisor_id is not None and credito.supervisor_id is None:
+        credito.supervisor_id = supervisor_id
+    elif credito_in.supervisor_id is not None:
+        credito.supervisor_id = credito_in.supervisor_id
+
+    if credito_in.cobrador_id is not None:
+        credito.cobrador_id = credito_in.cobrador_id
+
+    if credito_in.saldo_pendiente is not None:
+        credito.saldo_pendiente = credito_in.saldo_pendiente
+
+    await db.commit()
+    return await get_credito(db, id_contrato)
+
+
+async def aprobar_credito(
+    db: AsyncSession,
+    id_contrato: UUID,
+    supervisor_id: UUID,
+) -> Optional[Credito]:
+    """Aprueba un contrato de crédito pendiente y lo activa de inmediato."""
+    credito = await db.get(Credito, id_contrato)
+    if not credito:
+        return None
+
+    credito.estado = EstadoCredito.ACTIVO
+    credito.supervisor_id = supervisor_id
+    await db.commit()
+    return await get_credito(db, id_contrato)
+
+
+async def rechazar_credito(
+    db: AsyncSession,
+    id_contrato: UUID,
+    supervisor_id: UUID,
+) -> Optional[Credito]:
+    """Rechaza un contrato de crédito pendiente marcándolo como terminado sin saldo."""
+    credito = await db.get(Credito, id_contrato)
+    if not credito:
+        return None
+
+    credito.estado = EstadoCredito.TERMINADO
+    credito.supervisor_id = supervisor_id
+    credito.saldo_pendiente = Decimal("0.00")
+    await db.commit()
+    return await get_credito(db, id_contrato)

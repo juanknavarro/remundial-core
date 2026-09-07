@@ -1,9 +1,9 @@
 from datetime import datetime
 from decimal import Decimal
-from typing import Optional
+from typing import Any, Optional
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.models.abono import EstadoAbono
 from app.schemas.cliente import CoordenadasGPS
@@ -26,8 +26,23 @@ class AbonoBase(BaseModel):
 
 
 class AbonoCreate(AbonoBase):
-    """Esquema para recepción de abono desde la aplicación móvil."""
-    pass
+    """Esquema para recepción de abono desde la aplicación móvil o panel web."""
+
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_input(cls, data: Any) -> Any:
+        if isinstance(data, dict):
+            # Normalizar valor_abono si se envía con esa clave
+            if "valor_abonado" not in data and "valor_abono" in data:
+                data["valor_abonado"] = data["valor_abono"]
+
+            # Normalizar coordenadas_gps_cobro si vienen latitud y longitud planas
+            if "coordenadas_gps_cobro" not in data and "latitud" in data and "longitud" in data:
+                data["coordenadas_gps_cobro"] = {
+                    "latitud": data["latitud"],
+                    "longitud": data["longitud"],
+                }
+        return data
 
 
 class AbonoResponse(BaseModel):
@@ -39,6 +54,7 @@ class AbonoResponse(BaseModel):
     valor_abonado: Decimal
     coordenadas_gps_cobro: Optional[CoordenadasGPS] = None
     estado: EstadoAbono
+    cierre_caja_id: Optional[UUID] = None
     creado_en: datetime
     saldo_restante_credito: Optional[Decimal] = Field(
         None,
@@ -46,6 +62,7 @@ class AbonoResponse(BaseModel):
     )
     cobrador: Optional[UsuarioResponse] = None
     cliente_nombre: Optional[str] = None
+    cliente_cedula: Optional[str] = None
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -59,8 +76,11 @@ class ConciliacionRutaRequest(BaseModel):
 
 class ConciliacionRutaResponse(BaseModel):
     """Resultado del cuadre y cierre contable de la ruta."""
+    id: Optional[UUID] = None
     cobrador_id: UUID
     cobrador_nombre: str
+    responsable_id: Optional[UUID] = None
+    responsable_nombre: Optional[str] = None
     total_esperado: Decimal
     efectivo_entregado: Decimal
     diferencia: Decimal
@@ -68,3 +88,23 @@ class ConciliacionRutaResponse(BaseModel):
     abonos_conciliados_count: int
     fecha_conciliacion: datetime
     mensaje: str
+    notas: Optional[str] = None
+
+
+class CierreCajaResponse(BaseModel):
+    """Esquema de salida para actas históricas de cierre de caja."""
+    id: UUID
+    cobrador_id: UUID
+    cobrador_nombre: str
+    responsable_id: UUID
+    responsable_nombre: str
+    fecha_cierre: datetime
+    total_esperado: Decimal
+    efectivo_entregado: Decimal
+    diferencia: Decimal
+    cuadre_estado: str
+    abonos_conciliados_count: int
+    notas: Optional[str] = None
+    creado_en: datetime
+
+    model_config = ConfigDict(from_attributes=True)

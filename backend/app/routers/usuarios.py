@@ -6,7 +6,11 @@ from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
-from app.core.deps import get_current_user, require_supervisor
+from app.core.deps import (
+    get_current_user,
+    require_supervisor,
+    require_supervisor_o_secretaria,
+)
 from app.core.security import get_password_hash
 from app.models.usuario import RolUsuario, Usuario
 from app.schemas.usuario import UsuarioCreate, UsuarioResponse, UsuarioUpdate
@@ -20,7 +24,7 @@ router = APIRouter(
 @router.get(
     "",
     response_model=List[UsuarioResponse],
-    summary="Listar usuarios del sistema (Solo Supervisor)",
+    summary="Listar usuarios del sistema (Supervisor o Secretaria)",
     status_code=status.HTTP_200_OK,
 )
 async def listar_usuarios(
@@ -29,9 +33,9 @@ async def listar_usuarios(
     skip: int = Query(0, ge=0, description="Número de registros a omitir para paginación"),
     limit: int = Query(100, ge=1, le=200, description="Cantidad máxima de registros a retornar"),
     db: AsyncSession = Depends(get_db),
-    current_user: Usuario = Depends(require_supervisor),
+    current_user: Usuario = Depends(require_supervisor_o_secretaria),
 ) -> List[Usuario]:
-    """Retorna la lista de usuarios registrados. Requiere rol 'supervisor'."""
+    """Retorna la lista de usuarios registrados. Requiere rol 'supervisor' o 'secretaria'."""
     query = select(Usuario).offset(skip).limit(limit).order_by(Usuario.nombre.asc())
 
     if rol is not None:
@@ -88,17 +92,26 @@ async def crear_usuario(
     status_code=status.HTTP_200_OK,
 )
 async def obtener_usuario(
-    usuario_id: UUID,
+    usuario_id: str,
     db: AsyncSession = Depends(get_db),
     current_user: Usuario = Depends(require_supervisor),
 ) -> Usuario:
     """Consulta la información detallada de un usuario por su identificador UUID."""
-    usuario = await db.get(Usuario, usuario_id)
+    clean_id = str(usuario_id).strip()
+    try:
+        uuid_obj = UUID(clean_id)
+    except (ValueError, TypeError, AttributeError):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Usuario con ID '{clean_id}' no encontrado.",
+        )
+
+    usuario = await db.get(Usuario, uuid_obj)
 
     if not usuario:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Usuario con ID '{usuario_id}' no encontrado",
+            detail=f"Usuario con ID '{clean_id}' no encontrado.",
         )
 
     return usuario
@@ -111,7 +124,7 @@ async def obtener_usuario(
     status_code=status.HTTP_200_OK,
 )
 async def actualizar_usuario(
-    usuario_id: UUID,
+    usuario_id: str,
     usuario_update: UsuarioUpdate,
     db: AsyncSession = Depends(get_db),
     current_user: Usuario = Depends(require_supervisor),
@@ -120,12 +133,21 @@ async def actualizar_usuario(
     
     Permite modificar nombre, rol, teléfono, estado_activo y reestablecer contraseña.
     """
-    usuario = await db.get(Usuario, usuario_id)
+    clean_id = str(usuario_id).strip()
+    try:
+        uuid_obj = UUID(clean_id)
+    except (ValueError, TypeError, AttributeError):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Usuario con ID '{clean_id}' no encontrado.",
+        )
+
+    usuario = await db.get(Usuario, uuid_obj)
 
     if not usuario:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Usuario con ID '{usuario_id}' no encontrado",
+            detail=f"Usuario con ID '{clean_id}' no encontrado.",
         )
 
     if usuario_update.nombre is not None:
@@ -139,7 +161,7 @@ async def actualizar_usuario(
         telefono_limpio = usuario_update.telefono.strip()
         query_tel = select(Usuario).where(
             Usuario.telefono == telefono_limpio,
-            Usuario.id != usuario_id,
+            Usuario.id != uuid_obj,
         )
         res_tel = await db.execute(query_tel)
         if res_tel.scalar_one_or_none():
@@ -166,25 +188,34 @@ async def actualizar_usuario(
     status_code=status.HTTP_200_OK,
 )
 async def eliminar_usuario(
-    usuario_id: UUID,
+    usuario_id: str,
     baja_logica: bool = Query(True, description="Si es True realiza baja lógica (desactiva), si es False intenta eliminación física"),
     db: AsyncSession = Depends(get_db),
     current_user: Usuario = Depends(require_supervisor),
 ):
-    """Inactiva (baja lógica) o elimina físicamente un usuario."""
-    usuario = await db.get(Usuario, usuario_id)
+    """Inactiva (baja lógica) o elimina físicamente un usuario sin generar excepciones 422."""
+    clean_id = str(usuario_id).strip()
+    try:
+        uuid_obj = UUID(clean_id)
+    except (ValueError, TypeError, AttributeError):
+        # Si no es un UUID válido (ej. mock 'u-0' o ID temporal), responder de forma limpia
+        return {
+            "mensaje": f"El registro '{clean_id}' no correspondía a un identificador persistido en base de datos. Se procesó correctamente."
+        }
+
+    usuario = await db.get(Usuario, uuid_obj)
 
     if not usuario:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Usuario con ID '{usuario_id}' no encontrado",
+            detail=f"Usuario con ID '{clean_id}' no encontrado en el sistema.",
         )
 
-    # Evitar que el supervisor se elimine o inactive a sí mismo
+    # Evitar estrictamente que el usuario elimine o inactive su propia sesión activa
     if usuario.id == current_user.id:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="No es posible eliminar o inactivar la cuenta de supervisor actualmente en uso.",
+            detail="Operación no permitida: No puedes eliminar ni inactivar tu propia cuenta en sesión activa.",
         )
 
     if baja_logica:
@@ -198,9 +229,9 @@ async def eliminar_usuario(
             return {"mensaje": f"Usuario '{usuario.nombre}' eliminado físicamente del sistema."}
         except Exception:
             await db.rollback()
-            # Si hay integridad referencial con créditos o abonos, forzar baja lógica
+            # Si hay integridad referencial con créditos o abonos, aplicar baja lógica
             usuario.estado_activo = False
             await db.commit()
             return {
-                "mensaje": f"El usuario tiene historial de operaciones en créditos/abonos. Se procedió con baja lógica (inactivación)."
+                "mensaje": f"El usuario tiene historial de operaciones. Se procedió con baja lógica (inactivación)."
             }
