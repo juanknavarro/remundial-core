@@ -68,7 +68,7 @@ class CreditoDetalleResponse(CreditoDetalleBase):
 class CreditoBase(BaseModel):
     """Esquema base con los datos contractuales y financieros del crédito."""
     cliente_id: UUID = Field(..., description="UUID del cliente titular del crédito")
-    vendedor_id: UUID = Field(..., description="UUID del asesor comercial que originó la venta")
+    vendedor_id: Optional[UUID] = Field(None, description="UUID del asesor comercial que originó la venta")
     supervisor_id: Optional[UUID] = Field(None, description="UUID del supervisor a cargo")
     cobrador_id: Optional[UUID] = Field(None, description="UUID del cobrador asignado a la ruta")
     estado: EstadoCredito = Field(
@@ -135,6 +135,8 @@ class CreditoUpdate(BaseModel):
     supervisor_id: Optional[UUID] = None
     cobrador_id: Optional[UUID] = None
     saldo_pendiente: Optional[Decimal] = Field(None, ge=0)
+    codeudor: Optional[CodeudorCreate] = None
+    referencia: Optional[ReferenciaFamiliarCreate] = None
 
     @field_validator("estado", mode="before")
     @classmethod
@@ -162,6 +164,8 @@ class CreditoResponse(CreditoBase):
     detalles: List[CreditoDetalleResponse] = []
     cliente: Optional[ClienteResponse] = None
     vendedor: Optional[UsuarioResponse] = None
+    supervisor: Optional[UsuarioResponse] = None
+    cobrador: Optional[UsuarioResponse] = None
     cronograma_cuotas: List[CuotaCronograma] = []
     codeudor: Optional[CodeudorCreate] = None
     referencia: Optional[ReferenciaFamiliarCreate] = None

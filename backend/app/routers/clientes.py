@@ -85,6 +85,31 @@ async def obtener_cliente(
     return cliente
 
 
+@router.get(
+    "/{cliente_id}/garantias",
+    summary="Obtener garantías previas (codeudor y referencia) de un cliente",
+    status_code=status.HTTP_200_OK,
+)
+async def obtener_garantias_cliente(
+    cliente_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: Usuario = Depends(get_current_user),
+):
+    """Consulta los datos de codeudor y referencia registrados históricamente para el cliente."""
+    cliente = await crud_cliente.get_cliente(db=db, cliente_id=cliente_id)
+    if not cliente:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Cliente con ID '{cliente_id}' no encontrado",
+        )
+    return {
+        "cliente_id": cliente.id,
+        "cliente_nombres": cliente.nombres,
+        "codeudor": cliente.codeudor,
+        "referencia_familiar": cliente.referencia_familiar,
+    }
+
+
 @router.post(
     "",
     response_model=ClienteResponse,

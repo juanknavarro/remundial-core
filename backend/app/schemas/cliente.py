@@ -43,10 +43,32 @@ class ClienteUpdate(BaseModel):
     coordenadas_gps: Optional[CoordenadasGPS] = None
 
 
+class CodeudorInfo(BaseModel):
+    """Información del codeudor solidario registrado para el cliente."""
+    nombre: str
+    cedula: Optional[str] = None
+    telefono: Optional[str] = None
+    direccion: Optional[str] = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class ReferenciaFamiliarInfo(BaseModel):
+    """Información de la referencia familiar registrada para el cliente."""
+    nombre: str
+    telefono: Optional[str] = None
+    parentesco: Optional[str] = "Familiar"
+    direccion: Optional[str] = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
 class ClienteResponse(ClienteBase):
-    """Esquema de respuesta para cliente con identificador y auditoría."""
+    """Esquema de respuesta para cliente con identificador, auditoría y garantías heredables."""
     id: UUID
     creado_en: datetime
     actualizado_en: datetime
+    codeudor: Optional[CodeudorInfo] = None
+    referencia_familiar: Optional[ReferenciaFamiliarInfo] = None
 
     model_config = ConfigDict(from_attributes=True)

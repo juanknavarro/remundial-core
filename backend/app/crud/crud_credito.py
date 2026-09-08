@@ -319,6 +319,60 @@ async def update_credito(
     if credito_in.saldo_pendiente is not None:
         credito.saldo_pendiente = credito_in.saldo_pendiente
 
+    # Actualizar o registrar datos del Codeudor Solidario si se envían
+    if credito_in.codeudor and credito_in.codeudor.nombre:
+        q_codeudor = select(ReferenciaCliente).where(
+            ReferenciaCliente.cliente_id == credito.cliente_id,
+            ReferenciaCliente.tipo == TipoReferenciaEnum.CODEUDOR,
+        )
+        res_c = await db.execute(q_codeudor)
+        ref_codeudor = res_c.scalars().first()
+        if ref_codeudor:
+            ref_codeudor.nombre = credito_in.codeudor.nombre.strip()
+            ref_codeudor.cedula = credito_in.codeudor.cedula.strip() if credito_in.codeudor.cedula else None
+            ref_codeudor.telefono = credito_in.codeudor.telefono.strip() if credito_in.codeudor.telefono else None
+            ref_codeudor.direccion = credito_in.codeudor.direccion.strip() if credito_in.codeudor.direccion else None
+        else:
+            db.add(
+                ReferenciaCliente(
+                    cliente_id=credito.cliente_id,
+                    tipo=TipoReferenciaEnum.CODEUDOR,
+                    nombre=credito_in.codeudor.nombre.strip(),
+                    cedula=credito_in.codeudor.cedula.strip() if credito_in.codeudor.cedula else None,
+                    telefono=credito_in.codeudor.telefono.strip() if credito_in.codeudor.telefono else None,
+                    direccion=credito_in.codeudor.direccion.strip() if credito_in.codeudor.direccion else None,
+                )
+            )
+
+    # Actualizar o registrar datos de la Referencia Familiar si se envían
+    if credito_in.referencia and credito_in.referencia.nombre:
+        q_ref = select(ReferenciaCliente).where(
+            ReferenciaCliente.cliente_id == credito.cliente_id,
+            ReferenciaCliente.tipo == TipoReferenciaEnum.FAMILIAR,
+        )
+        res_r = await db.execute(q_ref)
+        ref_familiar = res_r.scalars().first()
+        parentesco_str = credito_in.referencia.parentesco.strip() if credito_in.referencia.parentesco else "Familiar"
+        dir_val = (
+            f"{credito_in.referencia.direccion.strip()} • Parentesco: {parentesco_str}"
+            if credito_in.referencia.direccion
+            else f"Parentesco: {parentesco_str}"
+        )
+        if ref_familiar:
+            ref_familiar.nombre = credito_in.referencia.nombre.strip()
+            ref_familiar.telefono = credito_in.referencia.telefono.strip() if credito_in.referencia.telefono else None
+            ref_familiar.direccion = dir_val
+        else:
+            db.add(
+                ReferenciaCliente(
+                    cliente_id=credito.cliente_id,
+                    tipo=TipoReferenciaEnum.FAMILIAR,
+                    nombre=credito_in.referencia.nombre.strip(),
+                    telefono=credito_in.referencia.telefono.strip() if credito_in.referencia.telefono else None,
+                    direccion=dir_val,
+                )
+            )
+
     await db.commit()
     return await get_credito(db, id_contrato)
 
@@ -327,14 +381,17 @@ async def aprobar_credito(
     db: AsyncSession,
     id_contrato: UUID,
     supervisor_id: UUID,
+    cobrador_id: Optional[UUID] = None,
 ) -> Optional[Credito]:
-    """Aprueba un contrato de crédito pendiente y lo activa de inmediato."""
+    """Aprueba un contrato de crédito pendiente, activándolo y asignando cobrador permanente si se indica."""
     credito = await db.get(Credito, id_contrato)
     if not credito:
         return None
 
     credito.estado = EstadoCredito.ACTIVO
     credito.supervisor_id = supervisor_id
+    if cobrador_id is not None:
+        credito.cobrador_id = cobrador_id
     await db.commit()
     return await get_credito(db, id_contrato)
 

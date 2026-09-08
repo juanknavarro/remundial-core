@@ -18,11 +18,24 @@ async def get_abono(db: AsyncSession, id_recibo: UUID) -> Optional[Abono]:
     """Obtiene un recibo de abono por su ID único."""
     query = (
         select(Abono)
-        .options(selectinload(Abono.cobrador), selectinload(Abono.credito))
+        .options(
+            selectinload(Abono.cobrador),
+            selectinload(Abono.credito).selectinload(Credito.cliente),
+        )
         .where(Abono.id_recibo == id_recibo)
     )
     result = await db.execute(query)
-    return result.scalar_one_or_none()
+    a = result.scalar_one_or_none()
+    if a:
+        if a.credito:
+            setattr(a, "numero_contrato", f"CTR-{str(a.credito_id)[:8].upper()}")
+            if a.credito.cliente:
+                setattr(a, "cliente_nombre", a.credito.cliente.nombres)
+                setattr(a, "cliente_cedula", a.credito.cliente.cedula)
+        else:
+            setattr(a, "numero_contrato", f"CTR-{str(a.credito_id)[:8].upper()}")
+        setattr(a, "metodo_pago", "efectivo")
+    return a
 
 
 async def get_abonos_by_credito(
@@ -54,9 +67,14 @@ async def get_abonos_by_credito(
     result = await db.execute(query)
     abonos = list(result.scalars().all())
     for a in abonos:
-        if a.credito and a.credito.cliente:
-            setattr(a, "cliente_nombre", a.credito.cliente.nombres)
-            setattr(a, "cliente_cedula", a.credito.cliente.cedula)
+        if a.credito:
+            setattr(a, "numero_contrato", f"CTR-{str(a.credito_id)[:8].upper()}")
+            if a.credito.cliente:
+                setattr(a, "cliente_nombre", a.credito.cliente.nombres)
+                setattr(a, "cliente_cedula", a.credito.cliente.cedula)
+        else:
+            setattr(a, "numero_contrato", f"CTR-{str(a.credito_id)[:8].upper()}")
+        setattr(a, "metodo_pago", "efectivo")
     return abonos
 
 
@@ -88,9 +106,14 @@ async def get_abonos_list(
     result = await db.execute(query)
     abonos = list(result.scalars().all())
     for a in abonos:
-        if a.credito and a.credito.cliente:
-            setattr(a, "cliente_nombre", a.credito.cliente.nombres)
-            setattr(a, "cliente_cedula", a.credito.cliente.cedula)
+        if a.credito:
+            setattr(a, "numero_contrato", f"CTR-{str(a.credito_id)[:8].upper()}")
+            if a.credito.cliente:
+                setattr(a, "cliente_nombre", a.credito.cliente.nombres)
+                setattr(a, "cliente_cedula", a.credito.cliente.cedula)
+        else:
+            setattr(a, "numero_contrato", f"CTR-{str(a.credito_id)[:8].upper()}")
+        setattr(a, "metodo_pago", "efectivo")
     return abonos
 
 
@@ -280,7 +303,10 @@ async def create_abono(db: AsyncSession, abono_in: AbonoCreate) -> Abono:
         nuevo_saldo = round(credito.saldo_pendiente - monto_abono, 2)
         credito.saldo_pendiente = nuevo_saldo
 
-        # C. Transición de estados del crédito
+        # C. Transición de estados del crédito y asignación permanente del cobrador
+        if credito.cobrador_id is None:
+            credito.cobrador_id = cobrador.id
+
         if nuevo_saldo == Decimal("0.00"):
             credito.estado = EstadoCredito.TERMINADO
         elif credito.estado == EstadoCredito.PENDIENTE:

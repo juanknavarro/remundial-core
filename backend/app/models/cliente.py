@@ -138,6 +138,44 @@ class Cliente(Base):
         lazy="selectin",
     )
 
+    @property
+    def codeudor(self) -> Optional[dict]:
+        """Retorna los datos del codeudor solidario más reciente registrado para este cliente."""
+        if not getattr(self, "referencias", None):
+            return None
+        for r in reversed(self.referencias):
+            if r.tipo == TipoReferenciaEnum.CODEUDOR:
+                return {
+                    "nombre": r.nombre,
+                    "cedula": r.cedula,
+                    "telefono": r.telefono,
+                    "direccion": r.direccion,
+                }
+        return None
+
+    @property
+    def referencia_familiar(self) -> Optional[dict]:
+        """Retorna los datos de la referencia familiar más reciente registrada para este cliente."""
+        if not getattr(self, "referencias", None):
+            return None
+        for r in reversed(self.referencias):
+            if r.tipo == TipoReferenciaEnum.FAMILIAR:
+                parentesco = "Familiar"
+                dir_limpia = r.direccion
+                if r.direccion and "Parentesco:" in r.direccion:
+                    parts = r.direccion.split(" • ")
+                    for p in parts:
+                        if p.startswith("Parentesco:"):
+                            parentesco = p.replace("Parentesco:", "").strip()
+                            dir_limpia = " • ".join([x for x in parts if not x.startswith("Parentesco:")])
+                return {
+                    "nombre": r.nombre,
+                    "telefono": r.telefono,
+                    "parentesco": parentesco,
+                    "direccion": dir_limpia or None,
+                }
+        return None
+
     def __repr__(self) -> str:
         return (
             f"<Cliente(id={self.id}, cedula='{self.cedula}', "

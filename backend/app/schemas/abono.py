@@ -63,6 +63,8 @@ class AbonoResponse(BaseModel):
     cobrador: Optional[UsuarioResponse] = None
     cliente_nombre: Optional[str] = None
     cliente_cedula: Optional[str] = None
+    numero_contrato: Optional[str] = None
+    metodo_pago: Optional[str] = "efectivo"
 
     model_config = ConfigDict(from_attributes=True)
 

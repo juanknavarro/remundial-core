@@ -121,7 +121,7 @@ async def obtener_abono(
 @router.get(
     "",
     response_model=List[AbonoResponse],
-    summary="Listar abonos con filtros (Supervisor o Secretaria)",
+    summary="Listar abonos con filtros (Cobrador, Secretaria o Supervisor)",
     status_code=status.HTTP_200_OK,
 )
 async def listar_abonos(
@@ -130,9 +130,22 @@ async def listar_abonos(
     skip: int = Query(0, ge=0, description="Paginación: registros a omitir"),
     limit: int = Query(100, ge=1, le=200, description="Límite de registros"),
     db: AsyncSession = Depends(get_db),
-    current_user: Usuario = Depends(require_supervisor_o_secretaria),
+    current_user: Usuario = Depends(get_current_user),
 ):
-    """Retorna listado de abonos para auditoría y conciliación de caja diaria."""
+    """Retorna listado de abonos para auditoría, conciliación y consulta operativa móvil.
+    
+    Seguridad RBAC:
+    - Si es COBRADOR: se restringe estrictamente a consultar sus propios recaudos (cobrador_id = current_user.id).
+    - Si es SUPERVISOR, SECRETARIA o MASTER: puede consultar cualquier cobrador o toda la cartera.
+    """
+    if current_user.rol == RolUsuario.COBRADOR:
+        cobrador_id = current_user.id
+    elif current_user.rol not in [RolUsuario.SECRETARIA, RolUsuario.SUPERVISOR, RolUsuario.MASTER]:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="No posee autorización para consultar el historial de recaudos.",
+        )
+
     return await crud_abono.get_abonos_list(
         db=db,
         cobrador_id=cobrador_id,

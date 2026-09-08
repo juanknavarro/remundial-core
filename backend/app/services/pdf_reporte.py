@@ -17,6 +17,7 @@ from reportlab.platypus import (
     Table,
     TableStyle,
 )
+from reportlab.graphics.shapes import Drawing, Rect
 
 
 def format_cop(valor: Any) -> str:
@@ -27,6 +28,30 @@ def format_cop(valor: Any) -> str:
         return f"$ {formatted}"
     except (ValueError, TypeError):
         return "$ 0"
+
+
+def make_progress_drawing(
+    pct: int,
+    is_mora: bool = False,
+    is_contado: bool = False,
+    width: float = 65,
+    height: float = 4,
+) -> Drawing:
+    """Genera una barra de progreso vectorial redondeada para ReportLab."""
+    d = Drawing(width, height)
+    # Pista de fondo
+    bg_color = colors.HexColor("#DCFCE7") if is_contado else colors.HexColor("#F1F5F9")
+    d.add(Rect(0, 0, width, height, fillColor=bg_color, strokeColor=None, rx=2, ry=2))
+    # Relleno de progreso
+    fill_w = max(0.0, min(float(width), float(width) * (pct / 100.0)))
+    if fill_w > 0:
+        bar_color = (
+            colors.HexColor("#059669")
+            if is_contado
+            else (colors.HexColor("#E11D48") if is_mora else colors.HexColor("#0F172A"))
+        )
+        d.add(Rect(0, 0, fill_w, height, fillColor=bar_color, strokeColor=None, rx=2, ry=2))
+    return d
 
 
 class NumberedCanvas(canvas.Canvas):
@@ -184,6 +209,24 @@ def generar_pdf_reporte_ventas(
         textColor=colors.HexColor("#0F172A"),
     )
 
+    table_header_right = ParagraphStyle(
+        "TableHeaderRight",
+        parent=table_header_style,
+        alignment=2,  # Derecha
+    )
+
+    table_cell_right = ParagraphStyle(
+        "TableCellRight",
+        parent=table_cell_style,
+        alignment=2,  # Derecha
+    )
+
+    table_cell_bold_right = ParagraphStyle(
+        "TableCellBoldRight",
+        parent=table_cell_bold,
+        alignment=2,  # Derecha
+    )
+
     table_cell_badge_credito = ParagraphStyle(
         "TableBadgeCredito",
         parent=styles["Normal"],
@@ -338,14 +381,14 @@ def generar_pdf_reporte_ventas(
     # =========================================================================
     elements.append(
         Paragraph(
-            f"<b>DETALLE DE OPERACIONES REGISTRADAS ({len(operaciones)} registros)</b>",
+            f"<b>DESGLOSE DE OPERACIONES AUDITADAS ({len(operaciones)} registros)</b>",
             filter_label_style,
         )
     )
     elements.append(Spacer(1, 4))
 
-    col_widths = [70, 65, 130, 65, 95, 145, 75, 75]
-    # Total ancho = 720 pt
+    # Total ancho = 720 pt (Landscape letter con márgenes de 36 pt)
+    col_widths = [60, 50, 115, 50, 65, 115, 90, 90, 85]
 
     table_rows = [
         [
@@ -355,15 +398,16 @@ def generar_pdf_reporte_ventas(
             Paragraph("Modalidad", table_header_style),
             Paragraph("Vendedor", table_header_style),
             Paragraph("Artículos Vendidos", table_header_style),
-            Paragraph("Monto Total", table_header_style),
-            Paragraph("Saldo Pendiente", table_header_style),
+            Paragraph("Monto Total", table_header_right),
+            Paragraph("Saldo Pendiente", table_header_right),
+            Paragraph("Progreso", table_header_style),
         ]
     ]
 
     if not operaciones:
         empty_row = [
             Paragraph("No se encontraron operaciones registradas en el período seleccionado.", table_cell_style)
-        ] + [Paragraph("", table_cell_style)] * 7
+        ] + [Paragraph("", table_cell_style)] * 8
         table_rows.append(empty_row)
     else:
         for op in operaciones:
@@ -381,6 +425,38 @@ def generar_pdf_reporte_ventas(
             modalidad_text = "<b>CONTADO</b>" if es_contado else f"<b>CRÉDITO</b><br/><font size=6.5 color='#475569'>{op.get('numero_cuotas', 1)} cuotas</font>"
             badge_style = table_cell_badge_contado if es_contado else table_cell_badge_credito
 
+            # Cálculo financiero de progreso del crédito (Porcentaje y cuotas amortizadas)
+            monto_total = float(op.get("monto_total") or 0)
+            saldo_pend = float(op.get("saldo_pendiente") or 0)
+            monto_fin = float(op.get("monto_financiado") or 0)
+            num_cuotas = int(op.get("numero_cuotas") or 1)
+            val_cuota = float(op.get("valor_cuota") or 0)
+            estado_op = str(op.get("estado") or "activo").lower()
+
+            if es_contado:
+                prog_text = Paragraph("<font size=6.5 color='#047857'><b>100% Pagado</b></font>", table_cell_style)
+                prog_bar = make_progress_drawing(pct=100, is_contado=True, width=75, height=4)
+            else:
+                pct_pago = round(((monto_total - saldo_pend) / monto_total) * 100) if monto_total > 0 else 0
+                pct_pago = max(0, min(100, pct_pago))
+                cuotas_pagas = 0
+                if val_cuota > 0:
+                    amortizado = max(0.0, monto_fin - saldo_pend)
+                    cuotas_pagas = min(num_cuotas, round(amortizado / val_cuota))
+                prog_text = Paragraph(
+                    f"<font size=6.5 color='#334155'><b>{cuotas_pagas}/{num_cuotas}</b> ({pct_pago}%)</font>",
+                    table_cell_style,
+                )
+                prog_bar = make_progress_drawing(
+                    pct=pct_pago,
+                    is_mora=(estado_op == "mora"),
+                    is_contado=False,
+                    width=75,
+                    height=4,
+                )
+
+            prog_cell = [prog_text, Spacer(1, 2), prog_bar]
+
             articulos_txt = op.get("articulos_resumen") or "Artículos del catálogo"
             monto_str = format_cop(op.get("monto_total", 0))
             saldo_str = format_cop(op.get("saldo_pendiente", 0))
@@ -392,8 +468,9 @@ def generar_pdf_reporte_ventas(
                 Paragraph(modalidad_text, badge_style),
                 Paragraph(op.get("vendedor_nombre", "Vendedor"), table_cell_style),
                 Paragraph(articulos_txt, table_cell_style),
-                Paragraph(f"<b>{monto_str}</b>", table_cell_bold),
-                Paragraph(saldo_str, table_cell_style),
+                Paragraph(f"<b>{monto_str}</b>", table_cell_bold_right),
+                Paragraph(f"<b>{saldo_str}</b>", table_cell_bold_right) if saldo_pend > 0 else Paragraph(saldo_str, table_cell_right),
+                prog_cell,
             ])
 
     ops_table = Table(table_rows, colWidths=col_widths, repeatRows=1)
@@ -401,7 +478,8 @@ def generar_pdf_reporte_ventas(
     table_styles = [
         ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#0F172A")),  # Header Slate-900
         ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
-        ("ALIGN", (0, 0), (-1, -1), "LEFT"),
+        ("ALIGN", (0, 0), (5, -1), "LEFT"),
+        ("ALIGN", (6, 0), (7, -1), "RIGHT"),
         ("VALIGN", (0, 0), (-1, -1), "TOP"),
         ("TOPPADDING", (0, 0), (-1, -1), 4),
         ("BOTTOMPADDING", (0, 0), (-1, -1), 4),

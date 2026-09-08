@@ -9,7 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.core.database import get_db
-from app.core.deps import require_supervisor
+from app.core.deps import require_supervisor_o_secretaria
 from app.models.cliente import Cliente
 from app.models.credito import Credito, CreditoDetalle
 from app.models.usuario import Usuario
@@ -194,7 +194,7 @@ async def reporte_ventas_json(
     cliente_id: Optional[UUID] = Query(None, description="ID del cliente para ver su histórico"),
     search: Optional[str] = Query(None, description="Término de búsqueda por cliente o cédula"),
     db: AsyncSession = Depends(get_db),
-    current_user: Usuario = Depends(require_supervisor),
+    current_user: Usuario = Depends(require_supervisor_o_secretaria),
 ) -> Dict[str, Any]:
     """Retorna las métricas ejecutivas y el desglose de operaciones filtradas en formato JSON."""
     datos = await _obtener_datos_reporte(
@@ -220,7 +220,7 @@ async def reporte_ventas_pdf(
     cliente_id: Optional[UUID] = Query(None, description="ID del cliente para ver su histórico"),
     search: Optional[str] = Query(None, description="Término de búsqueda por cliente o cédula"),
     db: AsyncSession = Depends(get_db),
-    current_user: Usuario = Depends(require_supervisor),
+    current_user: Usuario = Depends(require_supervisor_o_secretaria),
 ) -> Response:
     """Genera y descarga un documento PDF ejecutivo corporativo listo para imprimir o archivar."""
     datos = await _obtener_datos_reporte(
@@ -239,11 +239,96 @@ async def reporte_ventas_pdf(
         usuario_auditor=f"{current_user.nombre} ({current_user.rol.value.capitalize()})",
     )
 
-    filename = f"Reporte_Ventas_Remundial_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf"
+    anio = datetime.now().year
+    filename = f"Reporte_Ventas_Remundial_{anio}.pdf"
 
     return Response(
         content=pdf_bytes,
         media_type="application/pdf",
+        headers={
+            "Content-Disposition": f'attachment; filename="{filename}"',
+            "Cache-Control": "no-cache, no-store, must-revalidate",
+        },
+    )
+
+
+@router.get(
+    "/ventas/excel",
+    summary="Exportar Auditoría Financiera a Excel",
+    description="Genera y descarga la auditoría financiera de operaciones en formato compatible con Excel.",
+)
+async def exportar_excel_reporte_ventas(
+    fecha_inicio: Optional[date] = Query(None, description="Fecha de inicio (YYYY-MM-DD)"),
+    fecha_fin: Optional[date] = Query(None, description="Fecha de fin (YYYY-MM-DD)"),
+    tipo_venta: Optional[str] = Query("todos", description="Tipo de venta: 'todos', 'credito', 'contado'"),
+    cliente_id: Optional[UUID] = Query(None, description="ID del cliente para ver su histórico"),
+    search: Optional[str] = Query(None, description="Término de búsqueda por cliente o cédula"),
+    db: AsyncSession = Depends(get_db),
+    current_user: Usuario = Depends(require_supervisor_o_secretaria),
+) -> Response:
+    """Genera y descarga la auditoría financiera con nombre corporativo oficial."""
+    datos = await _obtener_datos_reporte(
+        db=db,
+        fecha_inicio=fecha_inicio,
+        fecha_fin=fecha_fin,
+        tipo_venta=tipo_venta,
+        cliente_id=cliente_id,
+        search=search,
+    )
+
+    operaciones = datos["operaciones"]
+    headers = [
+        "CONTRATO",
+        "FECHA",
+        "CLIENTE_TITULAR",
+        "CEDULA",
+        "TELEFONO",
+        "MODALIDAD",
+        "NUM_CUOTAS",
+        "VALOR_CUOTA",
+        "MONTO_TOTAL",
+        "CUOTA_INICIAL",
+        "MONTO_FINANCIADO",
+        "SALDO_PENDIENTE",
+        "ASESOR_COMERCIAL",
+        "ARTICULOS_DETALLE",
+        "ESTADO_OPERATIVO",
+    ]
+    lines = [";".join(headers)]
+    for op in operaciones:
+        fecha_val = op.get("fecha")
+        if isinstance(fecha_val, datetime):
+            fecha_str = fecha_val.strftime("%Y-%m-%d %H:%M:%S")
+        elif isinstance(fecha_val, str):
+            fecha_str = fecha_val[:19].replace("T", " ")
+        else:
+            fecha_str = ""
+
+        row = [
+            f'"{op.get("codigo_contrato", "")}"',
+            f'"{fecha_str}"',
+            f'"{str(op.get("cliente_nombre", "")).replace(chr(34), chr(34)*2)}"',
+            f'"{op.get("cliente_cedula", "")}"',
+            f'"{op.get("cliente_telefono", "")}"',
+            f'"{str(op.get("tipo_venta", "")).upper()}"',
+            str(op.get("numero_cuotas", 1)),
+            str(op.get("valor_cuota", 0)),
+            str(op.get("monto_total", 0)),
+            str(op.get("cuota_inicial", 0)),
+            str(op.get("monto_financiado", 0)),
+            str(op.get("saldo_pendiente", 0)),
+            f'"{str(op.get("vendedor_nombre", "")).replace(chr(34), chr(34)*2)}"',
+            f'"{str(op.get("articulos_resumen", "")).replace(chr(34), chr(34)*2)}"',
+            f'"{str(op.get("estado", "")).upper()}"',
+        ]
+        lines.append(";".join(row))
+
+    csv_bytes = ("\ufeff" + "\r\n".join(lines)).encode("utf-8")
+    filename = "Auditoria_Financiera_Remundial.xlsx"
+
+    return Response(
+        content=csv_bytes,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         headers={
             "Content-Disposition": f'attachment; filename="{filename}"',
             "Cache-Control": "no-cache, no-store, must-revalidate",

@@ -3,6 +3,7 @@ from typing import List, Optional
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
+from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
@@ -33,12 +34,12 @@ async def originar_credito(
     
     Seguridad RBAC: Solo accesible para roles 'vendedor' y 'supervisor'.
     """
-    # Si quien origina es un vendedor, validar que se asigne a su propio ID
-    if current_user.rol == RolUsuario.VENDEDOR and credito_in.vendedor_id != current_user.id:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Un asesor comercial solo puede originar créditos asignándose como vendedor.",
-        )
+    # Resolver vendedor: si es vendedor se asigna a sí mismo; si no se envió vendedor_id, toma el usuario en sesión
+    if current_user.rol == RolUsuario.VENDEDOR or not credito_in.vendedor_id:
+        credito_in.vendedor_id = current_user.id
+
+    # Los créditos deben nacer limpios de ruta y cobrador (asignación posterior desde Cartera/Supervisión)
+    credito_in.cobrador_id = None
 
     return await crud_credito.create_credito(db=db, credito_in=credito_in)
 
@@ -143,6 +144,10 @@ async def actualizar_credito(
     return credito
 
 
+class AprobarCreditoBody(BaseModel):
+    cobrador_id: Optional[UUID] = None
+
+
 @router.post(
     "/{id_contrato}/aprobar",
     response_model=CreditoResponse,
@@ -157,10 +162,12 @@ async def actualizar_credito(
 )
 async def aprobar_credito(
     id_contrato: str,
+    cobrador_id: Optional[UUID] = Query(None, description="Cobrador asignado de forma permanente"),
+    body: Optional[AprobarCreditoBody] = None,
     db: AsyncSession = Depends(get_db),
     current_user: Usuario = Depends(require_supervisor),
 ):
-    """Aprueba formalmente un crédito pendiente, cambiando su estado a 'activo' de forma persistente."""
+    """Aprueba formalmente un crédito pendiente, cambiando su estado a 'activo' y fijando cobrador si se asigna."""
     try:
         uuid_obj = UUID(str(id_contrato).strip())
     except (ValueError, TypeError, AttributeError):
@@ -169,10 +176,13 @@ async def aprobar_credito(
             detail=f"Identificador de contrato '{id_contrato}' inválido.",
         )
 
+    target_cobrador = cobrador_id or (body.cobrador_id if body else None)
+
     credito = await crud_credito.aprobar_credito(
         db=db,
         id_contrato=uuid_obj,
         supervisor_id=current_user.id,
+        cobrador_id=target_cobrador,
     )
     if not credito:
         raise HTTPException(
