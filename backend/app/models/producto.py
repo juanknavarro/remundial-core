@@ -2,7 +2,7 @@ import uuid
 from datetime import datetime
 from decimal import Decimal
 
-from sqlalchemy import Boolean, DateTime, Numeric, String, func
+from sqlalchemy import Boolean, DateTime, Integer, Numeric, String, func
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -38,6 +38,18 @@ class Producto(Base):
         Boolean,
         default=False,
         server_default="false",
+        nullable=False,
+    )
+    stock: Mapped[int] = mapped_column(
+        Integer,
+        default=0,
+        server_default="0",
+        nullable=False,
+    )
+    maneja_stock: Mapped[bool] = mapped_column(
+        Boolean,
+        default=True,
+        server_default="true",
         nullable=False,
     )
     estado_activo: Mapped[bool] = mapped_column(

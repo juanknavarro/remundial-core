@@ -8,15 +8,11 @@ from app.core.database import AsyncSessionLocal
 
 async def check():
     async with AsyncSessionLocal() as s:
-        res = await s.execute(text("SELECT id, sku, nombre FROM productos;"))
+        res = await s.execute(text("SELECT id, sku, nombre, es_precio_variable, maneja_stock, stock FROM productos;"))
         print("PRODUCTOS:")
         for r in res.fetchall():
-            print(f" - {r[0]} | {r[1]} | {r[2]}")
-
-        res2 = await s.execute(text("SELECT cd.producto_id, p.nombre, count(*) FROM credito_detalle cd JOIN productos p ON p.id = cd.producto_id GROUP BY cd.producto_id, p.nombre;"))
-        print("\nPRODUCTOS USADOS EN CREDITO_DETALLE:")
-        for r in res2.fetchall():
-            print(f" - {r[0]} | {r[1]} | Count: {r[2]}")
+            print(f" - {r[0]} | {r[1]} | {r[2]} | var={r[3]} | maneja_stock={r[4]} | stock={r[5]}")
 
 if __name__ == "__main__":
     asyncio.run(check())
+

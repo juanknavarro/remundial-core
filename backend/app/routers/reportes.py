@@ -550,3 +550,141 @@ async def reporte_cartera_pdf(
         },
     )
 
+
+@router.get(
+    "/calendario",
+    summary="Consultar calendario mensual de cuotas y vencimientos de cartera",
+    status_code=status.HTTP_200_OK,
+)
+async def reporte_calendario_mensual(
+    year: Optional[int] = Query(None, description="Año a consultar (ej. 2026)"),
+    month: Optional[int] = Query(None, ge=1, le=12, description="Mes a consultar (1..12)"),
+    cobrador_id: Optional[UUID] = Query(None, description="ID del cobrador asignado"),
+    search: Optional[str] = Query(None, description="Búsqueda por cliente o contrato"),
+    db: AsyncSession = Depends(get_db),
+    current_user: Usuario = Depends(require_supervisor_o_secretaria),
+) -> Dict[str, Any]:
+    """Retorna la matriz del calendario mensual con todos los cobros programados agrupados por día."""
+    hoy = date.today()
+    y = year if isinstance(year, int) else (hoy.year if year is None else int(year))
+    m = month if isinstance(month, int) else (hoy.month if month is None else int(month))
+    c_id = cobrador_id if isinstance(cobrador_id, UUID) else None
+    s_term = search.strip() if isinstance(search, str) and search.strip() else None
+
+    # Obtenemos toda la cartera activa o histórica
+    datos_cartera = await _obtener_datos_reporte_cartera(
+        db=db,
+        cobrador_id=c_id,
+        periodo_preset="todos",
+        search=s_term,
+    )
+    creditos = datos_cartera.get("creditos", [])
+
+    dias_map: Dict[str, Dict[str, Any]] = {}
+    total_prog_mes = Decimal("0.00")
+    total_recaudado_mes = Decimal("0.00")
+    total_pendiente_mes = Decimal("0.00")
+    cuotas_totales_mes = 0
+    cuotas_pagadas_mes = 0
+    cuotas_pendientes_mes = 0
+
+    for c in creditos:
+        c_cobrador = c.get("cobrador_nombre") or "Sin asignar"
+        c_cliente = c.get("cliente_nombre") or "Cliente"
+        c_cedula = c.get("cliente_cedula") or ""
+        c_tel = c.get("cliente_telefono") or ""
+        c_contrato = c.get("codigo_contrato") or f"CTR-{c.get('id_contrato', '')[:8].upper()}"
+        n_cuotas = c.get("numero_cuotas") or 1
+
+        for q in c.get("cronograma", []):
+            f_str = q.get("fecha_vencimiento")  # 'YYYY-MM-DD'
+            if not f_str:
+                continue
+            try:
+                f_dt = date.fromisoformat(f_str)
+            except Exception:
+                continue
+
+            if f_dt.year != y or f_dt.month != m:
+                continue
+
+            val = Decimal(str(q.get("valor_cuota") or 0))
+            is_pagada = bool(q.get("pagada"))
+
+            total_prog_mes += val
+            cuotas_totales_mes += 1
+            if is_pagada:
+                total_recaudado_mes += val
+                cuotas_pagadas_mes += 1
+            else:
+                total_pendiente_mes += val
+                cuotas_pendientes_mes += 1
+
+            if f_str not in dias_map:
+                dias_map[f_str] = {
+                    "fecha": f_str,
+                    "dia": f_dt.day,
+                    "total_programado": 0.0,
+                    "total_recaudado": 0.0,
+                    "total_pendiente": 0.0,
+                    "cuotas_totales": 0,
+                    "cuotas_pagadas": 0,
+                    "cuotas_pendientes": 0,
+                    "items": [],
+                }
+
+            dia_entry = dias_map[f_str]
+            dia_entry["total_programado"] += float(val)
+            dia_entry["cuotas_totales"] += 1
+            if is_pagada:
+                dia_entry["total_recaudado"] += float(val)
+                dia_entry["cuotas_pagadas"] += 1
+            else:
+                dia_entry["total_pendiente"] += float(val)
+                dia_entry["cuotas_pendientes"] += 1
+
+            dia_entry["items"].append({
+                "id_contrato": c.get("id_contrato"),
+                "codigo_contrato": c_contrato,
+                "cliente_nombre": c_cliente,
+                "cliente_cedula": c_cedula,
+                "cliente_telefono": c_tel,
+                "cobrador_nombre": c_cobrador,
+                "numero_cuota": q.get("numero"),
+                "total_cuotas": n_cuotas,
+                "cuota_texto": f"Cuota {q.get('numero')}/{n_cuotas}",
+                "valor_cuota": float(val),
+                "pagada": is_pagada,
+                "estado": "pagada" if is_pagada else ("vencida" if f_dt < hoy else ("hoy" if f_dt == hoy else "futura")),
+            })
+
+    meses_es = [
+        "", "Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio",
+        "Julio", "Agosto", "Septiembre", "Octubre", "Noviembre", "Diciembre"
+    ]
+    nombre_mes = f"{meses_es[m]} {y}"
+    pct = float((total_recaudado_mes / total_prog_mes) * 100) if total_prog_mes > 0 else 0.0
+
+    return {
+        "year": y,
+        "month": m,
+        "nombre_mes": nombre_mes,
+        "metricas_mes": {
+            "total_programado": float(total_prog_mes),
+            "total_recaudado": float(total_recaudado_mes),
+            "total_pendiente": float(total_pendiente_mes),
+            "cuotas_totales": cuotas_totales_mes,
+            "cuotas_pagadas": cuotas_pagadas_mes,
+            "cuotas_pendientes": cuotas_pendientes_mes,
+            "dias_con_actividad": len(dias_map),
+            "porcentaje_recaudo": round(pct, 1),
+        },
+        "filtros": {
+            "year": y,
+            "month": m,
+            "cobrador_id": str(cobrador_id) if cobrador_id else None,
+            "search": search,
+        },
+        "dias": dias_map,
+    }
+

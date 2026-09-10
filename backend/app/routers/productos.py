@@ -13,7 +13,13 @@ from app.core.deps import (
 )
 from app.crud import crud_producto
 from app.models.usuario import Usuario
-from app.schemas.producto import ProductoCreate, ProductoResponse, ProductoUpdate
+from app.schemas.producto import (
+    ProductoCreate,
+    ProductoResponse,
+    ProductoUpdate,
+    ReabastecerStockRequest,
+    ReabastecerStockResponse,
+)
 
 router = APIRouter(
     prefix="/productos",
@@ -139,6 +145,46 @@ async def actualizar_producto(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Error de integridad al actualizar el producto",
         ) from exc
+
+
+@router.post(
+    "/{producto_id}/reabastecer",
+    response_model=ReabastecerStockResponse,
+    summary="Registrar entrada de almacén / reabastecer stock (Supervisor o Secretaria)",
+    status_code=status.HTTP_200_OK,
+)
+async def reabastecer_producto(
+    producto_id: UUID,
+    reabastecer_in: ReabastecerStockRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: Usuario = Depends(require_supervisor_o_secretaria),
+):
+    """Registra una entrada de inventario sumando existencias físicas a un producto."""
+    producto = await crud_producto.get_producto(db=db, producto_id=producto_id)
+    if not producto:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Producto con ID '{producto_id}' no encontrado",
+        )
+
+    stock_anterior = producto.stock
+    producto_actualizado = await crud_producto.reabastecer_producto(
+        db=db, db_producto=producto, cantidad=reabastecer_in.cantidad
+    )
+
+    return ReabastecerStockResponse(
+        producto_id=producto_actualizado.id,
+        sku=producto_actualizado.sku,
+        nombre=producto_actualizado.nombre,
+        stock_anterior=stock_anterior,
+        cantidad_ingresada=reabastecer_in.cantidad,
+        stock_actual=producto_actualizado.stock,
+        maneja_stock=producto_actualizado.maneja_stock,
+        mensaje=(
+            f"Se han ingresado {reabastecer_in.cantidad} unidades a '{producto_actualizado.nombre}'. "
+            f"Nuevo stock disponible: {producto_actualizado.stock}."
+        ),
+    )
 
 
 @router.delete(

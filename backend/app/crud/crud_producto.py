@@ -64,11 +64,27 @@ async def create_producto(db: AsyncSession, producto_in: ProductoCreate) -> Prod
         nombre=producto_in.nombre.strip(),
         precio_base=producto_in.precio_base,
         es_precio_variable=producto_in.es_precio_variable,
+        stock=producto_in.stock,
+        maneja_stock=producto_in.maneja_stock,
+        estado_activo=producto_in.estado_activo,
     )
     db.add(db_producto)
     await db.commit()
     await db.refresh(db_producto)
     return db_producto
+
+
+async def reabastecer_producto(
+    db: AsyncSession,
+    db_producto: Producto,
+    cantidad: int,
+) -> Producto:
+    """Registra una entrada de almacén sumando unidades físicas al inventario."""
+    db_producto.stock += cantidad
+    await db.commit()
+    await db.refresh(db_producto)
+    return db_producto
+
 
 
 async def update_producto(

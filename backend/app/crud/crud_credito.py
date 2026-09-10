@@ -210,7 +210,7 @@ async def create_credito(db: AsyncSession, credito_in: CreditoCreate) -> Credito
                 detail=f"Cobrador con ID '{credito_in.cobrador_id}' no existe",
             )
 
-    # Validar existencia de cada producto incluido
+    # Validar existencia de cada producto incluido y existencias de stock
     for item in credito_in.detalles:
         prod = await db.get(Producto, item.producto_id)
         if not prod:
@@ -218,6 +218,17 @@ async def create_credito(db: AsyncSession, credito_in: CreditoCreate) -> Credito
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"Producto con ID '{item.producto_id}' no existe en el catálogo",
             )
+        # Control estricto de existencias: solo si maneja_stock = True
+        # (Los cuadros/arte por encargo tienen maneja_stock = False y se omiten)
+        if prod.maneja_stock:
+            if prod.stock < item.cantidad:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=(
+                        f"Stock insuficiente para '{prod.nombre}'. "
+                        f"Existencias disponibles en almacén: {prod.stock}, Solicitadas en venta: {item.cantidad}."
+                    ),
+                )
 
     # 3. Transacción atómica estricta
     es_contado = monto_financiado_redondeado == Decimal("0.00")
@@ -248,7 +259,7 @@ async def create_credito(db: AsyncSession, credito_in: CreditoCreate) -> Credito
         # Flush para obtener db_credito.id_contrato sin comprometer la transacción
         await db.flush()
 
-        # B. Iterar e insertar los detalles amarrados al ID del nuevo crédito
+        # B. Iterar e insertar los detalles amarrados al ID del nuevo crédito y descontar stock
         for detalle_in in credito_in.detalles:
             db_detalle = CreditoDetalle(
                 credito_id=db_credito.id_contrato,
@@ -257,6 +268,11 @@ async def create_credito(db: AsyncSession, credito_in: CreditoCreate) -> Credito
                 valor_unitario_acordado=detalle_in.valor_unitario_acordado,
             )
             db.add(db_detalle)
+
+            # Descuento automático de existencias si el artículo controla inventario
+            prod = await db.get(Producto, detalle_in.producto_id)
+            if prod and prod.maneja_stock:
+                prod.stock -= detalle_in.cantidad
 
         # C. Insertar datos de respaldo (Codeudor y Referencia Familiar) si se proporcionaron
         if credito_in.codeudor and credito_in.codeudor.nombre:
@@ -421,10 +437,22 @@ async def rechazar_credito(
     id_contrato: UUID,
     supervisor_id: UUID,
 ) -> Optional[Credito]:
-    """Rechaza un contrato de crédito pendiente marcándolo como terminado sin saldo."""
-    credito = await db.get(Credito, id_contrato)
+    """Rechaza un contrato de crédito pendiente marcándolo como terminado sin saldo y restaurando stock de artículos estándar."""
+    query = (
+        select(Credito)
+        .options(selectinload(Credito.detalles).selectinload(CreditoDetalle.producto))
+        .where(Credito.id_contrato == id_contrato)
+    )
+    result = await db.execute(query)
+    credito = result.scalar_one_or_none()
     if not credito:
         return None
+
+    # Si estaba pendiente, restituir el stock de productos que controlan inventario
+    if credito.estado == EstadoCredito.PENDIENTE:
+        for detalle in credito.detalles:
+            if detalle.producto and detalle.producto.maneja_stock:
+                detalle.producto.stock += detalle.cantidad
 
     credito.estado = EstadoCredito.TERMINADO
     credito.supervisor_id = supervisor_id

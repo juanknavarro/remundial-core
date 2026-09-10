@@ -17,17 +17,16 @@ def calcular_fecha_vencimiento(fecha_inicial: date, cuota_idx: int, tipo_pago: T
     if cuota_idx == 0:
         return fecha_inicial
 
-    if tipo_pago == TipoPago.QUINCENAL:
-        # Frecuencia quincenal: saltos de 15 días continuos por periodo
-        return fecha_inicial + timedelta(days=15 * cuota_idx)
-    elif tipo_pago == TipoPago.MENSUAL:
-        # Frecuencia mensual: conservación del día del mes ajustado a fin de mes si aplica
-        total_meses = fecha_inicial.month - 1 + cuota_idx
-        nuevo_anio = fecha_inicial.year + (total_meses // 12)
+    if tipo_pago == TipoPago.MENSUAL:
+        # Frecuencia mensual: vencimiento programado automáticamente para el último día de cada mes consecutivo
+        total_meses = (fecha_inicial.year * 12 + fecha_inicial.month - 1) + cuota_idx
+        nuevo_anio = total_meses // 12
         nuevo_mes = (total_meses % 12) + 1
-        max_dias = calendar.monthrange(nuevo_anio, nuevo_mes)[1]
-        nuevo_dia = min(fecha_inicial.day, max_dias)
-        return date(nuevo_anio, nuevo_mes, nuevo_dia)
+        ultimo_dia = calendar.monthrange(nuevo_anio, nuevo_mes)[1]
+        return date(nuevo_anio, nuevo_mes, ultimo_dia)
+    elif tipo_pago == TipoPago.QUINCENAL:
+        # Frecuencia quincenal (compatibilidad con contratos históricos previos): saltos de 15 días
+        return fecha_inicial + timedelta(days=15 * cuota_idx)
     elif tipo_pago == TipoPago.SEMANAL:
         return fecha_inicial + timedelta(days=7 * cuota_idx)
     else:  # DIARIO
@@ -77,7 +76,10 @@ class CreditoBase(BaseModel):
         default=EstadoCredito.PENDIENTE,
         description="Estado inicial del crédito (pendiente, activo, etc.)",
     )
-    tipo_pago: TipoPago = Field(..., description="Modalidad de pago (diario, semanal, quincenal, mensual)")
+    tipo_pago: TipoPago = Field(
+        default=TipoPago.MENSUAL,
+        description="Modalidad de pago (unificada exclusivamente a mensual con vencimiento a fin de mes)",
+    )
     cuota_inicial: Decimal = Field(
         default=Decimal("0.00"),
         ge=0,
@@ -87,7 +89,7 @@ class CreditoBase(BaseModel):
     numero_cuotas: int = Field(..., gt=0, description="Cantidad total de cuotas pactadas")
     valor_cuota: Decimal = Field(..., ge=0, description="Valor de cada cuota individual (0 para venta de contado)")
     fecha_primera_cuota: Optional[date] = Field(
-        None, description="Fecha de exigibilidad de la primera cuota (se autocalcula si no se envía)"
+        None, description="Fecha de exigibilidad de la primera cuota (se autocalcula a fin del mes siguiente si no se envía)"
     )
     fecha_desembolso: Optional[date] = Field(
         None, description="Fecha de desembolso de la operación para cálculo de cuotas"
@@ -141,8 +143,11 @@ class CreditoCreate(CreditoBase):
     @model_validator(mode="before")
     @classmethod
     def autocalcular_vencimiento_primera_cuota(cls, data: Any) -> Any:
-        """Garantiza la generación escalonada de cuotas a partir de la fecha de desembolso o compra."""
+        """Garantiza la unificación a modalidad mensual y autocalcula la primera cuota para el último día del mes siguiente a la compra."""
         if isinstance(data, dict):
+            # Unificar estrictamente a modalidad mensual para toda nueva originación
+            data["tipo_pago"] = TipoPago.MENSUAL.value
+
             # Normalizar fecha_primera_cuota si no vino explícita
             if not data.get("fecha_primera_cuota"):
                 raw_base = data.get("fecha_desembolso") or data.get("fecha_compra")
@@ -159,25 +164,12 @@ class CreditoCreate(CreditoBase):
                 else:
                     f_base = date.today()
 
-                tp_raw = data.get("tipo_pago", "quincenal")
-                if hasattr(tp_raw, "value"):
-                    tp = str(tp_raw.value).lower()
-                else:
-                    tp = str(tp_raw).lower().split(".")[-1]
-
-                if tp == "mensual":
-                    total_meses = (f_base.year * 12 + f_base.month - 1) + 1
-                    nuevo_anio = total_meses // 12
-                    nuevo_mes = (total_meses % 12) + 1
-                    max_dias = calendar.monthrange(nuevo_anio, nuevo_mes)[1]
-                    nuevo_dia = min(f_base.day, max_dias)
-                    data["fecha_primera_cuota"] = date(nuevo_anio, nuevo_mes, nuevo_dia)
-                elif tp == "semanal":
-                    data["fecha_primera_cuota"] = f_base + timedelta(days=7)
-                elif tp == "diario":
-                    data["fecha_primera_cuota"] = f_base + timedelta(days=1)
-                else:  # quincenal
-                    data["fecha_primera_cuota"] = f_base + timedelta(days=15)
+                # Vencimiento fijado para el último día del mes siguiente a la fecha de compra/desembolso
+                total_meses = (f_base.year * 12 + f_base.month - 1) + 1
+                nuevo_anio = total_meses // 12
+                nuevo_mes = (total_meses % 12) + 1
+                ultimo_dia = calendar.monthrange(nuevo_anio, nuevo_mes)[1]
+                data["fecha_primera_cuota"] = date(nuevo_anio, nuevo_mes, ultimo_dia)
             elif isinstance(data.get("fecha_primera_cuota"), str):
                 try:
                     data["fecha_primera_cuota"] = date.fromisoformat(data["fecha_primera_cuota"].split("T")[0])
