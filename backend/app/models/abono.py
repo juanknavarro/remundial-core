@@ -83,6 +83,12 @@ class Abono(Base):
         nullable=True,
         index=True,
     )
+    metodo_pago: Mapped[Optional[str]] = mapped_column(
+        String(50),
+        nullable=True,
+        default="efectivo",
+        server_default="efectivo",
+    )
     creado_en: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         server_default=func.now(),

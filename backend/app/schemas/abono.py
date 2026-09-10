@@ -23,6 +23,18 @@ class AbonoBase(BaseModel):
         ...,
         description="Ubicación geográfica obligatoria capturada en terreno al momento del cobro",
     )
+    metodo_pago: Optional[str] = Field(
+        default="efectivo",
+        description="Método de pago utilizado (efectivo, transferencia, etc.)",
+    )
+    notas: Optional[str] = Field(
+        default=None,
+        description="Notas u observaciones del recaudo",
+    )
+    numero_cuota: Optional[int] = Field(
+        default=None,
+        description="Número de cuota opcional asociado al recaudo",
+    )
 
 
 class AbonoCreate(AbonoBase):
@@ -32,16 +44,29 @@ class AbonoCreate(AbonoBase):
     @classmethod
     def normalize_input(cls, data: Any) -> Any:
         if isinstance(data, dict):
-            # Normalizar valor_abono si se envía con esa clave
-            if "valor_abonado" not in data and "valor_abono" in data:
-                data["valor_abonado"] = data["valor_abono"]
+            # Normalizar valor_abono, monto o valor si se envía con esa clave
+            if "valor_abonado" not in data or data.get("valor_abonado") is None:
+                for k in ("valor_abono", "monto", "valor", "monto_abono"):
+                    if k in data and data[k] is not None:
+                        data["valor_abonado"] = data[k]
+                        break
 
             # Normalizar coordenadas_gps_cobro si vienen latitud y longitud planas
-            if "coordenadas_gps_cobro" not in data and "latitud" in data and "longitud" in data:
-                data["coordenadas_gps_cobro"] = {
-                    "latitud": data["latitud"],
-                    "longitud": data["longitud"],
-                }
+            if "coordenadas_gps_cobro" not in data or not data.get("coordenadas_gps_cobro"):
+                lat = data.get("latitud") if data.get("latitud") is not None else data.get("lat")
+                lon = (
+                    data.get("longitud")
+                    if data.get("longitud") is not None
+                    else (data.get("lng") if data.get("lng") is not None else data.get("lon"))
+                )
+                if lat is not None and lon is not None:
+                    try:
+                        data["coordenadas_gps_cobro"] = {
+                            "latitud": float(lat),
+                            "longitud": float(lon),
+                        }
+                    except (ValueError, TypeError):
+                        pass
         return data
 
 

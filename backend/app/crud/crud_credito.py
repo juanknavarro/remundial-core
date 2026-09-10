@@ -1,4 +1,4 @@
-from datetime import date
+from datetime import date, timedelta
 from decimal import Decimal
 from typing import List, Optional
 from uuid import UUID
@@ -9,10 +9,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.models.cliente import Cliente, ReferenciaCliente, TipoReferenciaEnum
-from app.models.credito import Credito, CreditoDetalle, EstadoCredito
+from app.models.credito import Credito, CreditoDetalle, EstadoCredito, TipoPago
 from app.models.producto import Producto
 from app.models.usuario import Usuario
-from app.schemas.credito import CreditoCreate, CreditoUpdate
+from app.schemas.credito import CreditoCreate, CreditoUpdate, calcular_fecha_vencimiento
 
 
 def _poblar_codeudor_y_referencia(credito: Optional[Credito]) -> Optional[Credito]:
@@ -74,6 +74,7 @@ async def get_creditos(
     cobrador_id: Optional[UUID] = None,
     estado: Optional[EstadoCredito] = None,
     fecha: Optional[date] = None,
+    solo_exigibles: Optional[bool] = None,
 ) -> List[Credito]:
     """Lista créditos con opciones de paginación y filtros operativos."""
     query = (
@@ -105,6 +106,25 @@ async def get_creditos(
     creditos = list(result.scalars().all())
     for c in creditos:
         _poblar_codeudor_y_referencia(c)
+
+    # Filtrar cuotas exigibles (vencidas o que vencen en la jornada de hoy)
+    if solo_exigibles:
+        hoy = date.today()
+        filtrados = []
+        for c in creditos:
+            if c.saldo_pendiente <= Decimal("0.00"):
+                continue
+            monto_f = c.monto_financiado or Decimal("0.00")
+            saldo_p = c.saldo_pendiente or Decimal("0.00")
+            val_c = c.valor_cuota or Decimal("0.00")
+            amort = max(Decimal("0.00"), monto_f - saldo_p)
+            cuotas_pagas = int(amort // val_c) if val_c > 0 else 0
+            proxima_idx = min(c.numero_cuotas - 1, cuotas_pagas)
+            venc = calcular_fecha_vencimiento(c.fecha_primera_cuota, proxima_idx, c.tipo_pago)
+            if venc <= hoy:
+                filtrados.append(c)
+        creditos = filtrados
+
     return creditos
 
 

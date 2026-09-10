@@ -506,3 +506,341 @@ def generar_pdf_reporte_ventas(
     pdf_bytes = buffer.getvalue()
     buffer.close()
     return pdf_bytes
+
+
+def generar_pdf_reporte_cartera(
+    metricas: Dict[str, Any],
+    creditos: List[Dict[str, Any]],
+    filtros: Dict[str, Any],
+    usuario_auditor: Optional[str] = "Supervisor / Auditor",
+) -> bytes:
+    """Genera un reporte ejecutivo de cartera y plan de cuotas en PDF (formato Landscape Letter) con ReportLab,
+    incluyendo marcas visuales de verificación ('chulos' verdes) para cuotas recaudadas."""
+    buffer = io.BytesIO()
+
+    # Formato horizontal (Landscape Letter: 792 x 612 pt) con márgenes de 36 pt (0.5 pulgada)
+    doc = SimpleDocTemplate(
+        buffer,
+        pagesize=landscape(letter),
+        leftMargin=36,
+        rightMargin=36,
+        topMargin=36,
+        bottomMargin=45,
+    )
+
+    styles = getSampleStyleSheet()
+
+    title_style = ParagraphStyle(
+        "DocTitleC",
+        parent=styles["Heading1"],
+        fontName="Helvetica-Bold",
+        fontSize=17,
+        leading=21,
+        textColor=colors.HexColor("#0F172A"),
+    )
+
+    subtitle_style = ParagraphStyle(
+        "DocSubtitleC",
+        parent=styles["Normal"],
+        fontName="Helvetica",
+        fontSize=9,
+        leading=13,
+        textColor=colors.HexColor("#475569"),
+    )
+
+    kpi_title_style = ParagraphStyle(
+        "KpiTitleC",
+        parent=styles["Normal"],
+        fontName="Helvetica-Bold",
+        fontSize=7.5,
+        leading=10,
+        alignment=1,
+        textColor=colors.HexColor("#475569"),
+    )
+
+    kpi_val_style = ParagraphStyle(
+        "KpiValueC",
+        parent=styles["Normal"],
+        fontName="Helvetica-Bold",
+        fontSize=12,
+        leading=15,
+        alignment=1,
+        textColor=colors.HexColor("#0F172A"),
+    )
+
+    kpi_sub_style = ParagraphStyle(
+        "KpiSubC",
+        parent=styles["Normal"],
+        fontName="Helvetica",
+        fontSize=7,
+        leading=9,
+        alignment=1,
+        textColor=colors.HexColor("#64748B"),
+    )
+
+    table_header_style = ParagraphStyle(
+        "TableHeaderC",
+        parent=styles["Normal"],
+        fontName="Helvetica-Bold",
+        fontSize=7.5,
+        leading=9.5,
+        textColor=colors.white,
+    )
+
+    table_cell_style = ParagraphStyle(
+        "TableCellC",
+        parent=styles["Normal"],
+        fontName="Helvetica",
+        fontSize=7.5,
+        leading=9.5,
+        textColor=colors.HexColor("#1E293B"),
+    )
+
+    table_cell_bold = ParagraphStyle(
+        "TableCellBoldC",
+        parent=styles["Normal"],
+        fontName="Helvetica-Bold",
+        fontSize=7.5,
+        leading=9.5,
+        textColor=colors.HexColor("#0F172A"),
+    )
+
+    table_cell_right = ParagraphStyle(
+        "TableCellRightC",
+        parent=styles["Normal"],
+        fontName="Helvetica",
+        fontSize=7.5,
+        leading=9.5,
+        alignment=2,
+        textColor=colors.HexColor("#1E293B"),
+    )
+
+    table_cell_bold_right = ParagraphStyle(
+        "TableCellBoldRightC",
+        parent=styles["Normal"],
+        fontName="Helvetica-Bold",
+        fontSize=7.5,
+        leading=9.5,
+        alignment=2,
+        textColor=colors.HexColor("#0F172A"),
+    )
+
+    cuota_pagada_style = ParagraphStyle(
+        "CuotaPagadaC",
+        parent=styles["Normal"],
+        fontName="Helvetica-Bold",
+        fontSize=7,
+        leading=9,
+        textColor=colors.HexColor("#047857"),
+    )
+
+    cuota_pendiente_style = ParagraphStyle(
+        "CuotaPendienteC",
+        parent=styles["Normal"],
+        fontName="Helvetica",
+        fontSize=7,
+        leading=9,
+        textColor=colors.HexColor("#B45309"),
+    )
+
+    elements = []
+
+    # 1. ENCABEZADO CORPORATIVO
+    fecha_emision_str = datetime.now().strftime("%d/%m/%Y %H:%M")
+    header_left = [
+        Paragraph("<b>REMUNDIAL CRÉDITOS</b> • PLATAFORMA DE SUPERVISIÓN", ParagraphStyle(
+            "CompanyHeaderC", fontName="Helvetica-Bold", fontSize=9, textColor=colors.HexColor("#059669"), leading=12
+        )),
+        Paragraph("Informe de Cartera & Plan de Cuotas", title_style),
+        Paragraph("Auditoría de cuotas recaudadas con marca de verificación y saldos pendientes", subtitle_style),
+    ]
+
+    cobrador_str = filtros.get("cobrador_nombre") or "Todos los Cobradores"
+    periodo_str = filtros.get("periodo_texto") or "Jornada Completa"
+    fecha_rango = f"{filtros.get('fecha_inicio', '')} al {filtros.get('fecha_fin', '')}".strip(" al ")
+
+    header_right = [
+        Paragraph(f"<b>Supervisor Auditor:</b> {usuario_auditor}", table_cell_style),
+        Paragraph(f"<b>Cobrador / Ruta:</b> {cobrador_str}", table_cell_style),
+        Paragraph(f"<b>Periodo Auditado:</b> {periodo_str} {('(' + fecha_rango + ')') if fecha_rango else ''}", table_cell_style),
+        Paragraph(f"<b>Emisión:</b> {fecha_emision_str}", table_cell_style),
+    ]
+
+    header_table = Table([[header_left, header_right]], colWidths=[420, 300])
+    header_table.setStyle(TableStyle([
+        ("VALIGN", (0, 0), (-1, -1), "TOP"),
+        ("LEFTPADDING", (0, 0), (-1, -1), 0),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 0),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 0),
+        ("TOPPADDING", (0, 0), (-1, -1), 0),
+    ]))
+    elements.append(header_table)
+    elements.append(Spacer(1, 10))
+
+    # 2. BLOQUE DE TARJETAS KPI (4 MÉTRICAS FINANCIERAS)
+    t_cartera = format_cop(metricas.get("total_cartera", 0))
+    t_saldo = format_cop(metricas.get("saldo_total_pendiente", 0))
+    t_recaudado = format_cop(metricas.get("total_recaudado", 0))
+    c_pagadas = metricas.get("cuotas_pagadas", 0)
+    c_totales = metricas.get("cuotas_totales", 0)
+    pct_cumplimiento = int(round((c_pagadas / c_totales) * 100)) if c_totales > 0 else 0
+
+    kpi_card_1 = [
+        Paragraph("TOTAL CARTERA FINANCIADA", kpi_title_style),
+        Paragraph(t_cartera, kpi_val_style),
+        Paragraph(f"{metricas.get('total_creditos', 0)} contratos registrados", kpi_sub_style),
+    ]
+    kpi_card_2 = [
+        Paragraph("TOTAL AMORTIZADO / RECAUDADO", kpi_title_style),
+        Paragraph(f"<font color='#059669'>{t_recaudado}</font>", kpi_val_style),
+        Paragraph(f"{c_pagadas} cuotas cobradas", kpi_sub_style),
+    ]
+    kpi_card_3 = [
+        Paragraph("SALDO TOTAL POR COBRAR", kpi_title_style),
+        Paragraph(f"<font color='#E11D48'>{t_saldo}</font>", kpi_val_style),
+        Paragraph(f"{metricas.get('cuotas_pendientes', 0)} cuotas pendientes", kpi_sub_style),
+    ]
+    kpi_card_4 = [
+        Paragraph("CUMPLIMIENTO DE CUOTAS", kpi_title_style),
+        Paragraph(f"{pct_cumplimiento}%", kpi_val_style),
+        Paragraph(f"{c_pagadas} de {c_totales} cuotas con chulo", kpi_sub_style),
+    ]
+
+    kpi_table = Table([[kpi_card_1, kpi_card_2, kpi_card_3, kpi_card_4]], colWidths=[174, 174, 174, 174])
+    kpi_table.setStyle(TableStyle([
+        ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#F8FAFC")),
+        ("BOX", (0, 0), (-1, -1), 0.5, colors.HexColor("#CBD5E1")),
+        ("INNERGRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#E2E8F0")),
+        ("TOPPADDING", (0, 0), (-1, -1), 6),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 6),
+        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+    ]))
+    elements.append(kpi_table)
+    elements.append(Spacer(1, 10))
+
+    # 3. TABLA PRINCIPAL DE CRÉDITOS Y DESGLOSE DE CUOTAS CON MARCA DE VERIFICACIÓN
+    col_widths = [75, 115, 80, 65, 65, 320]
+    table_headers = [
+        Paragraph("<b>CONTRATO</b>", table_header_style),
+        Paragraph("<b>CLIENTE TITULAR</b>", table_header_style),
+        Paragraph("<b>COBRADOR / RUTA</b>", table_header_style),
+        Paragraph("<b>FINANCIADO</b>", ParagraphStyle("HFinC", parent=table_header_style, alignment=2)),
+        Paragraph("<b>SALDO PEND.</b>", ParagraphStyle("HSaldC", parent=table_header_style, alignment=2)),
+        Paragraph("<b>PLAN DE CUOTAS (MARCA DE VERIFICACIÓN DE RECAUDO)</b>", table_header_style),
+    ]
+
+    table_rows = [table_headers]
+
+    if not creditos:
+        empty_msg = Paragraph("No se encontraron contratos de cartera que coincidan con los filtros seleccionados.", subtitle_style)
+        table_rows.append([empty_msg, "", "", "", "", ""])
+    else:
+        for c in creditos:
+            contrato_code = c.get("codigo_contrato") or f"CTR-{str(c.get('id_contrato', ''))[:8].upper()}"
+            f_inicio = str(c.get("fecha_inicio") or "")[:10]
+            contrato_cell = f"<b>{contrato_code}</b><br/><font color='#64748B' size='6.5'>{f_inicio}</font>"
+
+            cliente_nom = c.get("cliente_nombre") or "Cliente Titular"
+            cliente_ced = c.get("cliente_cedula") or ""
+            cliente_tel = c.get("cliente_telefono") or ""
+            cliente_cell = f"<b>{cliente_nom}</b>"
+            if cliente_ced:
+                cliente_cell += f"<br/><font color='#64748B' size='6.5'>CC: {cliente_ced}</font>"
+            if cliente_tel:
+                cliente_cell += f"<br/><font color='#64748B' size='6.5'>Tel: {cliente_tel}</font>"
+
+            cobrador_txt = c.get("cobrador_nombre") or "Sin asignar"
+            frecuencia = str(c.get("tipo_pago") or "mensual").capitalize()
+            cobrador_cell = f"{cobrador_txt}<br/><font color='#64748B' size='6.5'>{frecuencia}</font>"
+
+            m_fin = format_cop(c.get("monto_financiado", 0))
+            s_pen = format_cop(c.get("saldo_pendiente", 0))
+            saldo_num = float(c.get("saldo_pendiente", 0))
+
+            # Generar desglose de cuotas con marca de verificación
+            cronograma = c.get("cronograma") or []
+            cuota_parts = []
+            for cuota in cronograma:
+                num = cuota.get("numero", 1)
+                val_c = format_cop(cuota.get("valor_cuota", 0))
+                f_venc = str(cuota.get("fecha_vencimiento") or "")[5:]  # MM-DD
+                is_pagada = cuota.get("pagada", False)
+
+                if is_pagada:
+                    # Chulo verde de completado
+                    cuota_parts.append(
+                        f"<font color='#047857'><b>[&#10004; C{num}: {val_c} Pagada]</b></font>"
+                    )
+                else:
+                    # Pendiente / por vencer
+                    cuota_parts.append(
+                        f"<font color='#475569'>[&#9675; C{num}: {val_c} Vence {f_venc}]</font>"
+                    )
+
+            cuotas_cell = "  ".join(cuota_parts) if cuota_parts else "<font color='#94A3B8'>Sin cronograma</font>"
+
+            table_rows.append([
+                Paragraph(contrato_cell, table_cell_style),
+                Paragraph(cliente_cell, table_cell_style),
+                Paragraph(cobrador_cell, table_cell_style),
+                Paragraph(m_fin, table_cell_bold_right),
+                Paragraph(f"<font color='#E11D48'><b>{s_pen}</b></font>", table_cell_bold_right) if saldo_num > 0 else Paragraph(s_pen, table_cell_right),
+                Paragraph(cuotas_cell, table_cell_style),
+            ])
+
+    cartera_table = Table(table_rows, colWidths=col_widths, repeatRows=1)
+    t_styles = [
+        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#0F172A")),  # Slate-900 Header
+        ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+        ("ALIGN", (0, 0), (2, -1), "LEFT"),
+        ("ALIGN", (3, 0), (4, -1), "RIGHT"),
+        ("ALIGN", (5, 0), (5, -1), "LEFT"),
+        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+        ("TOPPADDING", (0, 0), (-1, -1), 4),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+        ("LEFTPADDING", (0, 0), (-1, -1), 4),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 4),
+        ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#E2E8F0")),
+    ]
+
+    for i in range(1, len(table_rows)):
+        if i % 2 == 0:
+            t_styles.append(("BACKGROUND", (0, i), (-1, i), colors.HexColor("#F8FAFC")))
+
+    if not creditos:
+        t_styles.append(("SPAN", (0, 1), (-1, 1)))
+        t_styles.append(("ALIGN", (0, 1), (-1, 1), "CENTER"))
+
+    cartera_table.setStyle(TableStyle(t_styles))
+    elements.append(cartera_table)
+
+    # 4. SECCIÓN DE FIRMAS DE AUDITORÍA
+    elements.append(Spacer(1, 16))
+    firma_supervisor = [
+        Spacer(1, 20),
+        HRFlowable(width="80%", thickness=0.5, color=colors.HexColor("#94A3B8"), spaceBefore=0, spaceAfter=4),
+        Paragraph(f"<b>{usuario_auditor}</b>", table_cell_bold),
+        Paragraph("Firma Supervisor / Auditor de Cartera", kpi_sub_style),
+    ]
+    firma_cobrador = [
+        Spacer(1, 20),
+        HRFlowable(width="80%", thickness=0.5, color=colors.HexColor("#94A3B8"), spaceBefore=0, spaceAfter=4),
+        Paragraph(f"<b>{cobrador_str}</b>", table_cell_bold),
+        Paragraph("Firma Cobrador de Ruta Responsable", kpi_sub_style),
+    ]
+
+    firmas_table = Table([[firma_supervisor, firma_cobrador]], colWidths=[360, 360])
+    firmas_table.setStyle(TableStyle([
+        ("ALIGN", (0, 0), (-1, -1), "CENTER"),
+        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+        ("LEFTPADDING", (0, 0), (-1, -1), 20),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 20),
+    ]))
+    elements.append(firmas_table)
+
+    # Construir PDF con NumberedCanvas
+    doc.build(elements, canvasmaker=NumberedCanvas)
+    pdf_bytes = buffer.getvalue()
+    buffer.close()
+    return pdf_bytes
+

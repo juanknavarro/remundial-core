@@ -1,7 +1,7 @@
 import calendar
 from datetime import date, datetime, timedelta
 from decimal import Decimal
-from typing import List, Optional, Union
+from typing import Any, List, Optional, Union
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -39,6 +39,8 @@ class CuotaCronograma(BaseModel):
     numero: int = Field(..., description="Número ordinal de la cuota (1..N)")
     fecha_vencimiento: date = Field(..., description="Fecha de exigibilidad/vencimiento de la cuota")
     valor_cuota: Decimal = Field(..., description="Valor monetario a pagar en esta cuota")
+    pagada: bool = Field(default=False, description="Indica si la cuota ya fue pagada según amortización")
+    estado: str = Field(default="pendiente", description="Estado operativo: pagada, vencida, exigible_hoy, futura")
 
 
 class CreditoDetalleBase(BaseModel):
@@ -84,7 +86,15 @@ class CreditoBase(BaseModel):
     monto_financiado: Decimal = Field(..., ge=0, description="Valor neto a financiar en cuotas (0 para venta de contado)")
     numero_cuotas: int = Field(..., gt=0, description="Cantidad total de cuotas pactadas")
     valor_cuota: Decimal = Field(..., ge=0, description="Valor de cada cuota individual (0 para venta de contado)")
-    fecha_primera_cuota: date = Field(..., description="Fecha de exigibilidad de la primera cuota")
+    fecha_primera_cuota: Optional[date] = Field(
+        None, description="Fecha de exigibilidad de la primera cuota (se autocalcula si no se envía)"
+    )
+    fecha_desembolso: Optional[date] = Field(
+        None, description="Fecha de desembolso de la operación para cálculo de cuotas"
+    )
+    fecha_compra: Optional[date] = Field(
+        None, description="Fecha de compra (alias de fecha_desembolso)"
+    )
     saldo_pendiente: Optional[Decimal] = Field(
         None,
         ge=0,
@@ -128,6 +138,53 @@ class CreditoCreate(CreditoBase):
         description="Datos de la referencia familiar o personal de respaldo",
     )
 
+    @model_validator(mode="before")
+    @classmethod
+    def autocalcular_vencimiento_primera_cuota(cls, data: Any) -> Any:
+        """Garantiza la generación escalonada de cuotas a partir de la fecha de desembolso o compra."""
+        if isinstance(data, dict):
+            # Normalizar fecha_primera_cuota si no vino explícita
+            if not data.get("fecha_primera_cuota"):
+                raw_base = data.get("fecha_desembolso") or data.get("fecha_compra")
+                if raw_base:
+                    if isinstance(raw_base, str):
+                        try:
+                            f_base = date.fromisoformat(raw_base.split("T")[0])
+                        except Exception:
+                            f_base = date.today()
+                    elif isinstance(raw_base, (date, datetime)):
+                        f_base = raw_base.date() if isinstance(raw_base, datetime) else raw_base
+                    else:
+                        f_base = date.today()
+                else:
+                    f_base = date.today()
+
+                tp_raw = data.get("tipo_pago", "quincenal")
+                if hasattr(tp_raw, "value"):
+                    tp = str(tp_raw.value).lower()
+                else:
+                    tp = str(tp_raw).lower().split(".")[-1]
+
+                if tp == "mensual":
+                    total_meses = (f_base.year * 12 + f_base.month - 1) + 1
+                    nuevo_anio = total_meses // 12
+                    nuevo_mes = (total_meses % 12) + 1
+                    max_dias = calendar.monthrange(nuevo_anio, nuevo_mes)[1]
+                    nuevo_dia = min(f_base.day, max_dias)
+                    data["fecha_primera_cuota"] = date(nuevo_anio, nuevo_mes, nuevo_dia)
+                elif tp == "semanal":
+                    data["fecha_primera_cuota"] = f_base + timedelta(days=7)
+                elif tp == "diario":
+                    data["fecha_primera_cuota"] = f_base + timedelta(days=1)
+                else:  # quincenal
+                    data["fecha_primera_cuota"] = f_base + timedelta(days=15)
+            elif isinstance(data.get("fecha_primera_cuota"), str):
+                try:
+                    data["fecha_primera_cuota"] = date.fromisoformat(data["fecha_primera_cuota"].split("T")[0])
+                except Exception:
+                    pass
+        return data
+
 
 class CreditoUpdate(BaseModel):
     """Esquema para actualizaciones administrativas de un crédito."""
@@ -170,22 +227,78 @@ class CreditoResponse(CreditoBase):
     codeudor: Optional[CodeudorCreate] = None
     referencia: Optional[ReferenciaFamiliarCreate] = None
 
+    # Métricas y campos dinámicos de exigibilidad por vencimiento
+    fecha_proximo_vencimiento: Optional[date] = None
+    cuota_actual_numero: int = 1
+    cuotas_pagadas_count: int = 0
+    esta_vencido: bool = False
+    exigible_hoy: bool = False
+    dias_mora: int = 0
 
     model_config = ConfigDict(from_attributes=True)
 
     @model_validator(mode="after")
     def autogenerar_cronograma(self) -> "CreditoResponse":
-        if not self.cronograma_cuotas and self.numero_cuotas > 0 and self.fecha_primera_cuota:
+        if self.numero_cuotas > 0 and self.fecha_primera_cuota:
+            # 1. Calcular cuántas cuotas están pagadas según saldo amortizado
+            monto_f = Decimal(self.monto_financiado or 0)
+            saldo_p = Decimal(self.saldo_pendiente or 0)
+            val_c = Decimal(self.valor_cuota or 0)
+            amortizado = max(Decimal("0.00"), monto_f - saldo_p)
+            cuotas_pagadas = int(amortizado // val_c) if val_c > 0 else 0
+            cuotas_pagadas = min(self.numero_cuotas, cuotas_pagadas)
+            self.cuotas_pagadas_count = cuotas_pagadas
+
+            # 2. Generar plan de pagos escalonado (cronograma)
+            hoy = date.today()
             cuotas: List[CuotaCronograma] = []
             for i in range(self.numero_cuotas):
                 venc = calcular_fecha_vencimiento(self.fecha_primera_cuota, i, self.tipo_pago)
+                is_pagada = (i + 1) <= cuotas_pagadas
+                if is_pagada:
+                    st = "pagada"
+                elif venc < hoy:
+                    st = "vencida"
+                elif venc == hoy:
+                    st = "exigible_hoy"
+                else:
+                    st = "futura"
+
                 cuotas.append(
                     CuotaCronograma(
                         numero=i + 1,
                         fecha_vencimiento=venc,
                         valor_cuota=self.valor_cuota,
+                        pagada=is_pagada,
+                        estado=st,
                     )
                 )
             self.cronograma_cuotas = cuotas
+
+            # 3. Determinar la cuota actual exigible y su vencimiento
+            if saldo_p <= Decimal("0.00") or cuotas_pagadas >= self.numero_cuotas:
+                # Crédito saldado
+                self.fecha_proximo_vencimiento = None
+                self.cuota_actual_numero = self.numero_cuotas
+                self.esta_vencido = False
+                self.exigible_hoy = False
+                self.dias_mora = 0
+            else:
+                proxima_idx = cuotas_pagadas
+                self.cuota_actual_numero = proxima_idx + 1
+                prox_venc = cuotas[proxima_idx].fecha_vencimiento
+                self.fecha_proximo_vencimiento = prox_venc
+                if prox_venc < hoy:
+                    self.esta_vencido = True
+                    self.exigible_hoy = True
+                    self.dias_mora = (hoy - prox_venc).days
+                elif prox_venc == hoy:
+                    self.esta_vencido = False
+                    self.exigible_hoy = True
+                    self.dias_mora = 0
+                else:
+                    self.esta_vencido = False
+                    self.exigible_hoy = False
+                    self.dias_mora = 0
         return self
 

@@ -34,7 +34,8 @@ async def get_abono(db: AsyncSession, id_recibo: UUID) -> Optional[Abono]:
                 setattr(a, "cliente_cedula", a.credito.cliente.cedula)
         else:
             setattr(a, "numero_contrato", f"CTR-{str(a.credito_id)[:8].upper()}")
-        setattr(a, "metodo_pago", "efectivo")
+        if not getattr(a, "metodo_pago", None):
+            setattr(a, "metodo_pago", "efectivo")
     return a
 
 
@@ -74,7 +75,8 @@ async def get_abonos_by_credito(
                 setattr(a, "cliente_cedula", a.credito.cliente.cedula)
         else:
             setattr(a, "numero_contrato", f"CTR-{str(a.credito_id)[:8].upper()}")
-        setattr(a, "metodo_pago", "efectivo")
+        if not getattr(a, "metodo_pago", None):
+            setattr(a, "metodo_pago", "efectivo")
     return abonos
 
 
@@ -111,9 +113,12 @@ async def get_abonos_list(
             if a.credito.cliente:
                 setattr(a, "cliente_nombre", a.credito.cliente.nombres)
                 setattr(a, "cliente_cedula", a.credito.cliente.cedula)
+            setattr(a, "saldo_restante_credito", a.credito.saldo_pendiente)
         else:
             setattr(a, "numero_contrato", f"CTR-{str(a.credito_id)[:8].upper()}")
-        setattr(a, "metodo_pago", "efectivo")
+            setattr(a, "saldo_restante_credito", Decimal("0.00"))
+        if not getattr(a, "metodo_pago", None):
+            setattr(a, "metodo_pago", "efectivo")
     return abonos
 
 
@@ -295,6 +300,7 @@ async def create_abono(db: AsyncSession, abono_in: AbonoCreate) -> Abono:
             cobrador_id=cobrador.id,
             valor_abonado=monto_abono,
             coordenadas_gps_cobro=gps_tuple,
+            metodo_pago=(abono_in.metodo_pago or "efectivo").lower().strip(),
             estado=EstadoAbono.REGISTRADO,
         )
         db.add(db_abono)

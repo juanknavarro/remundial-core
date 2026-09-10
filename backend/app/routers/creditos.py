@@ -79,6 +79,7 @@ async def listar_creditos(
     cobrador_id: Optional[UUID] = Query(None, description="Filtrar por cobrador asignado"),
     estado: Optional[EstadoCredito] = Query(None, description="Filtrar por estado del crédito"),
     fecha: Optional[date] = Query(None, description="Filtrar por fecha de creación (YYYY-MM-DD)"),
+    solo_exigibles: Optional[bool] = Query(None, description="Filtrar cuotas exigibles hoy o vencidas"),
     db: AsyncSession = Depends(get_db),
     current_user: Usuario = Depends(get_current_user),
 ):
@@ -100,6 +101,7 @@ async def listar_creditos(
         cobrador_id=cobrador_id,
         estado=estado,
         fecha=fecha,
+        solo_exigibles=solo_exigibles,
     )
 
 

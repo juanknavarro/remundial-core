@@ -11,9 +11,10 @@ from sqlalchemy.orm import selectinload
 from app.core.database import get_db
 from app.core.deps import require_supervisor_o_secretaria
 from app.models.cliente import Cliente
-from app.models.credito import Credito, CreditoDetalle
+from app.models.credito import Credito, CreditoDetalle, EstadoCredito
 from app.models.usuario import Usuario
-from app.services.pdf_reporte import generar_pdf_reporte_ventas
+from app.schemas.credito import calcular_fecha_vencimiento
+from app.services.pdf_reporte import generar_pdf_reporte_cartera, generar_pdf_reporte_ventas
 
 router = APIRouter(
     prefix="/reportes",
@@ -334,3 +335,218 @@ async def exportar_excel_reporte_ventas(
             "Cache-Control": "no-cache, no-store, must-revalidate",
         },
     )
+
+
+# =========================================================================
+# REPORTE DE CARTERA & PLAN DE CUOTAS CON MARCA DE VERIFICACIÓN (CHULOS)
+# =========================================================================
+
+async def _obtener_datos_reporte_cartera(
+    db: AsyncSession,
+    cobrador_id: Optional[UUID] = None,
+    fecha_inicio: Optional[date] = None,
+    fecha_fin: Optional[date] = None,
+    periodo_preset: Optional[str] = "mes",
+    search: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Consulta la cartera asignada a cobradores y desglosa el cronograma de cuotas con su marca de verificación."""
+    query = (
+        select(Credito)
+        .join(Credito.cliente)
+        .options(
+            selectinload(Credito.cliente),
+            selectinload(Credito.cobrador),
+            selectinload(Credito.vendedor),
+            selectinload(Credito.detalles),
+        )
+        .order_by(desc(Credito.creado_en))
+    )
+
+    if cobrador_id:
+        query = query.where(Credito.cobrador_id == cobrador_id)
+
+    if fecha_inicio:
+        inicio_dt = datetime.combine(fecha_inicio, time.min)
+        query = query.where(Credito.creado_en >= inicio_dt)
+    if fecha_fin:
+        fin_dt = datetime.combine(fecha_fin, time.max)
+        query = query.where(Credito.creado_en <= fin_dt)
+
+    if search and search.strip():
+        term = f"%{search.strip()}%"
+        query = query.where(
+            or_(
+                Cliente.nombres.ilike(term),
+                Cliente.cedula.ilike(term),
+                cast(Credito.id_contrato, String).ilike(term),
+            )
+        )
+
+    res = await db.execute(query)
+    creditos_db = res.scalars().all()
+
+    cobrador_nombre = "Todos los Cobradores"
+    if cobrador_id:
+        c_user = await db.get(Usuario, cobrador_id)
+        if c_user:
+            cobrador_nombre = c_user.nombre
+
+    total_cartera = Decimal("0.00")
+    saldo_total_pendiente = Decimal("0.00")
+    total_recaudado = Decimal("0.00")
+    cuotas_totales = 0
+    cuotas_pagadas = 0
+    cuotas_pendientes = 0
+
+    creditos_out: List[Dict[str, Any]] = []
+    hoy = date.today()
+
+    for c in creditos_db:
+        m_fin = Decimal(str(c.monto_financiado or 0))
+        s_pen = Decimal(str(c.saldo_pendiente or 0))
+        val_c = Decimal(str(c.valor_cuota or 0))
+        n_cuotas = int(c.numero_cuotas or 1)
+
+        total_cartera += m_fin
+        saldo_total_pendiente += s_pen
+        amort = max(Decimal("0.00"), m_fin - s_pen)
+        total_recaudado += amort
+
+        c_pagas_count = int(amort // val_c) if val_c > 0 else 0
+        c_pagas_count = min(n_cuotas, c_pagas_count)
+        c_pen_count = max(0, n_cuotas - c_pagas_count)
+
+        cuotas_totales += n_cuotas
+        cuotas_pagadas += c_pagas_count
+        cuotas_pendientes += c_pen_count
+
+        f_base = c.fecha_primera_cuota or (c.creado_en.date() if c.creado_en else hoy)
+        cronograma = []
+        for i in range(n_cuotas):
+            venc = calcular_fecha_vencimiento(f_base, i, c.tipo_pago)
+            is_pagada = (i + 1) <= c_pagas_count
+            cronograma.append({
+                "numero": i + 1,
+                "fecha_vencimiento": venc.isoformat(),
+                "valor_cuota": float(val_c),
+                "pagada": is_pagada,
+                "estado": "pagada" if is_pagada else ("vencida" if venc < hoy else ("exigible_hoy" if venc == hoy else "futura")),
+            })
+
+        creditos_out.append({
+            "id_contrato": str(c.id_contrato),
+            "codigo_contrato": f"CTR-{str(c.id_contrato)[:8].upper()}",
+            "fecha_inicio": c.creado_en.isoformat() if c.creado_en else None,
+            "cliente_nombre": c.cliente.nombres if c.cliente else "Cliente Titular",
+            "cliente_cedula": c.cliente.cedula if c.cliente else "",
+            "cliente_telefono": c.cliente.telefono if c.cliente else "",
+            "cobrador_id": str(c.cobrador_id) if c.cobrador_id else None,
+            "cobrador_nombre": c.cobrador.nombre if c.cobrador else "Sin asignar",
+            "monto_financiado": float(m_fin),
+            "saldo_pendiente": float(s_pen),
+            "valor_cuota": float(val_c),
+            "numero_cuotas": n_cuotas,
+            "tipo_pago": c.tipo_pago.value if hasattr(c.tipo_pago, "value") else str(c.tipo_pago),
+            "estado": c.estado.value if hasattr(c.estado, "value") else str(c.estado),
+            "cuotas_pagadas_count": c_pagas_count,
+            "cuotas_pendientes_count": c_pen_count,
+            "cronograma": cronograma,
+        })
+
+    periodo_map = {
+        "hoy": "Día de Hoy",
+        "semana": "Semana Actual",
+        "mes": "Mes en Curso",
+        "todos": "Todo el Historial",
+        "personalizado": "Rango Personalizado",
+    }
+
+    return {
+        "metricas": {
+            "total_cartera": float(total_cartera),
+            "saldo_total_pendiente": float(saldo_total_pendiente),
+            "total_recaudado": float(total_recaudado),
+            "total_creditos": len(creditos_out),
+            "cuotas_totales": cuotas_totales,
+            "cuotas_pagadas": cuotas_pagadas,
+            "cuotas_pendientes": cuotas_pendientes,
+        },
+        "filtros": {
+            "cobrador_id": str(cobrador_id) if cobrador_id else None,
+            "cobrador_nombre": cobrador_nombre,
+            "periodo_texto": periodo_map.get(periodo_preset or "mes", "Periodo Seleccionado"),
+            "fecha_inicio": fecha_inicio.isoformat() if fecha_inicio else None,
+            "fecha_fin": fecha_fin.isoformat() if fecha_fin else None,
+            "search": search,
+        },
+        "creditos": creditos_out,
+    }
+
+
+@router.get(
+    "/cartera",
+    summary="Consultar datos de cartera y cuotas para supervisión",
+    status_code=status.HTTP_200_OK,
+)
+async def reporte_cartera_datos(
+    cobrador_id: Optional[UUID] = Query(None, description="ID del cobrador"),
+    fecha_inicio: Optional[date] = Query(None, description="Fecha de inicio (YYYY-MM-DD)"),
+    fecha_fin: Optional[date] = Query(None, description="Fecha de fin (YYYY-MM-DD)"),
+    periodo_preset: Optional[str] = Query("mes", description="Preset de periodo: hoy, semana, mes, todos"),
+    search: Optional[str] = Query(None, description="Búsqueda por cliente o cédula"),
+    db: AsyncSession = Depends(get_db),
+    current_user: Usuario = Depends(require_supervisor_o_secretaria),
+) -> Dict[str, Any]:
+    """Retorna los datos de cartera con el desglose de cuotas y marcas de recaudo para supervisión."""
+    return await _obtener_datos_reporte_cartera(
+        db=db,
+        cobrador_id=cobrador_id,
+        fecha_inicio=fecha_inicio,
+        fecha_fin=fecha_fin,
+        periodo_preset=periodo_preset,
+        search=search,
+    )
+
+
+@router.get(
+    "/cartera/pdf",
+    summary="Descargar reporte de cartera y plan de cuotas en PDF (ReportLab)",
+    status_code=status.HTTP_200_OK,
+)
+async def reporte_cartera_pdf(
+    cobrador_id: Optional[UUID] = Query(None, description="ID del cobrador asignado"),
+    fecha_inicio: Optional[date] = Query(None, description="Fecha de inicio (YYYY-MM-DD)"),
+    fecha_fin: Optional[date] = Query(None, description="Fecha de fin (YYYY-MM-DD)"),
+    periodo_preset: Optional[str] = Query("mes", description="Preset de periodo: hoy, semana, mes, todos"),
+    search: Optional[str] = Query(None, description="Búsqueda por cliente o cédula"),
+    db: AsyncSession = Depends(get_db),
+    current_user: Usuario = Depends(require_supervisor_o_secretaria),
+) -> Response:
+    """Genera y descarga un PDF ejecutivo con ReportLab detallando el plan de cuotas y marcas de recaudo (chulos)."""
+    datos = await _obtener_datos_reporte_cartera(
+        db=db,
+        cobrador_id=cobrador_id,
+        fecha_inicio=fecha_inicio,
+        fecha_fin=fecha_fin,
+        periodo_preset=periodo_preset,
+        search=search,
+    )
+
+    pdf_bytes = generar_pdf_reporte_cartera(
+        metricas=datos["metricas"],
+        creditos=datos["creditos"],
+        filtros=datos["filtros"],
+        usuario_auditor=f"{current_user.nombre} ({current_user.rol.value.capitalize()})",
+    )
+
+    filename = f"Reporte_Cartera_Cuotas_{datetime.now().strftime('%Y%m%d')}.pdf"
+
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={
+            "Content-Disposition": f'attachment; filename="{filename}"',
+            "Cache-Control": "no-cache, no-store, must-revalidate",
+        },
+    )
+
