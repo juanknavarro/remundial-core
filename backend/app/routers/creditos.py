@@ -2,16 +2,27 @@ from datetime import date
 from typing import List, Optional
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Response, status
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
-from app.core.deps import get_current_user, require_supervisor, require_vendedor_o_supervisor
+from app.core.deps import (
+    get_current_user,
+    get_user_from_header_or_query,
+    require_supervisor,
+    require_vendedor_o_supervisor,
+)
+from app.core.security import decode_access_token
 from app.crud import crud_credito
 from app.models.credito import EstadoCredito
 from app.models.usuario import RolUsuario, Usuario
 from app.schemas.credito import CreditoCreate, CreditoResponse, CreditoUpdate
+from app.services.pdf_recibo import (
+    construir_nombre_archivo_pdf,
+    generar_pdf_recibo_venta,
+    guardar_firmas_contrato,
+)
 
 router = APIRouter(
     prefix="/creditos",
@@ -63,6 +74,86 @@ async def obtener_credito(
             detail=f"Crédito con ID de contrato '{id_contrato}' no encontrado",
         )
     return credito
+
+
+@router.get(
+    "/{id_contrato}/recibo-pdf",
+    summary="Generar Recibo Digital de Venta (PDF) - Formato Talonario Remundial",
+    description="Genera el comprobante digital oficial de venta inicial y contrato en formato PDF con la estructura del talonario físico de Remundial Arte's.",
+    status_code=status.HTTP_200_OK,
+)
+async def descargar_recibo_venta_pdf(
+    id_contrato: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: Usuario = Depends(get_user_from_header_or_query),
+):
+    """Genera en tiempo real el comprobante PDF oficial de venta/crédito sin alterar ninguna tabla ni estado."""
+    credito = await crud_credito.get_credito_por_id_o_hash(db=db, id_o_hash=id_contrato)
+    if not credito:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Crédito o venta con ID o código '{id_contrato}' no encontrado.",
+        )
+
+    # Autorización RBAC: Permitir la descarga directa del comprobante a cualquier usuario/vendedor activo autenticado
+    if not current_user.estado_activo:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Usuario inactivo en el sistema.",
+        )
+
+    pdf_bytes = generar_pdf_recibo_venta(credito)
+    cliente_nombre = "Cliente"
+    if credito.cliente:
+        cliente_nombre = getattr(credito.cliente, "nombre_completo", None) or getattr(credito.cliente, "nombres", "Cliente")
+    codigo_ctr = f"CTR-{str(credito.id_contrato)[:8].upper()}"
+    fecha_emision = getattr(credito, "creado_en", None)
+    filename = construir_nombre_archivo_pdf("Venta", codigo_ctr, cliente_nombre, fecha_emision)
+
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={
+            "Content-Disposition": f'inline; filename="{filename}"',
+            "Cache-Control": "no-cache, no-store, must-revalidate",
+        },
+    )
+
+
+class FirmasContratoRequest(BaseModel):
+    firma_titular: Optional[str] = None
+    firma_vendedor: Optional[str] = None
+    firma_codeudor: Optional[str] = None
+
+
+@router.post(
+    "/{id_contrato}/firmas",
+    summary="Almacenar o actualizar firmas táctiles del contrato",
+    status_code=status.HTTP_200_OK,
+)
+async def guardar_firmas_endpoint(
+    id_contrato: str,
+    firmas_in: FirmasContratoRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: Usuario = Depends(get_current_user),
+):
+    credito = await crud_credito.get_credito_por_id_o_hash(db=db, id_o_hash=id_contrato)
+    if not credito:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Crédito o venta con ID o código '{id_contrato}' no encontrado.",
+        )
+
+    guardar_firmas_contrato(
+        id_contrato=credito.id_contrato,
+        firma_titular=firmas_in.firma_titular,
+        firma_vendedor=firmas_in.firma_vendedor,
+        firma_codeudor=firmas_in.firma_codeudor,
+    )
+    return {
+        "mensaje": "Firmas táctiles guardadas correctamente",
+        "id_contrato": str(credito.id_contrato),
+    }
 
 
 @router.get(

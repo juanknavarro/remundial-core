@@ -13,7 +13,7 @@ from app.core.deps import require_supervisor_o_secretaria
 from app.models.cliente import Cliente
 from app.models.credito import Credito, CreditoDetalle, EstadoCredito
 from app.models.usuario import Usuario
-from app.schemas.credito import calcular_fecha_vencimiento
+from app.schemas.credito import calcular_fecha_vencimiento, generar_cronograma_con_arrastre
 from app.services.pdf_reporte import generar_pdf_reporte_cartera, generar_pdf_reporte_ventas
 
 router = APIRouter(
@@ -412,26 +412,29 @@ async def _obtener_datos_reporte_cartera(
         amort = max(Decimal("0.00"), m_fin - s_pen)
         total_recaudado += amort
 
-        c_pagas_count = int(amort // val_c) if val_c > 0 else 0
-        c_pagas_count = min(n_cuotas, c_pagas_count)
+        f_base = c.fecha_primera_cuota or (c.creado_en.date() if c.creado_en else hoy)
+        cron_info = generar_cronograma_con_arrastre(
+            fecha_primera_cuota=f_base,
+            numero_cuotas=n_cuotas,
+            monto_financiado=m_fin,
+            saldo_pendiente=s_pen,
+            valor_cuota_base=val_c,
+            tipo_pago=c.tipo_pago,
+            hoy=hoy,
+        )
+        cron_objs = cron_info["cronograma"]
+        cronograma = [co.model_dump() if hasattr(co, "model_dump") else co.dict() for co in cron_objs]
+        # Convert date objects to isoformat string if not already
+        for item in cronograma:
+            if isinstance(item.get("fecha_vencimiento"), (date, datetime)):
+                item["fecha_vencimiento"] = item["fecha_vencimiento"].isoformat()
+
+        c_pagas_count = cron_info["cuotas_pagadas_count"]
         c_pen_count = max(0, n_cuotas - c_pagas_count)
 
         cuotas_totales += n_cuotas
         cuotas_pagadas += c_pagas_count
         cuotas_pendientes += c_pen_count
-
-        f_base = c.fecha_primera_cuota or (c.creado_en.date() if c.creado_en else hoy)
-        cronograma = []
-        for i in range(n_cuotas):
-            venc = calcular_fecha_vencimiento(f_base, i, c.tipo_pago)
-            is_pagada = (i + 1) <= c_pagas_count
-            cronograma.append({
-                "numero": i + 1,
-                "fecha_vencimiento": venc.isoformat(),
-                "valor_cuota": float(val_c),
-                "pagada": is_pagada,
-                "estado": "pagada" if is_pagada else ("vencida" if venc < hoy else ("exigible_hoy" if venc == hoy else "futura")),
-            })
 
         creditos_out.append({
             "id_contrato": str(c.id_contrato),

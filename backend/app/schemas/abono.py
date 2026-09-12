@@ -35,6 +35,14 @@ class AbonoBase(BaseModel):
         default=None,
         description="Número de cuota opcional asociado al recaudo",
     )
+    firma_cliente: Optional[str] = Field(
+        default=None,
+        description="Firma manuscrita digitalizada del cliente titular en formato Base64 PNG",
+    )
+    cobrador_nombre: Optional[str] = Field(
+        default=None,
+        description="Nombre real del cobrador en ruta que registra el recaudo",
+    )
 
 
 class AbonoCreate(AbonoBase):
@@ -90,8 +98,64 @@ class AbonoResponse(BaseModel):
     cliente_cedula: Optional[str] = None
     numero_contrato: Optional[str] = None
     metodo_pago: Optional[str] = "efectivo"
+    es_abono_parcial: Optional[bool] = Field(
+        default=False,
+        description="Indica si este recaudo correspondió a un pago parcial de la cuota",
+    )
+    diferencia_arrastrada: Optional[Decimal] = Field(
+        default=Decimal("0.00"),
+        description="Monto insoluto no cubierto que se suma a la exigibilidad de la siguiente cuota",
+    )
+    cuota_afectada_numero: Optional[int] = Field(
+        default=None,
+        description="Número de la cuota impactada por este abono",
+    )
+    valor_cuota_siguiente: Optional[Decimal] = Field(
+        default=None,
+        description="Nuevo monto exigible proyectado para la siguiente cuota programada",
+    )
+    firma_cliente: Optional[str] = Field(
+        default=None,
+        description="Firma manuscrita digitalizada del cliente titular en formato Base64 PNG",
+    )
+    cobrador_nombre: Optional[str] = Field(
+        default=None,
+        description="Nombre del cobrador en ruta que realizó el recaudo",
+    )
 
     model_config = ConfigDict(from_attributes=True)
+
+
+class ReciboOfflinePdfRequest(BaseModel):
+    """Payload para generar el PDF oficial mediante ReportLab cuando el recibo está en cola local offline."""
+    id_recibo: Optional[str] = "ABONO-OFF"
+    numero_contrato: Optional[str] = None
+    credito_id: Optional[str] = None
+    cliente: Optional[str] = None
+    cliente_nombre: Optional[str] = None
+    cliente_cedula: Optional[str] = None
+    cliente_telefono: Optional[str] = None
+    cobrador_nombre: Optional[str] = None
+    cobrador_telefono: Optional[str] = None
+    valor: Optional[Decimal] = None
+    valor_abonado: Optional[Decimal] = None
+    nuevoSaldo: Optional[Decimal] = None
+    saldo_restante_credito: Optional[Decimal] = None
+    saldo_pendiente: Optional[Decimal] = None
+    es_abono_parcial: Optional[bool] = False
+    saldo_insoluto: Optional[Decimal] = Decimal("0.00")
+    diferencia_arrastrada: Optional[Decimal] = None
+    cuota_numero: Optional[int] = 1
+    cuota_afectada_numero: Optional[int] = None
+    cuota_siguiente_numero: Optional[int] = None
+    valor_cuota_siguiente: Optional[Decimal] = None
+    valor_cuota_exigible: Optional[Decimal] = None
+    metodo_pago: Optional[str] = "efectivo"
+    fecha: Optional[str] = None
+    fecha_completa: Optional[str] = None
+    nombre_archivo_pdf: Optional[str] = None
+    firma_cliente: Optional[str] = None
+    firma_cobrador: Optional[str] = None
 
 
 class ConciliacionRutaRequest(BaseModel):

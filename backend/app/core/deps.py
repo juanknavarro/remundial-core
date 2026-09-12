@@ -1,7 +1,7 @@
-from typing import List
+from typing import List, Optional
 from uuid import UUID
 
-from fastapi import Depends, HTTPException, status
+from fastapi import Depends, Header, HTTPException, Query, status
 from fastapi.security import OAuth2PasswordBearer
 import jwt
 
@@ -49,6 +49,44 @@ async def get_current_user(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Usuario inactivo en el sistema. Contacte a un supervisor.",
         )
+
+    return user
+
+
+async def get_user_from_header_or_query(
+    token_query: Optional[str] = Query(None, alias="token"),
+    authorization: Optional[str] = Header(None),
+    db: AsyncSession = Depends(get_db),
+) -> Usuario:
+    """Valida autenticación vía Bearer header o parámetro de consulta ?token= (útil para visualización directa en navegador)."""
+    token = None
+    if authorization and authorization.lower().startswith("bearer "):
+        token = authorization[7:].strip()
+    elif token_query:
+        token = token_query.strip()
+
+    if not token:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Autenticación requerida para generar o descargar comprobantes.",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    try:
+        payload = decode_access_token(token)
+        user_id_str: str = payload.get("sub")
+        if not user_id_str:
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Token no contiene identificador de usuario válido.")
+        user_id = UUID(user_id_str)
+    except Exception:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Token de acceso inválido o expirado.")
+
+    user = await db.get(Usuario, user_id)
+    if not user:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Usuario no encontrado en la base de datos.")
+
+    if not user.estado_activo:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Usuario inactivo en el sistema.")
 
     return user
 

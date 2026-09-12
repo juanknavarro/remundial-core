@@ -4,7 +4,7 @@ from typing import List, Optional
 from uuid import UUID
 
 from fastapi import HTTPException, status
-from sqlalchemy import select
+from sqlalchemy import cast, select, String
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -12,6 +12,78 @@ from app.models.abono import Abono, CierreCaja, EstadoAbono
 from app.models.credito import Credito, EstadoCredito
 from app.models.usuario import Usuario
 from app.schemas.abono import AbonoCreate
+from app.schemas.credito import generar_cronograma_con_arrastre
+from app.services.pdf_recibo import guardar_firma_abono
+
+
+def _enriquecer_abono_con_cronograma(a: Optional[Abono]) -> Optional[Abono]:
+    """Popula campos contables derivados, saldo insoluto y arrastre a la siguiente cuota."""
+    if not a:
+        return a
+    if not getattr(a, "metodo_pago", None):
+        setattr(a, "metodo_pago", "efectivo")
+
+    if a.cobrador:
+        setattr(a, "cobrador_nombre", a.cobrador.nombre)
+
+    if a.credito:
+        setattr(a, "numero_contrato", f"CTR-{str(a.credito_id)[:8].upper()}")
+        if a.credito.cliente:
+            setattr(a, "cliente_nombre", a.credito.cliente.nombres)
+            setattr(a, "cliente_cedula", a.credito.cliente.cedula)
+        setattr(a, "saldo_restante_credito", a.credito.saldo_pendiente)
+
+        # Si ya fue enriquecido por create_abono, retornar directamente
+        if getattr(a, "es_abono_parcial", None) is not None:
+            if a.cobrador and not getattr(a, "cobrador_nombre", None):
+                setattr(a, "cobrador_nombre", a.cobrador.nombre)
+            return a
+
+        v_base = a.credito.valor_cuota or Decimal("0.00")
+        monto_abono = a.valor_abonado or Decimal("0.00")
+
+        cron_data = generar_cronograma_con_arrastre(
+            fecha_primera_cuota=a.credito.fecha_primera_cuota,
+            numero_cuotas=a.credito.numero_cuotas,
+            monto_financiado=a.credito.monto_financiado,
+            saldo_pendiente=a.credito.saldo_pendiente,
+            valor_cuota_base=a.credito.valor_cuota,
+            tipo_pago=a.credito.tipo_pago,
+        )
+        cronograma = cron_data["cronograma"]
+        cuota_parcial = next((q for q in cronograma if q.es_parcial), None)
+
+        if cuota_parcial:
+            es_parcial = True
+            cuota_afectada = cuota_parcial.numero
+            diferencia = cuota_parcial.saldo_cuota
+            cuota_sig = next((q for q in cronograma if q.numero == cuota_afectada + 1), None)
+            valor_sig = cuota_sig.valor_cuota if cuota_sig else (v_base + diferencia)
+        elif monto_abono < v_base and a.credito.saldo_pendiente > Decimal("0.00"):
+            es_parcial = True
+            diferencia = v_base - monto_abono
+            cuota_afectada = cron_data["cuota_actual_numero"]
+            valor_sig = v_base + diferencia
+        else:
+            es_parcial = False
+            diferencia = Decimal("0.00")
+            cuota_afectada = cron_data["cuota_actual_numero"]
+            cuota_sig = next((q for q in cronograma if q.numero == cuota_afectada), None)
+            valor_sig = cuota_sig.valor_cuota if cuota_sig else v_base
+
+        setattr(a, "es_abono_parcial", es_parcial)
+        setattr(a, "diferencia_arrastrada", diferencia)
+        setattr(a, "cuota_afectada_numero", cuota_afectada)
+        setattr(a, "valor_cuota_siguiente", valor_sig)
+    else:
+        setattr(a, "numero_contrato", f"CTR-{str(a.credito_id)[:8].upper()}")
+        setattr(a, "saldo_restante_credito", Decimal("0.00"))
+        setattr(a, "es_abono_parcial", False)
+        setattr(a, "diferencia_arrastrada", Decimal("0.00"))
+        setattr(a, "cuota_afectada_numero", None)
+        setattr(a, "valor_cuota_siguiente", None)
+
+    return a
 
 
 async def get_abono(db: AsyncSession, id_recibo: UUID) -> Optional[Abono]:
@@ -26,17 +98,34 @@ async def get_abono(db: AsyncSession, id_recibo: UUID) -> Optional[Abono]:
     )
     result = await db.execute(query)
     a = result.scalar_one_or_none()
-    if a:
-        if a.credito:
-            setattr(a, "numero_contrato", f"CTR-{str(a.credito_id)[:8].upper()}")
-            if a.credito.cliente:
-                setattr(a, "cliente_nombre", a.credito.cliente.nombres)
-                setattr(a, "cliente_cedula", a.credito.cliente.cedula)
-        else:
-            setattr(a, "numero_contrato", f"CTR-{str(a.credito_id)[:8].upper()}")
-        if not getattr(a, "metodo_pago", None):
-            setattr(a, "metodo_pago", "efectivo")
-    return a
+    return _enriquecer_abono_con_cronograma(a)
+
+
+async def get_abono_por_id_o_hash(db: AsyncSession, id_o_hash: str) -> Optional[Abono]:
+    """Obtiene un recibo de abono por su UUID exacto o por prefijo/hash (ej. REC-9F22935A o 9f22935a)."""
+    raw = str(id_o_hash).strip()
+    clean = raw.upper().replace("REC-", "").strip() if raw.upper().startswith("REC-") else raw
+
+    # 1. Intentar como UUID completo
+    try:
+        uuid_obj = UUID(clean)
+        return await get_abono(db, uuid_obj)
+    except (ValueError, TypeError, AttributeError):
+        pass
+
+    # 2. Buscar por coincidencia inicial en id_recibo
+    query = (
+        select(Abono)
+        .options(
+            selectinload(Abono.cobrador),
+            selectinload(Abono.credito).selectinload(Credito.cliente),
+        )
+        .where(cast(Abono.id_recibo, String).ilike(f"{clean}%"))
+        .order_by(Abono.fecha.desc())
+    )
+    result = await db.execute(query)
+    a = result.scalars().first()
+    return _enriquecer_abono_con_cronograma(a)
 
 
 async def get_abonos_by_credito(
@@ -67,17 +156,7 @@ async def get_abonos_by_credito(
     )
     result = await db.execute(query)
     abonos = list(result.scalars().all())
-    for a in abonos:
-        if a.credito:
-            setattr(a, "numero_contrato", f"CTR-{str(a.credito_id)[:8].upper()}")
-            if a.credito.cliente:
-                setattr(a, "cliente_nombre", a.credito.cliente.nombres)
-                setattr(a, "cliente_cedula", a.credito.cliente.cedula)
-        else:
-            setattr(a, "numero_contrato", f"CTR-{str(a.credito_id)[:8].upper()}")
-        if not getattr(a, "metodo_pago", None):
-            setattr(a, "metodo_pago", "efectivo")
-    return abonos
+    return [_enriquecer_abono_con_cronograma(a) for a in abonos]
 
 
 async def get_abonos_list(
@@ -107,19 +186,7 @@ async def get_abonos_list(
 
     result = await db.execute(query)
     abonos = list(result.scalars().all())
-    for a in abonos:
-        if a.credito:
-            setattr(a, "numero_contrato", f"CTR-{str(a.credito_id)[:8].upper()}")
-            if a.credito.cliente:
-                setattr(a, "cliente_nombre", a.credito.cliente.nombres)
-                setattr(a, "cliente_cedula", a.credito.cliente.cedula)
-            setattr(a, "saldo_restante_credito", a.credito.saldo_pendiente)
-        else:
-            setattr(a, "numero_contrato", f"CTR-{str(a.credito_id)[:8].upper()}")
-            setattr(a, "saldo_restante_credito", Decimal("0.00"))
-        if not getattr(a, "metodo_pago", None):
-            setattr(a, "metodo_pago", "efectivo")
-    return abonos
+    return [_enriquecer_abono_con_cronograma(a) for a in abonos]
 
 
 async def conciliar_ruta_abonos(
@@ -321,14 +388,67 @@ async def create_abono(db: AsyncSession, abono_in: AbonoCreate) -> Abono:
         # D. Confirmar ambas operaciones atómicamente en una sola transacción
         await db.commit()
         await db.refresh(db_abono)
+
+        # E. Persistir firma manuscrita digital del cliente titular si fue capturada
+        if getattr(abono_in, "firma_cliente", None):
+            try:
+                guardar_firma_abono(db_abono.id_recibo, firma_cliente=abono_in.firma_cliente)
+                setattr(db_abono, "firma_cliente", abono_in.firma_cliente)
+            except Exception as fe:
+                print(f"[Abono] Advertencia guardando firma digital de abono: {fe}")
     except Exception:
         await db.rollback()
         raise
 
-    # Cargar datos para serialización completa
+    # Cargar datos para serialización completa y calcular arrastre de saldo
+    cron_data = generar_cronograma_con_arrastre(
+        fecha_primera_cuota=credito.fecha_primera_cuota,
+        numero_cuotas=credito.numero_cuotas,
+        monto_financiado=credito.monto_financiado,
+        saldo_pendiente=nuevo_saldo,
+        valor_cuota_base=credito.valor_cuota,
+        tipo_pago=credito.tipo_pago,
+    )
+    cronograma = cron_data["cronograma"]
+    cuota_parcial = next((q for q in cronograma if q.es_parcial), None)
+
+    if cuota_parcial:
+        es_parcial = True
+        cuota_afectada = cuota_parcial.numero
+        diferencia = cuota_parcial.saldo_cuota
+        cuota_sig = next((q for q in cronograma if q.numero == cuota_afectada + 1), None)
+        valor_sig = cuota_sig.valor_cuota if cuota_sig else None
+    else:
+        es_parcial = False
+        diferencia = Decimal("0.00")
+        cuota_afectada = cron_data["cuota_actual_numero"]
+        cuota_sig = next((q for q in cronograma if q.numero == cuota_afectada), None)
+        valor_sig = cuota_sig.valor_cuota if cuota_sig else credito.valor_cuota
+
+    cobrador_nombre_str = (
+        getattr(abono_in, "cobrador_nombre", None)
+        or (cobrador.nombre if cobrador and str(cobrador.nombre).strip().lower() != "cobrador" else None)
+        or getattr(cobrador, "nombre_completo", None)
+        or getattr(cobrador, "nombre", "Cobrador Autorizado")
+    )
     abono_creado = await get_abono(db, db_abono.id_recibo)
     if abono_creado:
         setattr(abono_creado, "saldo_restante_credito", nuevo_saldo)
+        setattr(abono_creado, "es_abono_parcial", es_parcial)
+        setattr(abono_creado, "diferencia_arrastrada", diferencia)
+        setattr(abono_creado, "cuota_afectada_numero", cuota_afectada)
+        setattr(abono_creado, "valor_cuota_siguiente", valor_sig)
+        setattr(abono_creado, "cobrador_nombre", cobrador_nombre_str)
+        if getattr(abono_in, "firma_cliente", None):
+            setattr(abono_creado, "firma_cliente", abono_in.firma_cliente)
         return abono_creado
 
+    setattr(db_abono, "saldo_restante_credito", nuevo_saldo)
+    setattr(db_abono, "es_abono_parcial", es_parcial)
+    setattr(db_abono, "diferencia_arrastrada", diferencia)
+    setattr(db_abono, "cuota_afectada_numero", cuota_afectada)
+    setattr(db_abono, "valor_cuota_siguiente", valor_sig)
+    setattr(db_abono, "cobrador_nombre", cobrador_nombre_str)
+    if getattr(abono_in, "firma_cliente", None):
+        setattr(db_abono, "firma_cliente", abono_in.firma_cliente)
     return db_abono

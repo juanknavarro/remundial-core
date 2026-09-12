@@ -4,7 +4,7 @@ from typing import List, Optional
 from uuid import UUID
 
 from fastapi import HTTPException, status
-from sqlalchemy import func, select
+from sqlalchemy import cast, func, select, String
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -13,6 +13,7 @@ from app.models.credito import Credito, CreditoDetalle, EstadoCredito, TipoPago
 from app.models.producto import Producto
 from app.models.usuario import Usuario
 from app.schemas.credito import CreditoCreate, CreditoUpdate, calcular_fecha_vencimiento
+from app.services.pdf_recibo import guardar_firmas_contrato
 
 
 def _poblar_codeudor_y_referencia(credito: Optional[Credito]) -> Optional[Credito]:
@@ -63,6 +64,35 @@ async def get_credito(db: AsyncSession, id_contrato: UUID) -> Optional[Credito]:
     )
     result = await db.execute(query)
     return _poblar_codeudor_y_referencia(result.scalar_one_or_none())
+
+
+async def get_credito_por_id_o_hash(db: AsyncSession, id_o_hash: str) -> Optional[Credito]:
+    """Obtiene un crédito por su UUID exacto o por prefijo/hash de contrato (ej. CTR-9F22935A o 9f22935a)."""
+    raw = str(id_o_hash).strip()
+    clean = raw.upper().replace("CTR-", "").strip() if raw.upper().startswith("CTR-") else raw
+
+    # 1. Intentar como UUID completo
+    try:
+        uuid_obj = UUID(clean)
+        return await get_credito(db, uuid_obj)
+    except (ValueError, TypeError, AttributeError):
+        pass
+
+    # 2. Si es un hash corto o código de contrato, buscar por coincidencia inicial en id_contrato
+    query = (
+        select(Credito)
+        .options(
+            selectinload(Credito.detalles).selectinload(CreditoDetalle.producto),
+            selectinload(Credito.cliente).selectinload(Cliente.referencias),
+            selectinload(Credito.vendedor),
+            selectinload(Credito.supervisor),
+            selectinload(Credito.cobrador),
+        )
+        .where(cast(Credito.id_contrato, String).ilike(f"{clean}%"))
+        .order_by(Credito.creado_en.desc())
+    )
+    result = await db.execute(query)
+    return _poblar_codeudor_y_referencia(result.scalars().first())
 
 
 async def get_creditos(
@@ -323,6 +353,18 @@ async def create_credito(db: AsyncSession, credito_in: CreditoCreate) -> Credito
         credito_creado.codeudor = credito_in.codeudor
     if credito_in.referencia:
         credito_creado.referencia = credito_in.referencia
+
+    # Guardar firmas capturadas en pantalla si se proporcionaron
+    if any([credito_in.firma_titular, credito_in.firma_vendedor, credito_in.firma_codeudor]):
+        guardar_firmas_contrato(
+            id_contrato=credito_creado.id_contrato,
+            firma_titular=credito_in.firma_titular,
+            firma_vendedor=credito_in.firma_vendedor,
+            firma_codeudor=credito_in.firma_codeudor,
+        )
+        setattr(credito_creado, "firma_titular", credito_in.firma_titular)
+        setattr(credito_creado, "firma_vendedor", credito_in.firma_vendedor)
+        setattr(credito_creado, "firma_codeudor", credito_in.firma_codeudor)
 
     return credito_creado
 

@@ -37,9 +37,142 @@ class CuotaCronograma(BaseModel):
     """Representación de cada cuota individual dentro del plan de pagos proyectado."""
     numero: int = Field(..., description="Número ordinal de la cuota (1..N)")
     fecha_vencimiento: date = Field(..., description="Fecha de exigibilidad/vencimiento de la cuota")
-    valor_cuota: Decimal = Field(..., description="Valor monetario a pagar en esta cuota")
-    pagada: bool = Field(default=False, description="Indica si la cuota ya fue pagada según amortización")
-    estado: str = Field(default="pendiente", description="Estado operativo: pagada, vencida, exigible_hoy, futura")
+    valor_cuota: Decimal = Field(..., description="Monto exigible de cobro para esta cuota (base + arrastre)")
+    valor_base: Decimal = Field(default=Decimal("0.00"), description="Valor contractual base de la cuota")
+    valor_exigible: Decimal = Field(default=Decimal("0.00"), description="Monto total exigible a cobrar (base + arrastre)")
+    valor_pagado: Decimal = Field(default=Decimal("0.00"), description="Monto ya pagado/abonado a esta cuota")
+    saldo_cuota: Decimal = Field(default=Decimal("0.00"), description="Saldo insoluto pendiente de pago de esta cuota")
+    monto_arrastrado: Decimal = Field(default=Decimal("0.00"), description="Monto no pagado arrastrado desde la cuota previa")
+    pagada: bool = Field(default=False, description="Indica si la cuota ya fue pagada completamente")
+    es_parcial: bool = Field(default=False, description="Indica si la cuota cuenta con un abono parcial registrado")
+    estado: str = Field(default="pendiente", description="Estado operativo: pagada, parcial, vencida, exigible_hoy, futura")
+
+
+def generar_cronograma_con_arrastre(
+    fecha_primera_cuota: date,
+    numero_cuotas: int,
+    monto_financiado: Decimal,
+    saldo_pendiente: Decimal,
+    valor_cuota_base: Decimal,
+    tipo_pago: TipoPago,
+    hoy: Optional[date] = None,
+) -> dict:
+    """Genera el cronograma de cuotas escalonado aplicando amortización por abonos parciales y arrastre de saldos insolutos."""
+    if hoy is None:
+        hoy = date.today()
+
+    m_fin = Decimal(monto_financiado or 0)
+    s_pen = Decimal(saldo_pendiente or 0)
+    val_c = Decimal(valor_cuota_base or 0)
+    total_amortizado = max(Decimal("0.00"), m_fin - s_pen)
+
+    cuotas: List[CuotaCronograma] = []
+    monto_disponible = total_amortizado
+    arrastre_siguiente = Decimal("0.00")
+    cuotas_pagadas_count = 0
+    proxima_cuota_numero = 1
+    encontro_proxima = False
+
+    for i in range(numero_cuotas):
+        num_cuota = i + 1
+        venc = calcular_fecha_vencimiento(fecha_primera_cuota, i, tipo_pago)
+
+        valor_base = val_c
+        monto_arrastrado = arrastre_siguiente
+        arrastre_siguiente = Decimal("0.00")  # Aplicado a esta cuota
+
+        # El valor total exigible para este periodo es la cuota base más el saldo insoluto arrastrado
+        valor_exigible = valor_base + monto_arrastrado
+
+        if monto_disponible >= valor_exigible:
+            # Cubre completamente la cuota y cualquier saldo arrastrado
+            valor_pagado = valor_exigible
+            monto_disponible -= valor_exigible
+            saldo_cuota = Decimal("0.00")
+            pagada = True
+            es_parcial = False
+            st = "pagada"
+            cuotas_pagadas_count += 1
+        elif monto_disponible > Decimal("0.00"):
+            # Abono parcial: cubre parte de la cuota
+            valor_pagado = monto_disponible
+            saldo_cuota = valor_exigible - monto_disponible
+            # La diferencia insoluta se arrastra a la siguiente cuota programada si existe
+            if i + 1 < numero_cuotas:
+                arrastre_siguiente = saldo_cuota
+            monto_disponible = Decimal("0.00")
+            pagada = False
+            es_parcial = True
+            st = "parcial"
+            if not encontro_proxima:
+                proxima_cuota_numero = num_cuota
+                encontro_proxima = True
+        else:
+            # Sin abonos aplicados a esta cuota
+            valor_pagado = Decimal("0.00")
+            saldo_cuota = valor_exigible
+            pagada = False
+            es_parcial = False
+            if not encontro_proxima:
+                proxima_cuota_numero = num_cuota
+                encontro_proxima = True
+
+            if venc < hoy:
+                st = "vencida"
+            elif venc == hoy:
+                st = "exigible_hoy"
+            else:
+                st = "futura"
+
+        cuotas.append(
+            CuotaCronograma(
+                numero=num_cuota,
+                fecha_vencimiento=venc,
+                valor_cuota=valor_exigible,
+                valor_base=valor_base,
+                valor_exigible=valor_exigible,
+                valor_pagado=valor_pagado,
+                saldo_cuota=saldo_cuota,
+                monto_arrastrado=monto_arrastrado,
+                pagada=pagada,
+                es_parcial=es_parcial,
+                estado=st,
+            )
+        )
+
+    # Métricas de vencimiento y exigibilidad
+    if s_pen <= Decimal("0.00") or cuotas_pagadas_count >= numero_cuotas:
+        proximo_vencimiento = None
+        cuota_actual_num = numero_cuotas
+        esta_vencido = False
+        exigible_hoy = False
+        dias_mora = 0
+    else:
+        cuota_actual_num = proxima_cuota_numero
+        cuota_act = cuotas[proxima_cuota_numero - 1]
+        proximo_vencimiento = cuota_act.fecha_vencimiento
+        if proximo_vencimiento < hoy:
+            esta_vencido = True
+            exigible_hoy = True
+            dias_mora = (hoy - proximo_vencimiento).days
+        elif proximo_vencimiento == hoy:
+            esta_vencido = False
+            exigible_hoy = True
+            dias_mora = 0
+        else:
+            esta_vencido = False
+            exigible_hoy = False
+            dias_mora = 0
+
+    return {
+        "cronograma": cuotas,
+        "cuotas_pagadas_count": cuotas_pagadas_count,
+        "cuota_actual_numero": cuota_actual_num,
+        "fecha_proximo_vencimiento": proximo_vencimiento,
+        "esta_vencido": esta_vencido,
+        "exigible_hoy": exigible_hoy,
+        "dias_mora": dias_mora,
+    }
 
 
 class CreditoDetalleBase(BaseModel):
@@ -139,6 +272,18 @@ class CreditoCreate(CreditoBase):
         None,
         description="Datos de la referencia familiar o personal de respaldo",
     )
+    firma_titular: Optional[str] = Field(
+        None,
+        description="Firma digital del cliente titular en formato Base64 PNG capturada en pantalla",
+    )
+    firma_vendedor: Optional[str] = Field(
+        None,
+        description="Firma digital del vendedor responsable en formato Base64 PNG capturada en pantalla",
+    )
+    firma_codeudor: Optional[str] = Field(
+        None,
+        description="Firma digital opcional del codeudor solidario en formato Base64 PNG",
+    )
 
     @model_validator(mode="before")
     @classmethod
@@ -232,65 +377,20 @@ class CreditoResponse(CreditoBase):
     @model_validator(mode="after")
     def autogenerar_cronograma(self) -> "CreditoResponse":
         if self.numero_cuotas > 0 and self.fecha_primera_cuota:
-            # 1. Calcular cuántas cuotas están pagadas según saldo amortizado
-            monto_f = Decimal(self.monto_financiado or 0)
-            saldo_p = Decimal(self.saldo_pendiente or 0)
-            val_c = Decimal(self.valor_cuota or 0)
-            amortizado = max(Decimal("0.00"), monto_f - saldo_p)
-            cuotas_pagadas = int(amortizado // val_c) if val_c > 0 else 0
-            cuotas_pagadas = min(self.numero_cuotas, cuotas_pagadas)
-            self.cuotas_pagadas_count = cuotas_pagadas
-
-            # 2. Generar plan de pagos escalonado (cronograma)
-            hoy = date.today()
-            cuotas: List[CuotaCronograma] = []
-            for i in range(self.numero_cuotas):
-                venc = calcular_fecha_vencimiento(self.fecha_primera_cuota, i, self.tipo_pago)
-                is_pagada = (i + 1) <= cuotas_pagadas
-                if is_pagada:
-                    st = "pagada"
-                elif venc < hoy:
-                    st = "vencida"
-                elif venc == hoy:
-                    st = "exigible_hoy"
-                else:
-                    st = "futura"
-
-                cuotas.append(
-                    CuotaCronograma(
-                        numero=i + 1,
-                        fecha_vencimiento=venc,
-                        valor_cuota=self.valor_cuota,
-                        pagada=is_pagada,
-                        estado=st,
-                    )
-                )
-            self.cronograma_cuotas = cuotas
-
-            # 3. Determinar la cuota actual exigible y su vencimiento
-            if saldo_p <= Decimal("0.00") or cuotas_pagadas >= self.numero_cuotas:
-                # Crédito saldado
-                self.fecha_proximo_vencimiento = None
-                self.cuota_actual_numero = self.numero_cuotas
-                self.esta_vencido = False
-                self.exigible_hoy = False
-                self.dias_mora = 0
-            else:
-                proxima_idx = cuotas_pagadas
-                self.cuota_actual_numero = proxima_idx + 1
-                prox_venc = cuotas[proxima_idx].fecha_vencimiento
-                self.fecha_proximo_vencimiento = prox_venc
-                if prox_venc < hoy:
-                    self.esta_vencido = True
-                    self.exigible_hoy = True
-                    self.dias_mora = (hoy - prox_venc).days
-                elif prox_venc == hoy:
-                    self.esta_vencido = False
-                    self.exigible_hoy = True
-                    self.dias_mora = 0
-                else:
-                    self.esta_vencido = False
-                    self.exigible_hoy = False
-                    self.dias_mora = 0
+            res = generar_cronograma_con_arrastre(
+                fecha_primera_cuota=self.fecha_primera_cuota,
+                numero_cuotas=self.numero_cuotas,
+                monto_financiado=self.monto_financiado,
+                saldo_pendiente=self.saldo_pendiente,
+                valor_cuota_base=self.valor_cuota,
+                tipo_pago=self.tipo_pago,
+            )
+            self.cronograma_cuotas = res["cronograma"]
+            self.cuotas_pagadas_count = res["cuotas_pagadas_count"]
+            self.cuota_actual_numero = res["cuota_actual_numero"]
+            self.fecha_proximo_vencimiento = res["fecha_proximo_vencimiento"]
+            self.esta_vencido = res["esta_vencido"]
+            self.exigible_hoy = res["exigible_hoy"]
+            self.dias_mora = res["dias_mora"]
         return self
 
