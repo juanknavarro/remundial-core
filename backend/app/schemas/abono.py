@@ -39,6 +39,10 @@ class AbonoBase(BaseModel):
         default=None,
         description="Firma manuscrita digitalizada del cliente titular en formato Base64 PNG",
     )
+    firma_cobrador: Optional[str] = Field(
+        default=None,
+        description="Firma manuscrita digitalizada del cobrador autorizado en formato Base64 PNG",
+    )
     cobrador_nombre: Optional[str] = Field(
         default=None,
         description="Nombre real del cobrador en ruta que registra el recaudo",
@@ -117,6 +121,10 @@ class AbonoResponse(BaseModel):
     firma_cliente: Optional[str] = Field(
         default=None,
         description="Firma manuscrita digitalizada del cliente titular en formato Base64 PNG",
+    )
+    firma_cobrador: Optional[str] = Field(
+        default=None,
+        description="Firma manuscrita digitalizada del cobrador autorizado en formato Base64 PNG",
     )
     cobrador_nombre: Optional[str] = Field(
         default=None,

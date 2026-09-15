@@ -354,16 +354,27 @@ async def create_credito(db: AsyncSession, credito_in: CreditoCreate) -> Credito
     if credito_in.referencia:
         credito_creado.referencia = credito_in.referencia
 
-    # Guardar firmas capturadas en pantalla si se proporcionaron
-    if any([credito_in.firma_titular, credito_in.firma_vendedor, credito_in.firma_codeudor]):
+    # Guardar firmas capturadas en pantalla o tableta si se proporcionaron
+    firma_cli = getattr(credito_in, "firma_cliente", None) or credito_in.firma_titular
+    firma_sup = getattr(credito_in, "firma_supervisor", None) or credito_in.firma_vendedor
+    firma_vend = credito_in.firma_vendedor or firma_sup or getattr(credito_in, "firma_cajero", None)
+    firma_caj = getattr(credito_in, "firma_cajero", None)
+
+    if any([firma_cli, firma_vend, credito_in.firma_codeudor, firma_sup, firma_caj]):
         guardar_firmas_contrato(
             id_contrato=credito_creado.id_contrato,
-            firma_titular=credito_in.firma_titular,
-            firma_vendedor=credito_in.firma_vendedor,
+            firma_titular=firma_cli,
+            firma_cliente=firma_cli,
+            firma_vendedor=firma_vend,
             firma_codeudor=credito_in.firma_codeudor,
+            firma_supervisor=firma_sup,
+            firma_cajero=firma_caj,
         )
-        setattr(credito_creado, "firma_titular", credito_in.firma_titular)
-        setattr(credito_creado, "firma_vendedor", credito_in.firma_vendedor)
+        setattr(credito_creado, "firma_titular", firma_cli)
+        setattr(credito_creado, "firma_cliente", firma_cli)
+        setattr(credito_creado, "firma_vendedor", firma_vend)
+        setattr(credito_creado, "firma_supervisor", firma_sup)
+        setattr(credito_creado, "firma_cajero", firma_caj)
         setattr(credito_creado, "firma_codeudor", credito_in.firma_codeudor)
 
     return credito_creado

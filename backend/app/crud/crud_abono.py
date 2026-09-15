@@ -389,13 +389,20 @@ async def create_abono(db: AsyncSession, abono_in: AbonoCreate) -> Abono:
         await db.commit()
         await db.refresh(db_abono)
 
-        # E. Persistir firma manuscrita digital del cliente titular si fue capturada
-        if getattr(abono_in, "firma_cliente", None):
+        # E. Persistir firmas manuscritas digitales (cliente titular y cobrador) si fueron capturadas
+        if getattr(abono_in, "firma_cliente", None) or getattr(abono_in, "firma_cobrador", None):
             try:
-                guardar_firma_abono(db_abono.id_recibo, firma_cliente=abono_in.firma_cliente)
-                setattr(db_abono, "firma_cliente", abono_in.firma_cliente)
+                guardar_firma_abono(
+                    db_abono.id_recibo,
+                    firma_cliente=getattr(abono_in, "firma_cliente", None),
+                    firma_cobrador=getattr(abono_in, "firma_cobrador", None),
+                )
+                if getattr(abono_in, "firma_cliente", None):
+                    setattr(db_abono, "firma_cliente", abono_in.firma_cliente)
+                if getattr(abono_in, "firma_cobrador", None):
+                    setattr(db_abono, "firma_cobrador", abono_in.firma_cobrador)
             except Exception as fe:
-                print(f"[Abono] Advertencia guardando firma digital de abono: {fe}")
+                print(f"[Abono] Advertencia guardando firmas digitales de abono: {fe}")
     except Exception:
         await db.rollback()
         raise
@@ -425,12 +432,16 @@ async def create_abono(db: AsyncSession, abono_in: AbonoCreate) -> Abono:
         cuota_sig = next((q for q in cronograma if q.numero == cuota_afectada), None)
         valor_sig = cuota_sig.valor_cuota if cuota_sig else credito.valor_cuota
 
-    cobrador_nombre_str = (
+    raw_cobrador_nom = (
         getattr(abono_in, "cobrador_nombre", None)
-        or (cobrador.nombre if cobrador and str(cobrador.nombre).strip().lower() != "cobrador" else None)
-        or getattr(cobrador, "nombre_completo", None)
-        or getattr(cobrador, "nombre", "Cobrador Autorizado")
+        or (cobrador.nombre if cobrador and getattr(cobrador, "nombre", None) else None)
+        or (cobrador.nombre_completo if cobrador and getattr(cobrador, "nombre_completo", None) else None)
+        or getattr(cobrador, "nombre", None)
     )
+    if raw_cobrador_nom and str(raw_cobrador_nom).strip() and str(raw_cobrador_nom).strip().lower() not in ["none", "null"]:
+        cobrador_nombre_str = str(raw_cobrador_nom).strip()
+    else:
+        cobrador_nombre_str = "Pedro Cobrador"
     abono_creado = await get_abono(db, db_abono.id_recibo)
     if abono_creado:
         setattr(abono_creado, "saldo_restante_credito", nuevo_saldo)
@@ -441,6 +452,8 @@ async def create_abono(db: AsyncSession, abono_in: AbonoCreate) -> Abono:
         setattr(abono_creado, "cobrador_nombre", cobrador_nombre_str)
         if getattr(abono_in, "firma_cliente", None):
             setattr(abono_creado, "firma_cliente", abono_in.firma_cliente)
+        if getattr(abono_in, "firma_cobrador", None):
+            setattr(abono_creado, "firma_cobrador", abono_in.firma_cobrador)
         return abono_creado
 
     setattr(db_abono, "saldo_restante_credito", nuevo_saldo)
@@ -451,4 +464,6 @@ async def create_abono(db: AsyncSession, abono_in: AbonoCreate) -> Abono:
     setattr(db_abono, "cobrador_nombre", cobrador_nombre_str)
     if getattr(abono_in, "firma_cliente", None):
         setattr(db_abono, "firma_cliente", abono_in.firma_cliente)
+    if getattr(abono_in, "firma_cobrador", None):
+        setattr(db_abono, "firma_cobrador", abono_in.firma_cobrador)
     return db_abono

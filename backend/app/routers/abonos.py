@@ -144,10 +144,10 @@ async def descargar_recibo_abono_pdf(
     if not abono:
         if str(id_recibo).startswith("ABONO-OFF-") or str(id_recibo).startswith("OFF-"):
             nombre_cobrador = (
-                (cobrador_nombre if cobrador_nombre and str(cobrador_nombre).strip().lower() != "cobrador" else None)
-                or (getattr(current_user, "nombre", None) if current_user and str(current_user.nombre).strip().lower() != "cobrador" else None)
-                or getattr(current_user, "nombre_completo", None)
-                or "Cobrador Autorizado"
+                (cobrador_nombre.strip() if cobrador_nombre and cobrador_nombre.strip() and cobrador_nombre.strip().lower() not in ["none", "null"] else None)
+                or (getattr(current_user, "nombre", "").strip() if current_user and getattr(current_user, "nombre", None) and str(current_user.nombre).strip() and str(current_user.nombre).strip().lower() not in ["none", "null"] else None)
+                or (getattr(current_user, "nombre_completo", "").strip() if current_user and getattr(current_user, "nombre_completo", None) and str(current_user.nombre_completo).strip() else None)
+                or "Pedro Cobrador"
             )
             dt_actual = datetime.now()
             firma_guardada = obtener_firma_almacenada(id_recibo, "cliente")
@@ -199,7 +199,7 @@ async def descargar_recibo_abono_pdf(
                 cuota_siguiente_numero=2,
                 valor_cuota_siguiente=Decimal("0.00"),
                 firma_cliente=firma_guardada,
-                firma_cobrador=None,
+                firma_cobrador=obtener_firma_almacenada(id_recibo, "cobrador"),
             )
         else:
             raise HTTPException(
@@ -216,13 +216,12 @@ async def descargar_recibo_abono_pdf(
         )
 
     nombre_cobrador_real = (
-        (cobrador_nombre if cobrador_nombre and str(cobrador_nombre).strip().lower() != "cobrador" else None)
-        or (getattr(current_user, "nombre", None) if current_user and str(current_user.nombre).strip().lower() != "cobrador" else None)
-        or (getattr(current_user, "nombre_completo", None) if current_user else None)
-        or (getattr(abono, "cobrador_nombre", None) if getattr(abono, "cobrador_nombre", None) and str(abono.cobrador_nombre).strip().lower() != "cobrador" else None)
-        or (getattr(abono.cobrador, "nombre", None) if getattr(abono, "cobrador", None) and getattr(abono.cobrador, "nombre", None) and str(abono.cobrador.nombre).strip().lower() != "cobrador" else None)
-        or getattr(current_user, "nombre", None)
-        or "Cobrador Autorizado"
+        (cobrador_nombre.strip() if cobrador_nombre and cobrador_nombre.strip() and cobrador_nombre.strip().lower() not in ["none", "null"] else None)
+        or (getattr(abono, "cobrador_nombre", "").strip() if getattr(abono, "cobrador_nombre", None) and str(abono.cobrador_nombre).strip() and str(abono.cobrador_nombre).strip().lower() not in ["none", "null"] else None)
+        or (current_user.nombre.strip() if current_user and getattr(current_user, "nombre", None) else None)
+        or (current_user.nombre_completo.strip() if current_user and getattr(current_user, "nombre_completo", None) else None)
+        or (abono.cobrador.nombre.strip() if getattr(abono, "cobrador", None) and getattr(abono.cobrador, "nombre", None) else None)
+        or "Pedro Cobrador"
     )
 
     pdf_bytes = generar_pdf_recibo_abono(abono, cobrador_nombre=nombre_cobrador_real)
@@ -280,19 +279,22 @@ async def generar_recibo_offline_pdf(
     # 2. Del usuario autenticado en sesión activa (current_user.nombre)
     # 3. Fallback
     nombre_cobrador = (
-        datos.cobrador_nombre
-        or (getattr(current_user, "nombre", None) if current_user else None)
-        or (getattr(current_user, "nombre_completo", None) if current_user else None)
-        or (getattr(current_user, "nombres", None) if current_user else None)
-        or "Cobrador Autorizado"
+        (datos.cobrador_nombre.strip() if datos.cobrador_nombre and datos.cobrador_nombre.strip() and datos.cobrador_nombre.strip().lower() not in ["none", "null"] else None)
+        or (current_user.nombre.strip() if current_user and getattr(current_user, "nombre", None) else None)
+        or (current_user.nombre_completo.strip() if current_user and getattr(current_user, "nombre_completo", None) else None)
+        or "Pedro Cobrador"
     )
 
-    # Persistir firma si viene en el payload para trazabilidad inmutable
-    if datos.id_recibo and datos.firma_cliente:
+    # Persistir firmas si vienen en el payload para trazabilidad inmutable
+    if datos.id_recibo and (datos.firma_cliente or datos.firma_cobrador):
         try:
-            guardar_firma_abono(datos.id_recibo, firma_cliente=datos.firma_cliente)
+            guardar_firma_abono(
+                datos.id_recibo,
+                firma_cliente=datos.firma_cliente,
+                firma_cobrador=datos.firma_cobrador,
+            )
         except Exception as e:
-            print(f"[PDF] Advertencia guardando firma offline: {e}")
+            print(f"[PDF] Advertencia guardando firmas offline: {e}")
 
     valor_abono_num = (
         datos.valor_abonado
@@ -394,7 +396,11 @@ async def generar_recibo_offline_pdf(
         firma_cobrador=datos.firma_cobrador,
     )
 
-    pdf_bytes = generar_pdf_recibo_abono(mock_abono, cobrador_nombre=nombre_cobrador)
+    pdf_bytes = generar_pdf_recibo_abono(
+        mock_abono,
+        cobrador_nombre=nombre_cobrador,
+        firma_cobrador=datos.firma_cobrador,
+    )
 
     id_contrato = datos.numero_contrato or (f"CTR-{str(datos.credito_id)[:8].upper()}" if datos.credito_id else "CTR-RUTA")
     cuota_tag = f"Cuota-{cuota_afectada}"

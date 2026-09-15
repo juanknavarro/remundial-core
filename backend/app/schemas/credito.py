@@ -276,9 +276,21 @@ class CreditoCreate(CreditoBase):
         None,
         description="Firma digital del cliente titular en formato Base64 PNG capturada en pantalla",
     )
+    firma_cliente: Optional[str] = Field(
+        None,
+        description="Firma digital del cliente titular en formato Base64 PNG capturada en pantalla (alias de firma_titular)",
+    )
     firma_vendedor: Optional[str] = Field(
         None,
         description="Firma digital del vendedor responsable en formato Base64 PNG capturada en pantalla",
+    )
+    firma_supervisor: Optional[str] = Field(
+        None,
+        description="Firma digital opcional del supervisor/cajero en formato Base64 PNG capturada en tableta o pantalla",
+    )
+    firma_cajero: Optional[str] = Field(
+        None,
+        description="Firma digital opcional del supervisor/cajero en formato Base64 PNG capturada en tableta o pantalla",
     )
     firma_codeudor: Optional[str] = Field(
         None,

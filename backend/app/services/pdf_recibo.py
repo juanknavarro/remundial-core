@@ -86,15 +86,23 @@ def guardar_firmas_contrato(
     firma_titular: Optional[str] = None,
     firma_vendedor: Optional[str] = None,
     firma_codeudor: Optional[str] = None,
+    firma_supervisor: Optional[str] = None,
+    firma_cajero: Optional[str] = None,
+    firma_cliente: Optional[str] = None,
 ) -> None:
     """Almacena las firmas en formato base64 PNG en el sistema de archivos local para trazabilidad inmutable."""
     if not id_contrato:
         return
     cid = str(id_contrato).strip().lower()
+    titular_final = firma_cliente or firma_titular
+    supervisor_final = firma_supervisor or firma_vendedor or firma_cajero
     firmas = {
-        "titular": firma_titular,
-        "vendedor": firma_vendedor,
+        "titular": titular_final,
+        "cliente": titular_final,
+        "vendedor": supervisor_final,
+        "supervisor": supervisor_final,
         "codeudor": firma_codeudor,
+        "cajero": firma_cajero,
     }
     for tipo, b64 in firmas.items():
         if b64 and len(b64) > 30:
@@ -183,11 +191,47 @@ def format_cop(valor: Any) -> str:
         return "$ 0"
 
 
-def obtener_timestamp_local_servidor(dt: Optional[datetime] = None) -> datetime:
-    """Retorna el timestamp local real del servidor al momento de la orden, evitando desfases de zona horaria (UTC)."""
+def obtener_timestamp_local_servidor(dt: Optional[Any] = None) -> datetime:
+    """Retorna el timestamp local real del servidor al momento de la orden/abono,
+    evitando desfases de zona horaria y asegurando horas, minutos y segundos reales (YYYY-MM-DD HH:mm:ss)."""
+    now_local = datetime.now()
     if dt is None:
-        return datetime.now().astimezone()
-    return dt.astimezone()
+        return now_local
+
+    if isinstance(dt, str):
+        clean_str = dt.strip()
+        try:
+            parsed_dt = datetime.fromisoformat(clean_str.replace("Z", "+00:00"))
+            if parsed_dt.hour == 0 and parsed_dt.minute == 0 and parsed_dt.second == 0:
+                return datetime.combine(parsed_dt.date(), now_local.time())
+            return parsed_dt.astimezone() if parsed_dt.tzinfo else parsed_dt
+        except Exception:
+            try:
+                parsed_dt = datetime.strptime(clean_str[:19], "%Y-%m-%d %H:%M:%S")
+                if parsed_dt.hour == 0 and parsed_dt.minute == 0 and parsed_dt.second == 0:
+                    return datetime.combine(parsed_dt.date(), now_local.time())
+                return parsed_dt
+            except Exception:
+                try:
+                    date_part = datetime.strptime(clean_str[:10], "%Y-%m-%d").date()
+                    return datetime.combine(date_part, now_local.time())
+                except Exception:
+                    return now_local
+
+    if isinstance(dt, date) and not isinstance(dt, datetime):
+        return datetime.combine(dt, now_local.time())
+
+    if isinstance(dt, datetime):
+        if dt.hour == 0 and dt.minute == 0 and dt.second == 0:
+            return datetime.combine(dt.date(), now_local.time())
+        try:
+            if dt.tzinfo is not None:
+                return dt.astimezone()
+            return dt
+        except Exception:
+            return dt
+
+    return now_local
 
 
 class ReciboNumberedCanvas(canvas.Canvas):
@@ -222,7 +266,7 @@ class ReciboNumberedCanvas(canvas.Canvas):
         self.line(32, 28, 580, 28)
 
         # Textos de pie de página con timestamp local real idéntico al encabezado
-        fecha_str = self.fecha_impresion or obtener_timestamp_local_servidor().strftime("%d/%m/%Y %I:%M %p")
+        fecha_str = self.fecha_impresion or obtener_timestamp_local_servidor().strftime("%Y-%m-%d %H:%M:%S")
         footer_left = (
             f"Remundial Arte's • Comprobante Digital y Contrato de Venta • Montería, Córdoba • Generado: {fecha_str}"
         )
@@ -914,8 +958,20 @@ def generar_pdf_recibo_venta(credito: Credito) -> bytes:
     firmas_block.append(Spacer(1, 10))
 
     # Cargar firmas digitales capturadas si existen
-    firma_titular_b64 = getattr(credito, "firma_titular", None) or obtener_firma_almacenada(credito.id_contrato, "titular")
-    firma_vendedor_b64 = getattr(credito, "firma_vendedor", None) or obtener_firma_almacenada(credito.id_contrato, "vendedor")
+    firma_titular_b64 = (
+        getattr(credito, "firma_cliente", None)
+        or getattr(credito, "firma_titular", None)
+        or obtener_firma_almacenada(credito.id_contrato, "cliente")
+        or obtener_firma_almacenada(credito.id_contrato, "titular")
+    )
+    firma_vendedor_b64 = (
+        getattr(credito, "firma_supervisor", None)
+        or getattr(credito, "firma_vendedor", None)
+        or getattr(credito, "firma_cajero", None)
+        or obtener_firma_almacenada(credito.id_contrato, "supervisor")
+        or obtener_firma_almacenada(credito.id_contrato, "vendedor")
+        or obtener_firma_almacenada(credito.id_contrato, "cajero")
+    )
     firma_codeudor_b64 = getattr(credito, "firma_codeudor", None) or obtener_firma_almacenada(credito.id_contrato, "codeudor")
 
     # Columna 1: Firma Titular / Deudor Principal
@@ -982,7 +1038,11 @@ def generar_pdf_recibo_venta(credito: Credito) -> bytes:
     return buffer.getvalue()
 
 
-def generar_pdf_recibo_abono(abono: Any, cobrador_nombre: Optional[str] = None) -> bytes:
+def generar_pdf_recibo_abono(
+    abono: Any,
+    cobrador_nombre: Optional[str] = None,
+    firma_cobrador: Optional[str] = None,
+) -> bytes:
     """Genera un comprobante oficial de recaudo y abono a cartera en formato PDF.
     
     Estructura corporativa de recibo de caja para Remundial Arte's:
@@ -1130,9 +1190,15 @@ def generar_pdf_recibo_abono(abono: Any, cobrador_nombre: Optional[str] = None) 
         codigo_ctr = ctr_raw
     else:
         codigo_ctr = f"CTR-{ctr_raw[:8]}"
-    dt_abono = getattr(abono, "fecha", None) or getattr(abono, "creado_en", None) or datetime.now()
+    dt_abono = (
+        getattr(abono, "fecha_completa", None)
+        or getattr(abono, "fecha", None)
+        or getattr(abono, "creado_en", None)
+        or getattr(abono, "fecha_pago", None)
+        or datetime.now()
+    )
     dt_local = obtener_timestamp_local_servidor(dt_abono)
-    fecha_abono_str = dt_local.strftime("%d/%m/%Y %I:%M %p")
+    fecha_abono_str = dt_local.strftime("%Y-%m-%d %H:%M:%S")
     ReciboNumberedCanvas.fecha_impresion = fecha_abono_str
 
     raw_estado = (abono.estado.value if hasattr(abono.estado, "value") else str(abono.estado)).lower()
@@ -1167,10 +1233,10 @@ def generar_pdf_recibo_abono(abono: Any, cobrador_nombre: Optional[str] = None) 
         or (getattr(cobrador, "nombre_completo", None) if cobrador else None)
         or (getattr(cobrador, "nombres", None) if cobrador else None)
     )
-    if c_nom_raw and str(c_nom_raw).strip().lower() not in ["cobrador", "none", "null", ""]:
+    if c_nom_raw and str(c_nom_raw).strip() and str(c_nom_raw).strip().lower() not in ["none", "null"]:
         cobrador_nombre = str(c_nom_raw).strip()
     else:
-        cobrador_nombre = "Cobrador Autorizado"
+        cobrador_nombre = "Pedro Cobrador"
     cobrador_tel = (
         (getattr(cobrador, "telefono", None) if cobrador else None)
         or getattr(abono, "cobrador_telefono", None)
@@ -1527,7 +1593,11 @@ def generar_pdf_recibo_abono(abono: Any, cobrador_nombre: Optional[str] = None) 
 
     # 7. BLOQUE DE FIRMAS SIMÉTRICO (Cobrador y Cliente)
     firmas_block = []
-    firma_cobrador_b64 = getattr(abono, "firma_cobrador", None) or obtener_firma_almacenada(abono.id_recibo, "cobrador")
+    firma_cobrador_b64 = (
+        firma_cobrador
+        or getattr(abono, "firma_cobrador", None)
+        or obtener_firma_almacenada(abono.id_recibo, "cobrador")
+    )
     firma_cliente_b64 = (
         getattr(abono, "firma_cliente", None)
         or obtener_firma_almacenada(abono.id_recibo, "cliente")
@@ -1537,7 +1607,8 @@ def generar_pdf_recibo_abono(abono: Any, cobrador_nombre: Optional[str] = None) 
     sig_cobrador = [
         crear_bloque_firma_imagen(firma_cobrador_b64, fallback_height=24),
         HRFlowable(width="80%", thickness=0.75, color=c_primary, spaceBefore=0, spaceAfter=3),
-        Paragraph(f"<b>COBRADOR AUTORIZADO EN RUTA</b><br/>{cobrador_nombre}", style_signature_label),
+        Paragraph("<b>COBRADOR AUTORIZADO EN RUTA</b>", style_signature_label),
+        Paragraph(f"<b>{cobrador_nombre}</b>", style_signature_label),
         Paragraph("Remundial Arte's • Montería", style_signature_sub),
         Paragraph("<font size='5.5' color='#64748B'>Firma y Sello de Recaudo Oficial</font>", style_signature_sub),
     ]
@@ -1545,7 +1616,8 @@ def generar_pdf_recibo_abono(abono: Any, cobrador_nombre: Optional[str] = None) 
     sig_cliente = [
         crear_bloque_firma_imagen(firma_cliente_b64, fallback_height=24),
         HRFlowable(width="80%", thickness=0.75, color=c_primary, spaceBefore=0, spaceAfter=3),
-        Paragraph(f"<b>CLIENTE / DEUDOR TITULAR</b><br/>{cliente_nombre}", style_signature_label),
+        Paragraph("<b>CLIENTE / DEUDOR TITULAR</b>", style_signature_label),
+        Paragraph(f"<b>{cliente_nombre}</b>", style_signature_label),
         Paragraph(f"C.C. Nº: {cliente_cedula}", style_signature_sub),
         Paragraph("<font size='5.5' color='#64748B'>Conformidad de Pago y Saldo</font>", style_signature_sub),
     ]

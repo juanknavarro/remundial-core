@@ -122,7 +122,10 @@ async def descargar_recibo_venta_pdf(
 
 class FirmasContratoRequest(BaseModel):
     firma_titular: Optional[str] = None
+    firma_cliente: Optional[str] = None
     firma_vendedor: Optional[str] = None
+    firma_supervisor: Optional[str] = None
+    firma_cajero: Optional[str] = None
     firma_codeudor: Optional[str] = None
 
 
@@ -144,10 +147,15 @@ async def guardar_firmas_endpoint(
             detail=f"Crédito o venta con ID o código '{id_contrato}' no encontrado.",
         )
 
+    firma_cli = firmas_in.firma_cliente or firmas_in.firma_titular
+    firma_sup = firmas_in.firma_supervisor or firmas_in.firma_vendedor
     guardar_firmas_contrato(
         id_contrato=credito.id_contrato,
-        firma_titular=firmas_in.firma_titular,
-        firma_vendedor=firmas_in.firma_vendedor,
+        firma_titular=firma_cli,
+        firma_cliente=firma_cli,
+        firma_vendedor=firmas_in.firma_vendedor or firma_sup,
+        firma_supervisor=firma_sup,
+        firma_cajero=firmas_in.firma_cajero,
         firma_codeudor=firmas_in.firma_codeudor,
     )
     return {
