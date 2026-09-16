@@ -12,7 +12,12 @@ from app.models.cliente import Cliente, ReferenciaCliente, TipoReferenciaEnum
 from app.models.credito import Credito, CreditoDetalle, EstadoCredito, TipoPago
 from app.models.producto import Producto
 from app.models.usuario import Usuario
-from app.schemas.credito import CreditoCreate, CreditoUpdate, calcular_fecha_vencimiento
+from app.schemas.credito import (
+    CreditoCreate,
+    CreditoUpdate,
+    calcular_fecha_vencimiento,
+    generar_cronograma_con_arrastre,
+)
 from app.services.pdf_recibo import guardar_firmas_contrato
 
 
@@ -105,6 +110,7 @@ async def get_creditos(
     estado: Optional[EstadoCredito] = None,
     fecha: Optional[date] = None,
     solo_exigibles: Optional[bool] = None,
+    solo_cartera_critica: Optional[bool] = None,
 ) -> List[Credito]:
     """Lista créditos con opciones de paginación y filtros operativos."""
     query = (
@@ -154,6 +160,28 @@ async def get_creditos(
             if venc <= hoy:
                 filtrados.append(c)
         creditos = filtrados
+
+    # Filtrar cartera crítica: 3 o más cuotas vencidas, excluyendo aquellos con plazos totales de 2 cuotas
+    if solo_cartera_critica:
+        criticos = []
+        for c in creditos:
+            if (c.saldo_pendiente or Decimal("0.00")) <= Decimal("0.00"):
+                continue
+            if (c.numero_cuotas or 0) <= 2:
+                continue
+            if not c.fecha_primera_cuota:
+                continue
+            res = generar_cronograma_con_arrastre(
+                fecha_primera_cuota=c.fecha_primera_cuota,
+                numero_cuotas=c.numero_cuotas,
+                monto_financiado=c.monto_financiado or Decimal("0.00"),
+                saldo_pendiente=c.saldo_pendiente or Decimal("0.00"),
+                valor_cuota_base=c.valor_cuota or Decimal("0.00"),
+                tipo_pago=c.tipo_pago or TipoPago.MENSUAL,
+            )
+            if res.get("cuotas_vencidas_count", 0) >= 3:
+                criticos.append(c)
+        creditos = criticos
 
     return creditos
 

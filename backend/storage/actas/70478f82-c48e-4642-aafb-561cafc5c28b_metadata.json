@@ -1,0 +1,15 @@
+{
+  "articulos": [
+    {
+      "producto_id": "3b1350af-88d7-43ba-82d3-48d22a4f9502",
+      "nombre": "Cuadro Test Frecuencias",
+      "sku": "CUADRO-TEST-FREQ",
+      "cantidad": 1,
+      "reingresado": true,
+      "fecha_reingreso": "2026-09-15 19:07:34",
+      "reingresado_por": "Ana Supervisora",
+      "observaciones_reingreso": "Prueba de reingreso exitosa"
+    }
+  ],
+  "id_contrato": "70478f82-c48e-4642-aafb-561cafc5c28b"
+}

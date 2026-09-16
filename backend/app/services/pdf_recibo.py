@@ -30,6 +30,35 @@ from app.schemas.credito import generar_cronograma_con_arrastre
 FIRMAS_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "storage", "firmas"))
 os.makedirs(FIRMAS_DIR, exist_ok=True)
 
+# Directorio local para archivo de actas de restitución
+ACTAS_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "storage", "actas"))
+os.makedirs(ACTAS_DIR, exist_ok=True)
+
+
+def guardar_firmas_acta(
+    id_contrato: Any,
+    firma_cliente: Optional[str] = None,
+    firma_cobrador: Optional[str] = None,
+) -> None:
+    """Almacena las firmas del acta de restitución en formato PNG Base64 en disco."""
+    if not id_contrato:
+        return
+    cid = str(id_contrato).strip().lower()
+    firmas = {
+        "acta_cliente": firma_cliente,
+        "acta_cobrador": firma_cobrador,
+    }
+    for tipo, b64 in firmas.items():
+        if b64 and len(b64) > 30:
+            try:
+                path = os.path.join(FIRMAS_DIR, f"{cid}_{tipo}.png")
+                raw_data = b64.split(",")[-1].strip()
+                with open(path, "wb") as f:
+                    f.write(base64.b64decode(raw_data))
+            except Exception as e:
+                print(f"[PDF] Error guardando firma de acta {tipo} para {cid}:", e)
+
+
 
 def sanitizar_nombre_archivo(texto: str) -> str:
     """Normaliza y sanitiza cadenas para nombres de archivo legibles y seguros (sin tildes ni símbolos)."""
@@ -1644,4 +1673,589 @@ def generar_pdf_recibo_abono(
     doc.build(story, canvasmaker=ReciboNumberedCanvas)
     buffer.seek(0)
     return buffer.getvalue()
+
+
+def generar_pdf_acta_restitucion(
+    credito: Any,
+    motivo: Optional[str] = None,
+    cobrador_nombre: Optional[str] = None,
+    firma_cliente_b64: Optional[str] = None,
+    firma_cobrador_b64: Optional[str] = None,
+    observaciones: Optional[str] = None,
+    fecha_hora: Optional[Any] = None,
+) -> bytes:
+    """Genera en tiempo real el Acta Oficial de Restitución de Bienes por Mora Crítica (>= 3 cuotas) en formato PDF."""
+    buffer = io.BytesIO()
+    doc = SimpleDocTemplate(
+        buffer,
+        pagesize=letter,
+        leftMargin=36,
+        rightMargin=36,
+        topMargin=36,
+        bottomMargin=36,
+    )
+    story = []
+
+    # Paleta corporativa de alerta y formalidad legal
+    c_primary = colors.HexColor("#0F172A")
+    c_secondary = colors.HexColor("#334155")
+    c_crimson = colors.HexColor("#991B1B")
+    c_crimson_bg = colors.HexColor("#FEF2F2")
+    c_crimson_border = colors.HexColor("#FCA5A5")
+    c_slate_bg = colors.HexColor("#F8FAFC")
+    c_border = colors.HexColor("#CBD5E1")
+    c_muted = colors.HexColor("#64748B")
+
+    styles = getSampleStyleSheet()
+
+    style_title = ParagraphStyle(
+        "ActaTitle",
+        parent=styles["Normal"],
+        fontName="Helvetica-Bold",
+        fontSize=12.5,
+        leading=15,
+        alignment=1,
+        textColor=c_crimson,
+    )
+    style_subtitle = ParagraphStyle(
+        "ActaSubtitle",
+        parent=styles["Normal"],
+        fontName="Helvetica",
+        fontSize=7.5,
+        leading=9.5,
+        alignment=1,
+        textColor=c_secondary,
+    )
+    style_company_name = ParagraphStyle(
+        "ActaCompany",
+        parent=styles["Normal"],
+        fontName="Helvetica-Bold",
+        fontSize=11,
+        leading=13,
+        textColor=c_primary,
+    )
+    style_company_sub = ParagraphStyle(
+        "ActaCompanySub",
+        parent=styles["Normal"],
+        fontName="Helvetica",
+        fontSize=7,
+        leading=9,
+        textColor=c_muted,
+    )
+    style_doc_box_title = ParagraphStyle(
+        "ActaDocBoxTitle",
+        parent=styles["Normal"],
+        fontName="Helvetica-Bold",
+        fontSize=9,
+        leading=11,
+        alignment=1,
+        textColor=c_crimson,
+    )
+    style_doc_box_meta = ParagraphStyle(
+        "ActaDocBoxMeta",
+        parent=styles["Normal"],
+        fontName="Helvetica",
+        fontSize=7.5,
+        leading=10,
+        alignment=1,
+        textColor=c_primary,
+    )
+    style_section_header = ParagraphStyle(
+        "ActaSectionHeader",
+        parent=styles["Normal"],
+        fontName="Helvetica-Bold",
+        fontSize=8,
+        leading=10,
+        textColor=colors.white,
+    )
+    style_field_label = ParagraphStyle(
+        "ActaFieldLabel",
+        parent=styles["Normal"],
+        fontName="Helvetica-Bold",
+        fontSize=7,
+        leading=8.5,
+        textColor=c_muted,
+    )
+    style_field_value = ParagraphStyle(
+        "ActaFieldValue",
+        parent=styles["Normal"],
+        fontName="Helvetica",
+        fontSize=7.5,
+        leading=9.5,
+        textColor=c_primary,
+    )
+    style_alert_title = ParagraphStyle(
+        "ActaAlertTitle",
+        parent=styles["Normal"],
+        fontName="Helvetica-Bold",
+        fontSize=8,
+        leading=10,
+        textColor=c_crimson,
+    )
+    style_alert_text = ParagraphStyle(
+        "ActaAlertText",
+        parent=styles["Normal"],
+        fontName="Helvetica",
+        fontSize=7.5,
+        leading=9.5,
+        textColor=colors.HexColor("#7F1D1D"),
+    )
+    style_table_header = ParagraphStyle(
+        "ActaTableHeader",
+        parent=styles["Normal"],
+        fontName="Helvetica-Bold",
+        fontSize=7,
+        leading=8.5,
+        alignment=1,
+        textColor=colors.white,
+    )
+    style_table_cell = ParagraphStyle(
+        "ActaTableCell",
+        parent=styles["Normal"],
+        fontName="Helvetica",
+        fontSize=7,
+        leading=8.5,
+        textColor=c_primary,
+    )
+    style_table_cell_center = ParagraphStyle(
+        "ActaTableCellCenter",
+        parent=styles["Normal"],
+        fontName="Helvetica",
+        fontSize=7,
+        leading=8.5,
+        alignment=1,
+        textColor=c_primary,
+    )
+    style_legal_text = ParagraphStyle(
+        "ActaLegalText",
+        parent=styles["Normal"],
+        fontName="Helvetica",
+        fontSize=6.5,
+        leading=8.5,
+        alignment=4,  # Justified
+        textColor=c_secondary,
+    )
+    style_signature_label = ParagraphStyle(
+        "ActaSignatureLabel",
+        parent=styles["Normal"],
+        fontName="Helvetica-Bold",
+        fontSize=7.5,
+        leading=9,
+        alignment=1,
+        textColor=c_primary,
+    )
+    style_signature_sub = ParagraphStyle(
+        "ActaSignatureSub",
+        parent=styles["Normal"],
+        fontName="Helvetica",
+        fontSize=6.5,
+        leading=8,
+        alignment=1,
+        textColor=c_muted,
+    )
+
+    # Identificación del contrato y cliente
+    cid_raw = str(getattr(credito, "id_contrato", None) or "CTR-GRAL")
+    cid_clean = cid_raw.strip().lower()
+    cid_short = cid_clean[:8].upper()
+    acta_id = f"ACTA-{cid_short}"
+    contrato_id = f"CTR-{cid_short}"
+
+    cliente = getattr(credito, "cliente", None)
+    cliente_nombre = "Cliente Titular"
+    cliente_cedula = "No registrada"
+    cliente_tel = "No registrado"
+    cliente_dir = "No registrada"
+    cliente_barrio = ""
+    cliente_ciudad = "Montería"
+
+    if cliente:
+        noms = getattr(cliente, "nombres", "") or ""
+        apes = getattr(cliente, "apellidos", "") or ""
+        cliente_nombre = f"{noms} {apes}".strip() or "Cliente Titular"
+        cliente_cedula = getattr(cliente, "documento_numero", None) or getattr(cliente, "cedula", None) or "No registrada"
+        cliente_tel = getattr(cliente, "telefono", None) or "No registrado"
+        cliente_dir = getattr(cliente, "direccion", None) or "No registrada"
+        cliente_barrio = getattr(cliente, "barrio", "") or ""
+        cliente_ciudad = getattr(cliente, "ciudad", "") or "Montería"
+
+    # Codeudor si existe
+    codeudor = getattr(credito, "codeudor", None)
+    codeudor_info = "No aplica"
+    if codeudor:
+        cod_nom = codeudor.get("nombre") if isinstance(codeudor, dict) else getattr(codeudor, "nombre", "")
+        cod_doc = codeudor.get("cedula") if isinstance(codeudor, dict) else getattr(codeudor, "cedula", "")
+        if cod_nom:
+            codeudor_info = f"{cod_nom} (C.C. {cod_doc})" if cod_doc else cod_nom
+
+    # Timestamp local del servidor
+    dt_local = obtener_timestamp_local_servidor(fecha_hora)
+    dt_local_str = dt_local.strftime("%Y-%m-%d %H:%M:%S")
+
+    # Cobrador
+    cobrador_obj = getattr(credito, "cobrador", None)
+    cobrador_nombre_final = (
+        cobrador_nombre
+        or (getattr(cobrador_obj, "nombre_completo", None) if cobrador_obj else None)
+        or (getattr(cobrador_obj, "nombre", None) if cobrador_obj else None)
+        or "Gestor de Cobro Autorizado"
+    )
+
+    # Cuotas vencidas
+    cuotas_vencidas_num = getattr(credito, "cuotas_vencidas_count", 0)
+    if not cuotas_vencidas_num and hasattr(credito, "cronograma_cuotas") and credito.cronograma_cuotas:
+        cuotas_vencidas_num = sum(1 for q in credito.cronograma_cuotas if getattr(q, "estado", "") == "vencida")
+    if not cuotas_vencidas_num and getattr(credito, "fecha_primera_cuota", None):
+        res_cron = generar_cronograma_con_arrastre(
+            fecha_primera_cuota=credito.fecha_primera_cuota,
+            numero_cuotas=credito.numero_cuotas,
+            monto_financiado=credito.monto_financiado or Decimal("0.00"),
+            saldo_pendiente=credito.saldo_pendiente or Decimal("0.00"),
+            valor_cuota_base=credito.valor_cuota or Decimal("0.00"),
+            tipo_pago=credito.tipo_pago or TipoPago.MENSUAL,
+        )
+        cuotas_vencidas_num = res_cron.get("cuotas_vencidas_count", 3)
+
+    # 1. ENCABEZADO CORPORATIVO
+    header_left = [
+        Paragraph("<b>REMUNDIAL ARTE'S</b>", style_company_name),
+        Paragraph("NIT: 900.123.456-7 • Régimen Común", style_company_sub),
+        Paragraph("Dirección: Calle 29 # 4-56, Centro, Montería, Córdoba", style_company_sub),
+        Paragraph("PBX: (604) 789 0123 • Móvil: 300 123 4567", style_company_sub),
+        Paragraph("Departamento de Cartera y Recuperación de Bienes", style_company_sub),
+    ]
+
+    header_right = [
+        Paragraph("<b>ACTA DE RESTITUCIÓN</b>", style_doc_box_title),
+        Spacer(1, 2),
+        Paragraph(f"<b>Nº: {acta_id}</b>", style_doc_box_meta),
+        Paragraph(f"<b>CONTRATO: {contrato_id}</b>", style_doc_box_meta),
+        Spacer(1, 2),
+        Paragraph(f"<b>FECHA Y HORA LOCAL:</b><br/>{dt_local_str}", style_doc_box_meta),
+    ]
+
+    header_table = Table([[header_left, header_right]], colWidths=[350, 190])
+    header_table.setStyle(
+        TableStyle(
+            [
+                ("VALIGN", (0, 0), (-1, -1), "TOP"),
+                ("BACKGROUND", (1, 0), (1, 0), c_crimson_bg),
+                ("BOX", (1, 0), (1, 0), 1, c_crimson_border),
+                ("LEFTPADDING", (1, 0), (1, 0), 8),
+                ("RIGHTPADDING", (1, 0), (1, 0), 8),
+                ("TOPPADDING", (1, 0), (1, 0), 6),
+                ("BOTTOMPADDING", (1, 0), (1, 0), 6),
+            ]
+        )
+    )
+    story.append(header_table)
+    story.append(Spacer(1, 8))
+
+    # Título principal del documento
+    story.append(Paragraph("ACTA DE RESTITUCIÓN Y RETIRO DE BIENES POR MORA CRÍTICA", style_title))
+    story.append(Paragraph("DILIGENCIA OFICIAL DE RECUPERACIÓN PRENDARIA POR INCUMPLIMIENTO CONTRACTUAL (≥ 3 CUOTAS)", style_subtitle))
+    story.append(Spacer(1, 8))
+
+    # 2. DATOS DEL DEUDOR Y CONTRATO
+    banner_deudor = Table(
+        [[Paragraph("<b>1. DATOS GENERALES DEL CLIENTE DEUDOR Y CONTRATO</b>", style_section_header)]],
+        colWidths=[540],
+    )
+    banner_deudor.setStyle(
+        TableStyle(
+            [
+                ("BACKGROUND", (0, 0), (-1, -1), c_primary),
+                ("TOPPADDING", (0, 0), (-1, -1), 3),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
+                ("LEFTPADDING", (0, 0), (-1, -1), 6),
+            ]
+        )
+    )
+    story.append(banner_deudor)
+
+    deudor_data = [
+        [
+            Paragraph("CLIENTE / DEUDOR TITULAR:", style_field_label),
+            Paragraph(f"<b>{cliente_nombre}</b>", style_field_value),
+            Paragraph("CÉDULA / NIT:", style_field_label),
+            Paragraph(f"<b>{cliente_cedula}</b>", style_field_value),
+        ],
+        [
+            Paragraph("DIRECCIÓN DE DOMICILIO:", style_field_label),
+            Paragraph(f"{cliente_dir}", style_field_value),
+            Paragraph("TELÉFONO DE CONTACTO:", style_field_label),
+            Paragraph(f"{cliente_tel}", style_field_value),
+        ],
+        [
+            Paragraph("BARRIO Y CIUDAD:", style_field_label),
+            Paragraph(f"{cliente_barrio}, {cliente_ciudad}" if cliente_barrio else cliente_ciudad, style_field_value),
+            Paragraph("CODEUDOR SOLIDARIO:", style_field_label),
+            Paragraph(f"{codeudor_info}", style_field_value),
+        ],
+    ]
+    table_deudor = Table(deudor_data, colWidths=[120, 180, 110, 130])
+    table_deudor.setStyle(
+        TableStyle(
+            [
+                ("BACKGROUND", (0, 0), (-1, -1), c_slate_bg),
+                ("BOX", (0, 0), (-1, -1), 0.5, c_border),
+                ("INNERGRID", (0, 0), (-1, -1), 0.5, c_border),
+                ("LEFTPADDING", (0, 0), (-1, -1), 5),
+                ("RIGHTPADDING", (0, 0), (-1, -1), 5),
+                ("TOPPADDING", (0, 0), (-1, -1), 3),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
+            ]
+        )
+    )
+    story.append(table_deudor)
+    story.append(Spacer(1, 8))
+
+    # 3. ESTADO FINANCIERO Y MOTIVO DE RESTITUCIÓN
+    banner_motivo = Table(
+        [[Paragraph("<b>2. ESTADO FINANCIERO Y MOTIVO DE LA RESTITUCIÓN</b>", style_section_header)]],
+        colWidths=[540],
+    )
+    banner_motivo.setStyle(
+        TableStyle(
+            [
+                ("BACKGROUND", (0, 0), (-1, -1), c_primary),
+                ("TOPPADDING", (0, 0), (-1, -1), 3),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
+                ("LEFTPADDING", (0, 0), (-1, -1), 6),
+            ]
+        )
+    )
+    story.append(banner_motivo)
+
+    fin_box_1 = [
+        Paragraph("MONTO FINANCIADO", style_field_label),
+        Spacer(1, 2),
+        Paragraph(f"<b>{format_cop(credito.monto_financiado)}</b>", style_field_value),
+    ]
+    fin_box_2 = [
+        Paragraph("SALDO PENDIENTE INSOLUTO", style_field_label),
+        Spacer(1, 2),
+        Paragraph(f"<b><font color='#991B1B'>{format_cop(credito.saldo_pendiente)}</font></b>", style_field_value),
+    ]
+    fin_box_3 = [
+        Paragraph("PLAZO TOTAL PACTADO", style_field_label),
+        Spacer(1, 2),
+        Paragraph(f"<b>{credito.numero_cuotas} Cuotas ({credito.tipo_pago})</b>", style_field_value),
+    ]
+    fin_box_4 = [
+        Paragraph("CUOTAS EN MORA CRÍTICA", style_field_label),
+        Spacer(1, 2),
+        Paragraph(f"<b><font color='#991B1B'>🚨 {cuotas_vencidas_num} Vencidas (≥ 3)</font></b>", style_field_value),
+    ]
+
+    table_fin = Table([[fin_box_1, fin_box_2, fin_box_3, fin_box_4]], colWidths=[135, 135, 135, 135])
+    table_fin.setStyle(
+        TableStyle(
+            [
+                ("BACKGROUND", (0, 0), (0, 0), c_slate_bg),
+                ("BACKGROUND", (1, 0), (1, 0), c_crimson_bg),
+                ("BACKGROUND", (2, 0), (2, 0), c_slate_bg),
+                ("BACKGROUND", (3, 0), (3, 0), c_crimson_bg),
+                ("BOX", (0, 0), (-1, -1), 0.5, c_border),
+                ("INNERGRID", (0, 0), (-1, -1), 0.5, c_border),
+                ("LEFTPADDING", (0, 0), (-1, -1), 6),
+                ("RIGHTPADDING", (0, 0), (-1, -1), 6),
+                ("TOPPADDING", (0, 0), (-1, -1), 4),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+            ]
+        )
+    )
+    story.append(table_fin)
+
+    # Callout de causal y observaciones
+    motivo_texto = motivo or f"Incumplimiento reiterado en el pago del crédito con acumulación de {cuotas_vencidas_num} cuotas morosas vencidas, configurando la causal de restitución de bienes pactada contractualmente."
+    obs_texto = observaciones or "Diligencia presencial realizada en el domicilio del deudor para la recuperación y custodia de los bienes muebles."
+
+    callout_data = [
+        [
+            Paragraph("<b>CAUSAL LEGAL DE RESTITUCIÓN:</b>", style_alert_title),
+            Paragraph(motivo_texto, style_alert_text),
+        ],
+        [
+            Paragraph("<b>OBSERVACIONES DE LA DILIGENCIA:</b>", style_field_label),
+            Paragraph(obs_texto, style_field_value),
+        ],
+    ]
+    table_callout = Table(callout_data, colWidths=[150, 390])
+    table_callout.setStyle(
+        TableStyle(
+            [
+                ("BACKGROUND", (0, 0), (-1, 0), c_crimson_bg),
+                ("BACKGROUND", (0, 1), (-1, 1), c_slate_bg),
+                ("BOX", (0, 0), (-1, -1), 0.5, c_crimson_border),
+                ("INNERGRID", (0, 0), (-1, -1), 0.5, c_border),
+                ("LEFTPADDING", (0, 0), (-1, -1), 6),
+                ("RIGHTPADDING", (0, 0), (-1, -1), 6),
+                ("TOPPADDING", (0, 0), (-1, -1), 3),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
+            ]
+        )
+    )
+    story.append(table_callout)
+    story.append(Spacer(1, 8))
+
+    # 4. ARTÍCULOS SUJETOS A RESTITUCIÓN
+    banner_articulos = Table(
+        [[Paragraph("<b>3. ARTÍCULOS E INVENTARIO SUJETO A RESTITUCIÓN Y RETIRO</b>", style_section_header)]],
+        colWidths=[540],
+    )
+    banner_articulos.setStyle(
+        TableStyle(
+            [
+                ("BACKGROUND", (0, 0), (-1, -1), c_primary),
+                ("TOPPADDING", (0, 0), (-1, -1), 3),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
+                ("LEFTPADDING", (0, 0), (-1, -1), 6),
+            ]
+        )
+    )
+    story.append(banner_articulos)
+
+    articulos_rows = [
+        [
+            Paragraph("<b>#</b>", style_table_header),
+            Paragraph("<b>DESCRIPCIÓN DEL ARTÍCULO / PRODUCTO</b>", style_table_header),
+            Paragraph("<b>SKU / CÓDIGO</b>", style_table_header),
+            Paragraph("<b>CANT.</b>", style_table_header),
+            Paragraph("<b>ESTADO DE ENTREGA</b>", style_table_header),
+        ]
+    ]
+
+    detalles = getattr(credito, "detalles", []) or []
+    if detalles:
+        for idx, d in enumerate(detalles):
+            prod = getattr(d, "producto", None)
+            nom = getattr(prod, "nombre", None) or getattr(d, "descripcion", "Artículo comercial")
+            sku = getattr(prod, "sku", None) or getattr(prod, "codigo", "-")
+            cant = str(getattr(d, "cantidad", 1))
+            articulos_rows.append(
+                [
+                    Paragraph(str(idx + 1), style_table_cell_center),
+                    Paragraph(f"<b>{nom}</b>", style_table_cell),
+                    Paragraph(sku, style_table_cell_center),
+                    Paragraph(cant, style_table_cell_center),
+                    Paragraph("<font color='#991B1B'>Retirado en diligencia</font>", style_table_cell_center),
+                ]
+            )
+    else:
+        articulos_rows.append(
+            [
+                Paragraph("1", style_table_cell_center),
+                Paragraph("<b>Artículos de mobiliario / enseres pactados en contrato de crédito</b>", style_table_cell),
+                Paragraph("GLOBAL", style_table_cell_center),
+                Paragraph("1", style_table_cell_center),
+                Paragraph("<font color='#991B1B'>Retirado en diligencia</font>", style_table_cell_center),
+            ]
+        )
+
+    table_articulos = Table(articulos_rows, colWidths=[25, 255, 95, 45, 120])
+    table_articulos.setStyle(
+        TableStyle(
+            [
+                ("BACKGROUND", (0, 0), (-1, 0), c_secondary),
+                ("BOX", (0, 0), (-1, -1), 0.5, c_border),
+                ("INNERGRID", (0, 0), (-1, -1), 0.5, c_border),
+                ("LEFTPADDING", (0, 0), (-1, -1), 5),
+                ("RIGHTPADDING", (0, 0), (-1, -1), 5),
+                ("TOPPADDING", (0, 0), (-1, -1), 3),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
+            ]
+        )
+    )
+    story.append(table_articulos)
+    story.append(Spacer(1, 8))
+
+    # 5. CLÁUSULA LEGAL DE RESTITUCIÓN
+    legal_text = (
+        "<b>CLÁUSULA DE ENTREGA Y RESTITUCIÓN VOLUNTARIA DE BIENES:</b> En la fecha y hora señaladas en el encabezado, "
+        "el CLIENTE / DEUDOR TITULAR hace entrega material, formal y pacífica a REMUNDIAL ARTE'S de los artículos descritos "
+        "en el inventario anterior, en aplicación estricta de las estipulaciones contractuales sobre reserva de dominio y "
+        "garantía mobiliaria pactadas en el contrato original de venta a crédito, motivado por la mora grave de tres (3) o más "
+        "cuotas vencidas. REMUNDIAL ARTE'S recibe los bienes en calidad de custodia y para los trámites legales de avalúo, "
+        "liquidación y compensación del saldo deudor remanente. Ambas partes declaran haber verificado el estado físico de los "
+        "bienes retirados y estampan su consentimiento formal mediante firma digitalizada."
+    )
+    table_legal = Table([[Paragraph(legal_text, style_legal_text)]], colWidths=[540])
+    table_legal.setStyle(
+        TableStyle(
+            [
+                ("BACKGROUND", (0, 0), (-1, -1), c_slate_bg),
+                ("BOX", (0, 0), (-1, -1), 0.5, c_border),
+                ("LEFTPADDING", (0, 0), (-1, -1), 8),
+                ("RIGHTPADDING", (0, 0), (-1, -1), 8),
+                ("TOPPADDING", (0, 0), (-1, -1), 6),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 6),
+            ]
+        )
+    )
+    story.append(table_legal)
+    story.append(Spacer(1, 14))
+
+    # 6. DOBLE FIRMA DIGITAL ESTRUCTURADA (Cliente y Cobrador)
+    firma_cliente_final = (
+        firma_cliente_b64
+        or obtener_firma_almacenada(cid_clean, "acta_cliente")
+        or obtener_firma_almacenada(cid_clean, "titular")
+        or obtener_firma_almacenada(cid_clean, "cliente")
+    )
+    firma_cobrador_final = (
+        firma_cobrador_b64
+        or obtener_firma_almacenada(cid_clean, "acta_cobrador")
+        or obtener_firma_almacenada(cid_clean, "cobrador")
+    )
+
+    sig_cliente = [
+        crear_bloque_firma_imagen(firma_cliente_final, fallback_height=26),
+        HRFlowable(width="85%", thickness=0.75, color=c_primary, spaceBefore=0, spaceAfter=3),
+        Paragraph("<b>CLIENTE / DEUDOR TITULAR</b>", style_signature_label),
+        Paragraph(f"<b>{cliente_nombre}</b>", style_signature_label),
+        Paragraph(f"C.C. Nº: {cliente_cedula}", style_signature_sub),
+        Paragraph("<font size='6' color='#991B1B'>Entrega bienes a entera conformidad</font>", style_signature_sub),
+        Paragraph(f"<font size='5.5' color='#64748B'>Fecha/Hora: {dt_local_str}</font>", style_signature_sub),
+    ]
+
+    sig_cobrador = [
+        crear_bloque_firma_imagen(firma_cobrador_final, fallback_height=26),
+        HRFlowable(width="85%", thickness=0.75, color=c_primary, spaceBefore=0, spaceAfter=3),
+        Paragraph("<b>GESTOR / COBRADOR AUTORIZADO EN RUTA</b>", style_signature_label),
+        Paragraph(f"<b>{cobrador_nombre_final}</b>", style_signature_label),
+        Paragraph("Remundial Arte's • Montería", style_signature_sub),
+        Paragraph("<font size='6' color='#059669'>Recibe bienes en custodia oficial</font>", style_signature_sub),
+        Paragraph(f"<font size='5.5' color='#64748B'>Fecha/Hora: {dt_local_str}</font>", style_signature_sub),
+    ]
+
+    firmas_table = Table([[sig_cliente, sig_cobrador]], colWidths=[270, 270])
+    firmas_table.setStyle(
+        TableStyle(
+            [
+                ("VALIGN", (0, 0), (-1, -1), "BOTTOM"),
+                ("ALIGN", (0, 0), (-1, -1), "CENTER"),
+                ("LEFTPADDING", (0, 0), (-1, -1), 10),
+                ("RIGHTPADDING", (0, 0), (-1, -1), 10),
+                ("TOPPADDING", (0, 0), (-1, -1), 2),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+            ]
+        )
+    )
+    story.append(KeepTogether([firmas_table]))
+
+    doc.build(story, canvasmaker=ReciboNumberedCanvas)
+    buffer.seek(0)
+    pdf_bytes = buffer.getvalue()
+
+    # Guardar copia física en el directorio de actas
+    try:
+        acta_path = os.path.join(ACTAS_DIR, f"{cid_clean}_acta.pdf")
+        with open(acta_path, "wb") as f_out:
+            f_out.write(pdf_bytes)
+    except Exception as e:
+        print(f"[PDF] Error guardando copia física del acta {cid_clean}:", e)
+
+    return pdf_bytes
+
 

@@ -164,9 +164,15 @@ def generar_cronograma_con_arrastre(
             exigible_hoy = False
             dias_mora = 0
 
+    # Cálculo de mora crítica (excluyendo créditos de 2 cuotas)
+    cuotas_vencidas_count = sum(1 for q in cuotas if q.estado == "vencida")
+    es_cartera_critica = bool(numero_cuotas > 2 and cuotas_vencidas_count >= 3 and s_pen > Decimal("0.00"))
+
     return {
         "cronograma": cuotas,
         "cuotas_pagadas_count": cuotas_pagadas_count,
+        "cuotas_vencidas_count": cuotas_vencidas_count,
+        "es_cartera_critica": es_cartera_critica,
         "cuota_actual_numero": cuota_actual_num,
         "fecha_proximo_vencimiento": proximo_vencimiento,
         "esta_vencido": esta_vencido,
@@ -376,10 +382,12 @@ class CreditoResponse(CreditoBase):
     codeudor: Optional[CodeudorCreate] = None
     referencia: Optional[ReferenciaFamiliarCreate] = None
 
-    # Métricas y campos dinámicos de exigibilidad por vencimiento
+    # Métricas y campos dinámicos de exigibilidad por vencimiento y cartera crítica
     fecha_proximo_vencimiento: Optional[date] = None
     cuota_actual_numero: int = 1
     cuotas_pagadas_count: int = 0
+    cuotas_vencidas_count: int = 0
+    es_cartera_critica: bool = False
     esta_vencido: bool = False
     exigible_hoy: bool = False
     dias_mora: int = 0
@@ -399,10 +407,89 @@ class CreditoResponse(CreditoBase):
             )
             self.cronograma_cuotas = res["cronograma"]
             self.cuotas_pagadas_count = res["cuotas_pagadas_count"]
+            self.cuotas_vencidas_count = res.get("cuotas_vencidas_count", 0)
+            self.es_cartera_critica = res.get("es_cartera_critica", False)
             self.cuota_actual_numero = res["cuota_actual_numero"]
             self.fecha_proximo_vencimiento = res["fecha_proximo_vencimiento"]
             self.esta_vencido = res["esta_vencido"]
             self.exigible_hoy = res["exigible_hoy"]
             self.dias_mora = res["dias_mora"]
         return self
+
+
+class OrdenRetiroRequest(BaseModel):
+    """Esquema para registrar orden de retiro por mora crítica con doble firma."""
+    motivo: Optional[str] = Field("Mora crítica mayor o igual a 3 cuotas", description="Motivo del acta de restitución")
+    firma_cliente: str = Field(..., description="Firma digitalizada del cliente titular en Base64 PNG")
+    firma_cobrador: str = Field(..., description="Firma digitalizada del cobrador / gestor de cobro en Base64 PNG")
+    cobrador_nombre: Optional[str] = Field(None, description="Nombre del cobrador en ruta que atiende la diligencia")
+    observaciones: Optional[str] = Field(None, description="Observaciones del estado de los bienes o la diligencia")
+    latitud: Optional[float] = None
+    longitud: Optional[float] = None
+
+
+class OrdenRetiroResponse(BaseModel):
+    """Esquema de respuesta tras generar la orden de retiro y acta PDF."""
+    id_contrato: UUID
+    mensaje: str
+    fecha_acta: str
+    pdf_url: str
+    cuotas_vencidas: int
+    saldo_pendiente: Decimal
+
+
+class ArticuloRetiradoItem(BaseModel):
+    """Detalle de un artículo retirado en campo."""
+    producto_id: str
+    nombre: str
+    sku: Optional[str] = None
+    cantidad: int = 1
+    reingresado: bool = False
+    fecha_reingreso: Optional[str] = None
+    reingresado_por: Optional[str] = None
+    observaciones_reingreso: Optional[str] = None
+
+
+class DiligenciaRetiroItem(BaseModel):
+    """Resumen de una diligencia de retiro con acta generada."""
+    id_contrato: UUID
+    codigo_contrato: str
+    cliente_nombre: str
+    cliente_cedula: str
+    cliente_telefono: Optional[str] = None
+    cliente_direccion: Optional[str] = None
+    cobrador_nombre: str
+    fecha_acta: str
+    motivo: str
+    observaciones: Optional[str] = None
+    cuotas_vencidas: int = 3
+    saldo_pendiente: Decimal = Decimal("0.00")
+    pdf_url: str
+    articulos: List[ArticuloRetiradoItem] = []
+    tiene_firmas: bool = True
+    total_articulos: int = 0
+    articulos_reingresados_count: int = 0
+    todos_reingresados: bool = False
+
+
+class ReingresoStockRequest(BaseModel):
+    """Petición del supervisor para reingresar un artículo retirado a inventario comercial."""
+    producto_id: UUID = Field(..., description="ID del producto en el catálogo comercial")
+    cantidad: int = Field(1, ge=1, description="Cantidad de unidades a reingresar al stock disponible")
+    condicion: Optional[str] = Field("Como Nuevo / Reacondicionado", description="Condición física del producto")
+    observaciones: Optional[str] = Field(None, description="Notas de supervisión o inspección física")
+
+
+class ReingresoStockResponse(BaseModel):
+    """Respuesta tras reingresar el artículo al inventario comercial."""
+    id_contrato: UUID
+    producto_id: UUID
+    producto_nombre: str
+    producto_sku: str
+    cantidad_reingresada: int
+    nuevo_stock: int
+    reingresado: bool
+    mensaje: str
+
+
 
