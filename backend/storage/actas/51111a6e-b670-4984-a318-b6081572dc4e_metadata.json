@@ -1,0 +1,15 @@
+{
+  "articulos": [
+    {
+      "producto_id": "14a3579d-211d-473f-9756-82437103f747",
+      "nombre": "Mecedora PVC",
+      "sku": "SKU-2563",
+      "cantidad": 1,
+      "reingresado": true,
+      "fecha_reingreso": "2026-09-16 11:33:55",
+      "reingresado_por": "Supervisor",
+      "observaciones_reingreso": "Reacondicionado y verificado en bodega central, en óptimas condiciones comerciales."
+    }
+  ],
+  "id_contrato": "51111a6e-b670-4984-a318-b6081572dc4e"
+}

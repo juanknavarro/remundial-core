@@ -10,6 +10,7 @@ from sqlalchemy.orm import selectinload
 
 from app.core.database import get_db
 from app.core.deps import require_supervisor_o_secretaria
+from app.models.abono import Abono, EstadoAbono
 from app.models.cliente import Cliente
 from app.models.credito import Credito, CreditoDetalle, EstadoCredito
 from app.models.usuario import Usuario
@@ -690,4 +691,159 @@ async def reporte_calendario_mensual(
         },
         "dias": dias_map,
     }
+
+
+@router.get(
+    "/resumen-gerencial",
+    summary="Resumen ejecutivo y KPIs consolidados del Dashboard Gerencial",
+    status_code=status.HTTP_200_OK,
+)
+async def resumen_gerencial(
+    db: AsyncSession = Depends(get_db),
+    current_user: Usuario = Depends(require_supervisor_o_secretaria),
+) -> Dict[str, Any]:
+    """Calcula y retorna en tiempo real las métricas financieras ejecutivas,
+    incluyendo dinero total colocado, recaudos del día, cartera en mora por saldo insoluto
+    de cuotas vencidas y porcentaje de riesgo.
+    """
+    res_c = await db.execute(select(Credito).options(selectinload(Credito.cobrador)))
+    creditos = res_c.scalars().all()
+
+    res_a = await db.execute(
+        select(Abono)
+        .options(selectinload(Abono.cobrador))
+        .where(Abono.estado != EstadoAbono.ANULADO)
+    )
+    abonos = res_a.scalars().all()
+
+    hoy = date.today()
+
+    total_colocado = Decimal("0.00")
+    saldo_total_cartera = Decimal("0.00")
+    saldo_mora_vencidas = Decimal("0.00")
+    contratos_con_mora = 0
+    total_cuotas_vencidas = 0
+    contratos_criticos_count = 0
+    saldo_cartera_critica = Decimal("0.00")
+
+    creditos_colocados_count = 0
+    creditos_activos_count = 0
+    creditos_pendientes_count = 0
+    creditos_terminados_count = 0
+
+    modalidades = {"quincenal": Decimal("0.00"), "mensual": Decimal("0.00")}
+
+    for c in creditos:
+        if c.estado == EstadoCredito.PENDIENTE:
+            creditos_pendientes_count += 1
+            continue
+        if c.estado == EstadoCredito.ACTIVO:
+            creditos_activos_count += 1
+        elif c.estado == EstadoCredito.TERMINADO:
+            creditos_terminados_count += 1
+
+        creditos_colocados_count += 1
+        m_fin = Decimal(str(c.monto_financiado or 0))
+        c_ini = Decimal(str(c.cuota_inicial or 0))
+        s_pen = Decimal(str(c.saldo_pendiente or 0))
+        total_colocado += (m_fin + c_ini)
+        saldo_total_cartera += s_pen
+
+        tipo_str = c.tipo_pago.value if hasattr(c.tipo_pago, "value") else str(c.tipo_pago)
+        if tipo_str == "quincenal":
+            modalidades["quincenal"] += m_fin
+        elif tipo_str == "mensual":
+            modalidades["mensual"] += m_fin
+
+        if s_pen > Decimal("0.00") and c.fecha_primera_cuota:
+            cron_info = generar_cronograma_con_arrastre(
+                fecha_primera_cuota=c.fecha_primera_cuota,
+                numero_cuotas=c.numero_cuotas,
+                monto_financiado=m_fin,
+                saldo_pendiente=s_pen,
+                valor_cuota_base=c.valor_cuota or Decimal("0.00"),
+                tipo_pago=c.tipo_pago,
+                hoy=hoy,
+            )
+            cuotas_venc = [q for q in cron_info["cronograma"] if q.estado == "vencida"]
+            if cuotas_venc:
+                contratos_con_mora += 1
+                total_cuotas_vencidas += len(cuotas_venc)
+                saldo_mora_vencidas += sum(Decimal(str(q.saldo_cuota or 0)) for q in cuotas_venc)
+            if cron_info.get("es_cartera_critica"):
+                contratos_criticos_count += 1
+                saldo_cartera_critica += s_pen
+
+    pct_riesgo = (
+        round(float((saldo_mora_vencidas / saldo_total_cartera * 100)), 2)
+        if saldo_total_cartera > Decimal("0.00")
+        else 0.0
+    )
+
+    # Abonos de la jornada actual
+    abonos_hoy = [
+        a
+        for a in abonos
+        if a.fecha
+        and (
+            (isinstance(a.fecha, datetime) and a.fecha.date() == hoy)
+            or (isinstance(a.fecha, date) and a.fecha == hoy)
+        )
+    ]
+    total_recaudado_hoy = sum((Decimal(str(a.valor_abonado or 0))) for a in abonos_hoy)
+    total_recaudado_historico = sum((Decimal(str(a.valor_abonado or 0))) for a in abonos)
+
+    # Cobrador líder hoy
+    recaudos_por_cobrador: Dict[str, Dict[str, Any]] = {}
+    for a in abonos_hoy:
+        cid = str(a.cobrador_id) if a.cobrador_id else "desconocido"
+        cnombre = a.cobrador.nombre if a.cobrador else "Cobrador en Ruta"
+        if cid not in recaudos_por_cobrador:
+            recaudos_por_cobrador[cid] = {"nombre": cnombre, "total": 0.0, "cobros": 0}
+        recaudos_por_cobrador[cid]["total"] += float(a.valor_abonado or 0)
+        recaudos_por_cobrador[cid]["cobros"] += 1
+
+    lista_cobradores = sorted(recaudos_por_cobrador.values(), key=lambda x: x["total"], reverse=True)
+    cobrador_lider = lista_cobradores[0] if lista_cobradores else None
+
+    total_financiado_ambas = modalidades["quincenal"] + modalidades["mensual"]
+    pct_quincenal = (
+        round(float(modalidades["quincenal"] / total_financiado_ambas * 100))
+        if total_financiado_ambas > 0
+        else 0
+    )
+    pct_mensual = (
+        round(float(modalidades["mensual"] / total_financiado_ambas * 100))
+        if total_financiado_ambas > 0
+        else 0
+    )
+
+    return {
+        "total_colocado": float(total_colocado),
+        "total_creditos_colocados": creditos_colocados_count,
+        "saldo_total_cartera": float(saldo_total_cartera),
+        "total_recaudado_hoy": float(total_recaudado_hoy),
+        "count_abonos_hoy": len(abonos_hoy),
+        "total_recaudado_historico": float(total_recaudado_historico),
+        "count_abonos_historico": len(abonos),
+        "cartera_en_mora": {
+            "saldo_insoluto_mora": float(saldo_mora_vencidas),
+            "contratos_mora_count": contratos_con_mora,
+            "cuotas_vencidas_count": total_cuotas_vencidas,
+            "porcentaje_riesgo": pct_riesgo,
+            "contratos_criticos_count": contratos_criticos_count,
+            "saldo_cartera_critica": float(saldo_cartera_critica),
+        },
+        "creditos_activos_count": creditos_activos_count,
+        "creditos_pendientes_count": creditos_pendientes_count,
+        "creditos_terminados_count": creditos_terminados_count,
+        "modalidades": {
+            "quincenal": float(modalidades["quincenal"]),
+            "mensual": float(modalidades["mensual"]),
+            "pct_quincenal": pct_quincenal,
+            "pct_mensual": pct_mensual,
+        },
+        "cobrador_lider": cobrador_lider,
+    }
+
 
