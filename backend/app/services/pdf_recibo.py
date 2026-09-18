@@ -105,7 +105,7 @@ def obtener_configuracion_pdf() -> dict:
                     emp = saved["empresa"]
                     if emp.get("razon_social"):
                         cfg["membrete"]["razon_social"] = emp["razon_social"].strip().upper()
-                    if emp.get("nit"):
+                    if "nit" in emp and emp["nit"] is not None:
                         cfg["membrete"]["nit"] = emp["nit"].strip()
                     if emp.get("ciudad_principal"):
                         cfg["membrete"]["ciudad"] = emp["ciudad_principal"].strip()
@@ -116,15 +116,15 @@ def obtener_configuracion_pdf() -> dict:
                     p_pdf = saved["plantillas_pdf"]
                     if "membrete" in p_pdf and isinstance(p_pdf["membrete"], dict):
                         for k, v in p_pdf["membrete"].items():
-                            if v is not None and str(v).strip():
+                            if v is not None:
                                 cfg["membrete"][k] = str(v).strip()
-                    if p_pdf.get("clausulas_venta"):
-                        cfg["clausulas_venta"] = p_pdf["clausulas_venta"].strip()
-                    if p_pdf.get("certificacion_recaudo"):
-                        cfg["certificacion_recaudo"] = p_pdf["certificacion_recaudo"].strip()
+                    if "clausulas_venta" in p_pdf and p_pdf["clausulas_venta"] is not None:
+                        cfg["clausulas_venta"] = p_pdf["clausulas_venta"]
+                    if "certificacion_recaudo" in p_pdf and p_pdf["certificacion_recaudo"] is not None:
+                        cfg["certificacion_recaudo"] = p_pdf["certificacion_recaudo"]
                     if "acta_restitucion" in p_pdf and isinstance(p_pdf["acta_restitucion"], dict):
                         for k, v in p_pdf["acta_restitucion"].items():
-                            if v is not None and str(v).strip():
+                            if v is not None:
                                 cfg["acta_restitucion"][k] = str(v).strip()
         except Exception as e:
             print(f"[PDF] Error cargando configuración personalizada: {e}")
@@ -134,30 +134,30 @@ def obtener_configuracion_pdf() -> dict:
 def construir_lineas_membrete_sub(membrete: dict, tipo_contacto: str = "Ventas") -> str:
     """Construye las líneas de subtítulo institucional (NIT, Ciudad, Dirección, PBX, Correo)."""
     sub_lines = []
-    if membrete.get("subtitulo"):
-        sub_lines.append(f"<b>{membrete['subtitulo']}</b>")
+    if membrete.get("subtitulo") and str(membrete["subtitulo"]).strip():
+        sub_lines.append(f"<b>{str(membrete['subtitulo']).strip()}</b>")
 
     nit_reg = []
-    if membrete.get("nit"):
-        nit_reg.append(f"NIT: {membrete['nit']}")
-    if membrete.get("regimen"):
-        nit_reg.append(membrete["regimen"])
+    if membrete.get("nit") and str(membrete["nit"]).strip():
+        nit_reg.append(f"NIT: {str(membrete['nit']).strip()}")
+    if membrete.get("regimen") and str(membrete["regimen"]).strip():
+        nit_reg.append(str(membrete["regimen"]).strip())
     if nit_reg:
         sub_lines.append(" • ".join(nit_reg))
 
     ciu_dir = []
-    if membrete.get("ciudad"):
-        ciu_dir.append(membrete["ciudad"])
-    if membrete.get("direccion"):
-        ciu_dir.append(membrete["direccion"])
+    if membrete.get("ciudad") and str(membrete["ciudad"]).strip():
+        ciu_dir.append(str(membrete["ciudad"]).strip())
+    if membrete.get("direccion") and str(membrete["direccion"]).strip():
+        ciu_dir.append(str(membrete["direccion"]).strip())
     if ciu_dir:
         sub_lines.append(" • ".join(ciu_dir))
 
     tel_cor = []
-    if membrete.get("telefono_pbx"):
-        tel_cor.append(f"PBX / {tipo_contacto}: {membrete['telefono_pbx']}")
-    if membrete.get("correo"):
-        tel_cor.append(membrete["correo"])
+    if membrete.get("telefono_pbx") and str(membrete["telefono_pbx"]).strip():
+        tel_cor.append(f"PBX / {tipo_contacto}: {str(membrete['telefono_pbx']).strip()}")
+    if membrete.get("correo") and str(membrete["correo"]).strip():
+        tel_cor.append(str(membrete["correo"]).strip())
     if tel_cor:
         sub_lines.append(" • ".join(tel_cor))
 

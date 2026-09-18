@@ -1,9 +1,9 @@
 {
   "empresa": {
-    "razon_social": "REMUNDIAL ARTE'S S.A.S.",
-    "nit": "901.888.777-1",
-    "ciudad_principal": "Monteria, Cordoba",
-    "telefono_soporte": "310 999 8888",
+    "razon_social": "REMUNDIAL ARTE'S",
+    "nit": "",
+    "ciudad_principal": "Montería, Córdoba",
+    "telefono_soporte": "3189998877",
     "lema": "El arte a tu alcance con financiamiento transparente"
   },
   "identidad_visual": {
@@ -38,8 +38,8 @@
   "plantillas_pdf": {
     "membrete": {
       "razon_social": "REMUNDIAL ARTE'S",
-      "subtitulo": "Mueblería, Artesanías, Mecedoras & Cuadros por Encargo",
-      "nit": "901.458.321-0",
+      "subtitulo": "Un Mundo de Arte a su Alcance",
+      "nit": "",
       "regimen": "Régimen Comercial Colombiano",
       "ciudad": "Montería, Córdoba",
       "direccion": "Carrera 5 # 31-20, Centro",

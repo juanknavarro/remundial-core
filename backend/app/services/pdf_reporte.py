@@ -1,4 +1,6 @@
 import io
+import json
+import os
 from datetime import datetime
 from decimal import Decimal
 from typing import Any, Dict, List, Optional
@@ -28,6 +30,61 @@ def format_cop(valor: Any) -> str:
         return f"$ {formatted}"
     except (ValueError, TypeError):
         return "$ 0"
+
+
+def obtener_datos_empresa_reporte() -> Dict[str, str]:
+    """Obtiene los parámetros institucionales configurados en el sistema (Razón Social, eslogan, datos comerciales)."""
+    defaults = {
+        "razon_social": "REMUNDIAL ARTE'S",
+        "subtitulo": "Mueblería, Artesanías, Mecedoras & Cuadros por Encargo",
+        "lema": "El arte a tu alcance con financiamiento transparente",
+        "nit": "",
+        "regimen": "",
+        "ciudad": "Montería, Córdoba",
+        "direccion": "",
+        "telefono": "",
+        "correo": "",
+    }
+    config_file = os.path.abspath(
+        os.path.join(os.path.dirname(__file__), "..", "..", "storage", "config_parametros.json")
+    )
+    if os.path.exists(config_file):
+        try:
+            with open(config_file, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                empresa = data.get("empresa", {})
+                if empresa.get("razon_social"):
+                    defaults["razon_social"] = str(empresa["razon_social"]).strip().upper()
+                if "nit" in empresa and empresa["nit"] is not None:
+                    defaults["nit"] = str(empresa["nit"]).strip()
+                if empresa.get("ciudad_principal"):
+                    defaults["ciudad"] = str(empresa["ciudad_principal"]).strip()
+                if empresa.get("telefono_soporte"):
+                    defaults["telefono"] = str(empresa["telefono_soporte"]).strip()
+                if empresa.get("lema"):
+                    defaults["lema"] = str(empresa["lema"]).strip()
+
+                plantillas = data.get("plantillas_pdf", {})
+                membrete = plantillas.get("membrete", {})
+                if membrete.get("razon_social"):
+                    defaults["razon_social"] = str(membrete["razon_social"]).strip().upper()
+                if membrete.get("subtitulo"):
+                    defaults["subtitulo"] = str(membrete["subtitulo"]).strip()
+                if "nit" in membrete and membrete["nit"] is not None:
+                    defaults["nit"] = str(membrete["nit"]).strip()
+                if "regimen" in membrete and membrete["regimen"] is not None:
+                    defaults["regimen"] = str(membrete["regimen"]).strip()
+                if membrete.get("ciudad"):
+                    defaults["ciudad"] = str(membrete["ciudad"]).strip()
+                if membrete.get("direccion"):
+                    defaults["direccion"] = str(membrete["direccion"]).strip()
+                if membrete.get("telefono_pbx"):
+                    defaults["telefono"] = str(membrete["telefono_pbx"]).strip()
+                if membrete.get("correo"):
+                    defaults["correo"] = str(membrete["correo"]).strip()
+        except Exception as e:
+            print(f"[PDF Reporte] Error cargando configuración de empresa: {e}")
+    return defaults
 
 
 def make_progress_drawing(
@@ -252,14 +309,37 @@ def generar_pdf_reporte_ventas(
     # =========================================================================
     # 1. CABECERA INSTITUCIONAL Y BANNER DEL REPORTE
     # =========================================================================
+    empresa = obtener_datos_empresa_reporte()
+
+    # Construir bloque institucional izquierdo con textos dinámicos
+    col_empresa = [f"<b>{empresa['razon_social']}</b>"]
+    subtitulo_txt = empresa.get("subtitulo") or empresa.get("lema")
+    if subtitulo_txt:
+        col_empresa.append(f"<font size=7.5 color='#475569'>{subtitulo_txt}</font>")
+
+    datos_comerciales = []
+    if empresa.get("nit") and empresa["nit"].strip():
+        datos_comerciales.append(f"NIT: {empresa['nit'].strip()}")
+    if empresa.get("regimen") and empresa["regimen"].strip():
+        datos_comerciales.append(empresa["regimen"].strip())
+    if empresa.get("ciudad") and empresa["ciudad"].strip():
+        datos_comerciales.append(empresa["ciudad"].strip())
+    if empresa.get("telefono") and empresa["telefono"].strip():
+        datos_comerciales.append(f"PBX: {empresa['telefono'].strip()}")
+
+    if datos_comerciales:
+        col_empresa.append(f"<font size=7 color='#64748B'>{' • '.join(datos_comerciales[:3])}</font>")
+
+    empresa_p_content = "<br/>".join(col_empresa)
+
     header_data = [
         [
-            Paragraph("<b>REMUNDIAL CORE</b><br/><font size=8 color='#64748B'>Muebles Artesanales & Galerías del Caribe</font>", subtitle_style),
+            Paragraph(empresa_p_content, subtitle_style),
             Paragraph("<b>REPORTE EJECUTIVO DE VENTAS Y CARTERA</b>", title_style),
             Paragraph(f"<b>Emisión:</b> {datetime.now().strftime('%d/%m/%Y')}<br/><b>Auditor:</b> {usuario_auditor}", subtitle_style),
         ]
     ]
-    header_table = Table(header_data, colWidths=[200, 340, 180])
+    header_table = Table(header_data, colWidths=[240, 310, 170])
     header_table.setStyle(
         TableStyle([
             ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
@@ -647,13 +727,56 @@ def generar_pdf_reporte_cartera(
 
     # 1. ENCABEZADO CORPORATIVO
     fecha_emision_str = datetime.now().strftime("%d/%m/%Y %H:%M")
+    empresa = obtener_datos_empresa_reporte()
+
+    subtitulo_emp = empresa.get("subtitulo") or empresa.get("lema") or "Plataforma Central de Crédito & Cartera"
+
+    comercial_parts = []
+    if empresa.get("nit") and empresa["nit"].strip():
+        comercial_parts.append(f"NIT: {empresa['nit'].strip()}")
+    if empresa.get("regimen") and empresa["regimen"].strip():
+        comercial_parts.append(empresa["regimen"].strip())
+    if empresa.get("ciudad") and empresa["ciudad"].strip():
+        comercial_parts.append(empresa["ciudad"].strip())
+    if empresa.get("telefono") and empresa["telefono"].strip():
+        comercial_parts.append(f"PBX: {empresa['telefono'].strip()}")
+
+    emp_header_text = f"<b>{empresa['razon_social']}</b>"
+    if subtitulo_emp:
+        emp_header_text += f" • <font color='#475569'>{subtitulo_emp}</font>"
+
     header_left = [
-        Paragraph("<b>REMUNDIAL CRÉDITOS</b> • PLATAFORMA DE SUPERVISIÓN", ParagraphStyle(
-            "CompanyHeaderC", fontName="Helvetica-Bold", fontSize=9, textColor=colors.HexColor("#059669"), leading=12
-        )),
+        Paragraph(
+            emp_header_text,
+            ParagraphStyle(
+                "CompanyHeaderC",
+                fontName="Helvetica-Bold",
+                fontSize=8.5,
+                textColor=colors.HexColor("#059669"),
+                leading=11,
+            ),
+        ),
+    ]
+
+    if comercial_parts:
+        header_left.append(
+            Paragraph(
+                " • ".join(comercial_parts[:3]),
+                ParagraphStyle(
+                    "CompanySubC",
+                    fontName="Helvetica",
+                    fontSize=7.5,
+                    textColor=colors.HexColor("#64748B"),
+                    leading=10,
+                ),
+            )
+        )
+
+    header_left.extend([
+        Spacer(1, 2),
         Paragraph("Informe de Cartera & Plan de Cuotas", title_style),
         Paragraph("Auditoría de cuotas recaudadas con marca de verificación y saldos pendientes", subtitle_style),
-    ]
+    ])
 
     cobrador_str = filtros.get("cobrador_nombre") or "Todos los Cobradores"
     periodo_str = filtros.get("periodo_texto") or "Jornada Completa"

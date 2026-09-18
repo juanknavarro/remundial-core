@@ -158,13 +158,13 @@ def _guardar_plantillas_pdf(datos: PlantillasPdfRequest) -> Dict[str, Any]:
         p_pdf["membrete"].update(m_dict)
         # Sincronizar datos de empresa con membrete si se actualizaron
         if "empresa" in current and isinstance(current["empresa"], dict):
-            if m_dict.get("razon_social"):
+            if "razon_social" in m_dict and m_dict["razon_social"]:
                 current["empresa"]["razon_social"] = m_dict["razon_social"]
-            if m_dict.get("nit"):
+            if "nit" in m_dict:
                 current["empresa"]["nit"] = m_dict["nit"]
-            if m_dict.get("ciudad"):
+            if "ciudad" in m_dict and m_dict["ciudad"]:
                 current["empresa"]["ciudad_principal"] = m_dict["ciudad"]
-            if m_dict.get("telefono_pbx"):
+            if "telefono_pbx" in m_dict and m_dict["telefono_pbx"]:
                 current["empresa"]["telefono_soporte"] = m_dict["telefono_pbx"]
 
     if datos.clausulas_venta is not None:
