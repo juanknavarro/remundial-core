@@ -23,6 +23,9 @@ from reportlab.platypus import (
 )
 from reportlab.graphics.shapes import Drawing, Rect
 
+import copy
+import json
+
 from app.models.credito import Credito, TipoPago
 from app.schemas.credito import generar_cronograma_con_arrastre
 
@@ -33,6 +36,132 @@ os.makedirs(FIRMAS_DIR, exist_ok=True)
 # Directorio local para archivo de actas de restitución
 ACTAS_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "storage", "actas"))
 os.makedirs(ACTAS_DIR, exist_ok=True)
+
+# Ruta al archivo de configuración centralizada
+CONFIG_FILE_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "storage", "config_parametros.json"))
+
+DEFAULT_CONFIG_PDF = {
+    "membrete": {
+        "razon_social": "REMUNDIAL ARTE'S",
+        "subtitulo": "Mueblería, Artesanías, Mecedoras & Cuadros por Encargo",
+        "nit": "901.458.321-0",
+        "regimen": "Régimen Comercial Colombiano",
+        "ciudad": "Montería - Córdoba",
+        "direccion": "Carrera 5 # 31-20, Centro",
+        "telefono_pbx": "(+57) 300 123 4567",
+        "correo": "info@remundialartes.com",
+    },
+    "clausulas_venta": (
+        "<b>CLÁUSULAS GENERALES DE COMPRAVENTA Y FINANCIACIÓN:</b><br/>"
+        "<b>1. Objeto y Recepción:</b> El CLIENTE adquiere a entera satisfacción los artículos y muebles descritos en este comprobante. "
+        "<b>2. Cuadros al Óleo y Por Encargo:</b> Las obras artísticas por encargo se elaboran a mano con especificaciones acordadas; "
+        "una vez iniciada la producción artística no se admiten cancelaciones ni retractos unilaterales. "
+        "<b>3. Plan de Pagos Mensual:</b> Las cuotas pactadas vencen puntualmente el último día calendario de cada mes respectivo. "
+        "Los abonos parciales reducen el saldo, y cualquier diferencia insoluta se arrastra a la siguiente exigibilidad sin alterar el plazo. "
+        "<b>4. Reserva de Dominio y Mérito Ejecutivo:</b> Remundial Arte's conserva la propiedad de los bienes hasta el pago total de la obligación. "
+        "El presente documento presta mérito ejecutivo de conformidad con la legislación mercantil colombiana."
+    ),
+    "certificacion_recaudo": (
+        "<b>CERTIFICACIÓN DE PAGO:</b> Este recibo digital certifica formalmente la recepción y registro del recaudo "
+        "en las cuentas de Remundial Arte's. La presente constancia amortiza el saldo del contrato especificado y queda "
+        "asentada de manera inmutable en los libros auxiliares de cartera. Conserve este comprobante para cualquier conciliación contable."
+    ),
+    "acta_restitucion": {
+        "clausula_legal": (
+            "<b>CLÁUSULA DE ENTREGA Y RESTITUCIÓN VOLUNTARIA DE BIENES:</b> En la fecha y hora señaladas en el encabezado, "
+            "el CLIENTE / DEUDOR TITULAR hace entrega material, formal y pacífica a REMUNDIAL ARTE'S de los artículos descritos "
+            "en el inventario anterior, en aplicación estricta de las estipulaciones contractuales sobre reserva de dominio y "
+            "garantía mobiliaria pactadas en el contrato original de venta a crédito, motivado por la mora grave de tres (3) o más "
+            "cuotas vencidas. REMUNDIAL ARTE'S recibe los bienes en calidad de custodia y para los trámites legales de avalúo, "
+            "liquidación y compensación del saldo deudor remanente. Ambas partes declaran haber verificado el estado físico de los "
+            "bienes retirados y estampan su consentimiento formal mediante firma digitalizada."
+        ),
+        "observaciones_defecto": "Departamento de Cartera y Recuperación de Bienes",
+        "pie_pagina": "Diligencia ejecutada conforme al régimen de garantías mobiliarias y reserva de dominio contractual.",
+    },
+}
+
+
+def formatear_texto_reportlab(texto: Optional[str]) -> str:
+    """Asegura que el texto para párrafos ReportLab conserve saltos de línea sin romper formato XML."""
+    if not texto:
+        return ""
+    texto_str = str(texto).strip()
+    if "\n" in texto_str and "<br" not in texto_str:
+        return texto_str.replace("\r\n", "<br/>").replace("\n", "<br/>")
+    return texto_str
+
+
+def obtener_configuracion_pdf() -> dict:
+    """Carga la configuración de membrete, cláusulas y certificaciones legales en tiempo real."""
+    cfg = copy.deepcopy(DEFAULT_CONFIG_PDF)
+    if os.path.exists(CONFIG_FILE_PATH):
+        try:
+            with open(CONFIG_FILE_PATH, "r", encoding="utf-8") as f:
+                saved = json.load(f)
+
+                # Priorizar datos de empresa básicos si no hay membrete explícito
+                if "empresa" in saved and isinstance(saved["empresa"], dict):
+                    emp = saved["empresa"]
+                    if emp.get("razon_social"):
+                        cfg["membrete"]["razon_social"] = emp["razon_social"].strip().upper()
+                    if emp.get("nit"):
+                        cfg["membrete"]["nit"] = emp["nit"].strip()
+                    if emp.get("ciudad_principal"):
+                        cfg["membrete"]["ciudad"] = emp["ciudad_principal"].strip()
+                    if emp.get("telefono_soporte"):
+                        cfg["membrete"]["telefono_pbx"] = emp["telefono_soporte"].strip()
+
+                if "plantillas_pdf" in saved and isinstance(saved["plantillas_pdf"], dict):
+                    p_pdf = saved["plantillas_pdf"]
+                    if "membrete" in p_pdf and isinstance(p_pdf["membrete"], dict):
+                        for k, v in p_pdf["membrete"].items():
+                            if v is not None and str(v).strip():
+                                cfg["membrete"][k] = str(v).strip()
+                    if p_pdf.get("clausulas_venta"):
+                        cfg["clausulas_venta"] = p_pdf["clausulas_venta"].strip()
+                    if p_pdf.get("certificacion_recaudo"):
+                        cfg["certificacion_recaudo"] = p_pdf["certificacion_recaudo"].strip()
+                    if "acta_restitucion" in p_pdf and isinstance(p_pdf["acta_restitucion"], dict):
+                        for k, v in p_pdf["acta_restitucion"].items():
+                            if v is not None and str(v).strip():
+                                cfg["acta_restitucion"][k] = str(v).strip()
+        except Exception as e:
+            print(f"[PDF] Error cargando configuración personalizada: {e}")
+    return cfg
+
+
+def construir_lineas_membrete_sub(membrete: dict, tipo_contacto: str = "Ventas") -> str:
+    """Construye las líneas de subtítulo institucional (NIT, Ciudad, Dirección, PBX, Correo)."""
+    sub_lines = []
+    if membrete.get("subtitulo"):
+        sub_lines.append(f"<b>{membrete['subtitulo']}</b>")
+
+    nit_reg = []
+    if membrete.get("nit"):
+        nit_reg.append(f"NIT: {membrete['nit']}")
+    if membrete.get("regimen"):
+        nit_reg.append(membrete["regimen"])
+    if nit_reg:
+        sub_lines.append(" • ".join(nit_reg))
+
+    ciu_dir = []
+    if membrete.get("ciudad"):
+        ciu_dir.append(membrete["ciudad"])
+    if membrete.get("direccion"):
+        ciu_dir.append(membrete["direccion"])
+    if ciu_dir:
+        sub_lines.append(" • ".join(ciu_dir))
+
+    tel_cor = []
+    if membrete.get("telefono_pbx"):
+        tel_cor.append(f"PBX / {tipo_contacto}: {membrete['telefono_pbx']}")
+    if membrete.get("correo"):
+        tel_cor.append(membrete["correo"])
+    if tel_cor:
+        sub_lines.append(" • ".join(tel_cor))
+
+    return "<br/>".join(sub_lines)
 
 
 def guardar_firmas_acta(
@@ -335,6 +464,8 @@ def generar_pdf_recibo_venta(credito: Credito) -> bytes:
 
     story = []
     base_styles = getSampleStyleSheet()
+    cfg_pdf = obtener_configuracion_pdf()
+    m_cfg = cfg_pdf["membrete"]
 
     # Paleta de Colores
     c_primary = colors.HexColor("#0F172A")    # Slate-900 (Azul oscuro / Carbón)
@@ -526,16 +657,13 @@ def generar_pdf_recibo_venta(credito: Credito) -> bytes:
         estado_label = "FINALIZADO / CONTADO" if es_contado else "FINALIZADO (PAGADO)"
         estado_color = "#0284C7"
 
-    # 2. ENCABEZADO OFICIAL DE REMUNDIAL ARTE'S
+    # 2. ENCABEZADO OFICIAL PERSONALIZADO
     # Columna Izquierda: Logo y Razón Social • Columna Derecha: Recuadro Oficial de Comprobante
     header_col_izq = [
-        Paragraph("REMUNDIAL ARTE'S", style_title),
+        Paragraph(m_cfg.get("razon_social") or "REMUNDIAL ARTE'S", style_title),
         Spacer(1, 2),
         Paragraph(
-            "<b>Mueblería, Artesanías, Mecedoras & Cuadros por Encargo</b><br/>"
-            "NIT: 901.458.321-0 • Régimen Comercial Colombiano<br/>"
-            "Montería - Córdoba • Carrera 5 # 31-20, Centro<br/>"
-            "PBX / Ventas: (+57) 300 123 4567 • info@remundialartes.com",
+            construir_lineas_membrete_sub(m_cfg, tipo_contacto="Ventas"),
             style_company_sub,
         ),
     ]
@@ -951,17 +1079,8 @@ def generar_pdf_recibo_venta(credito: Credito) -> bytes:
         story.append(cron_table)
         story.append(Spacer(1, 8))
 
-    # 7. CLÁUSULAS CONTRACTUALES GENERALES RESUMIDAS (DEL TALONARIO FÍSICO)
-    clausulas_texto = (
-        "<b>CLÁUSULAS GENERALES DE COMPRAVENTA Y FINANCIACIÓN:</b><br/>"
-        "<b>1. Objeto y Recepción:</b> El CLIENTE adquiere a entera satisfacción los artículos y muebles descritos en este comprobante. "
-        "<b>2. Cuadros al Óleo y Por Encargo:</b> Las obras artísticas por encargo se elaboran a mano con especificaciones acordadas; "
-        "una vez iniciada la producción artística no se admiten cancelaciones ni retractos unilaterales. "
-        "<b>3. Plan de Pagos Mensual:</b> Las cuotas pactadas vencen puntualmente el último día calendario de cada mes respectivo. "
-        "Los abonos parciales reducen el saldo, y cualquier diferencia insoluta se arrastra a la siguiente exigibilidad sin alterar el plazo. "
-        "<b>4. Reserva de Dominio y Mérito Ejecutivo:</b> Remundial Arte's conserva la propiedad de los bienes hasta el pago total de la obligación. "
-        "El presente documento presta mérito ejecutivo de conformidad con la legislación mercantil colombiana."
-    )
+    # 7. CLÁUSULAS CONTRACTUALES GENERALES RESUMIDAS (CONFIGURABLES)
+    clausulas_texto = formatear_texto_reportlab(cfg_pdf.get("clausulas_venta"))
 
     clausulas_table = Table(
         [[Paragraph(clausulas_texto, style_clause)]],
@@ -1032,10 +1151,12 @@ def generar_pdf_recibo_venta(credito: Credito) -> bytes:
     ]
 
     # Columna 3: Por Remundial Arte's (Firma Autorizada)
+    razon_social_firma = m_cfg.get("razon_social") or "REMUNDIAL ARTE'S"
+    ciudad_firma = m_cfg.get("ciudad") or "Montería - Córdoba"
     sig_remundial = [
         crear_bloque_firma_imagen(firma_vendedor_b64, fallback_height=24),
         HRFlowable(width="85%", thickness=0.75, color=c_primary, spaceBefore=0, spaceAfter=3),
-        Paragraph("<b>POR REMUNDIAL ARTE'S</b><br/>Montería - Córdoba", style_signature_label),
+        Paragraph(f"<b>POR {razon_social_firma}</b><br/>{ciudad_firma}", style_signature_label),
         Paragraph(f"Asesor: {asesor_nombre}", style_signature_sub),
         Paragraph("<font size='5.5' color='#64748B'>Firma Autorizada / Sello Comercial</font>", style_signature_sub),
     ]
@@ -1094,6 +1215,8 @@ def generar_pdf_recibo_abono(
 
     story = []
     base_styles = getSampleStyleSheet()
+    cfg_pdf = obtener_configuracion_pdf()
+    m_cfg = cfg_pdf["membrete"]
 
     # Paleta de Colores
     c_primary = colors.HexColor("#0F172A")    # Slate-900
@@ -1311,15 +1434,12 @@ def generar_pdf_recibo_abono(
         tipo_recibo_badge = "PAGO TOTAL DE CUOTA"
         tipo_badge_color = "#059669"  # Verde esmeralda
 
-    # 3. ENCABEZADO OFICIAL
+    # 3. ENCABEZADO OFICIAL PERSONALIZADO
     header_col_izq = [
-        Paragraph("REMUNDIAL ARTE'S", style_title),
+        Paragraph(m_cfg.get("razon_social") or "REMUNDIAL ARTE'S", style_title),
         Spacer(1, 2),
         Paragraph(
-            "<b>Mueblería, Artesanías, Mecedoras & Cuadros por Encargo</b><br/>"
-            "NIT: 901.458.321-0 • Régimen Comercial Colombiano<br/>"
-            "Montería - Córdoba • Carrera 5 # 31-20, Centro<br/>"
-            "PBX / Cobranzas: (+57) 300 123 4567 • cobranzas@remundialartes.com",
+            construir_lineas_membrete_sub(m_cfg, tipo_contacto="Cobranzas"),
             style_company_sub,
         ),
     ]
@@ -1598,12 +1718,8 @@ def generar_pdf_recibo_abono(
     story.append(detalles_table)
     story.append(Spacer(1, 8))
 
-    # 6. DECLARACIÓN DE VALIDEZ LEGAL
-    legal_text = (
-        "<b>CERTIFICACIÓN DE PAGO:</b> Este recibo digital certifica formalmente la recepción y registro del recaudo "
-        "en las cuentas de Remundial Arte's. La presente constancia amortiza el saldo del contrato especificado y queda "
-        "asentada de manera inmutable en los libros auxiliares de cartera. Conserve este comprobante para cualquier conciliación contable."
-    )
+    # 6. DECLARACIÓN DE VALIDEZ LEGAL (CONFIGURABLE)
+    legal_text = formatear_texto_reportlab(cfg_pdf.get("certificacion_recaudo"))
     legal_table = Table([[Paragraph(legal_text, style_company_sub)]], colWidths=[548])
     legal_table.setStyle(
         TableStyle(
@@ -1633,12 +1749,14 @@ def generar_pdf_recibo_abono(
         or (obtener_firma_almacenada(abono.credito_id, "titular") if getattr(abono, "credito_id", None) else None)
     )
 
+    razon_social_abono = m_cfg.get("razon_social") or "Remundial Arte's"
+    ciudad_abono = m_cfg.get("ciudad") or "Montería"
     sig_cobrador = [
         crear_bloque_firma_imagen(firma_cobrador_b64, fallback_height=24),
         HRFlowable(width="80%", thickness=0.75, color=c_primary, spaceBefore=0, spaceAfter=3),
         Paragraph("<b>COBRADOR AUTORIZADO EN RUTA</b>", style_signature_label),
         Paragraph(f"<b>{cobrador_nombre}</b>", style_signature_label),
-        Paragraph("Remundial Arte's • Montería", style_signature_sub),
+        Paragraph(f"{razon_social_abono} • {ciudad_abono}", style_signature_sub),
         Paragraph("<font size='5.5' color='#64748B'>Firma y Sello de Recaudo Oficial</font>", style_signature_sub),
     ]
 
@@ -1695,6 +1813,9 @@ def generar_pdf_acta_restitucion(
         bottomMargin=36,
     )
     story = []
+    cfg_pdf = obtener_configuracion_pdf()
+    m_cfg = cfg_pdf["membrete"]
+    acta_cfg = cfg_pdf.get("acta_restitucion", {})
 
     # Paleta corporativa de alerta y formalidad legal
     c_primary = colors.HexColor("#0F172A")
@@ -1916,13 +2037,21 @@ def generar_pdf_acta_restitucion(
         )
         cuotas_vencidas_num = res_cron.get("cuotas_vencidas_count", 3)
 
-    # 1. ENCABEZADO CORPORATIVO
+    # 1. ENCABEZADO CORPORATIVO PERSONALIZADO
+    razon_social_acta = m_cfg.get("razon_social") or "REMUNDIAL ARTE'S"
+    nit_acta = m_cfg.get("nit") or "900.123.456-7"
+    regimen_acta = m_cfg.get("regimen") or "Régimen Común"
+    dir_acta = m_cfg.get("direccion") or "Calle 29 # 4-56, Centro"
+    ciu_acta = m_cfg.get("ciudad") or "Montería, Córdoba"
+    pbx_acta = m_cfg.get("telefono_pbx") or "300 123 4567"
+    obs_acta_default = acta_cfg.get("observaciones_defecto") or "Departamento de Cartera y Recuperación de Bienes"
+
     header_left = [
-        Paragraph("<b>REMUNDIAL ARTE'S</b>", style_company_name),
-        Paragraph("NIT: 900.123.456-7 • Régimen Común", style_company_sub),
-        Paragraph("Dirección: Calle 29 # 4-56, Centro, Montería, Córdoba", style_company_sub),
-        Paragraph("PBX: (604) 789 0123 • Móvil: 300 123 4567", style_company_sub),
-        Paragraph("Departamento de Cartera y Recuperación de Bienes", style_company_sub),
+        Paragraph(f"<b>{razon_social_acta}</b>", style_company_name),
+        Paragraph(f"NIT: {nit_acta} • {regimen_acta}", style_company_sub),
+        Paragraph(f"Dirección: {dir_acta} • {ciu_acta}", style_company_sub),
+        Paragraph(f"PBX / Contacto: {pbx_acta}", style_company_sub),
+        Paragraph(obs_acta_default, style_company_sub),
     ]
 
     header_right = [
@@ -2170,16 +2299,8 @@ def generar_pdf_acta_restitucion(
     story.append(table_articulos)
     story.append(Spacer(1, 8))
 
-    # 5. CLÁUSULA LEGAL DE RESTITUCIÓN
-    legal_text = (
-        "<b>CLÁUSULA DE ENTREGA Y RESTITUCIÓN VOLUNTARIA DE BIENES:</b> En la fecha y hora señaladas en el encabezado, "
-        "el CLIENTE / DEUDOR TITULAR hace entrega material, formal y pacífica a REMUNDIAL ARTE'S de los artículos descritos "
-        "en el inventario anterior, en aplicación estricta de las estipulaciones contractuales sobre reserva de dominio y "
-        "garantía mobiliaria pactadas en el contrato original de venta a crédito, motivado por la mora grave de tres (3) o más "
-        "cuotas vencidas. REMUNDIAL ARTE'S recibe los bienes en calidad de custodia y para los trámites legales de avalúo, "
-        "liquidación y compensación del saldo deudor remanente. Ambas partes declaran haber verificado el estado físico de los "
-        "bienes retirados y estampan su consentimiento formal mediante firma digitalizada."
-    )
+    # 5. CLÁUSULA LEGAL DE RESTITUCIÓN (CONFIGURABLE)
+    legal_text = formatear_texto_reportlab(acta_cfg.get("clausula_legal"))
     table_legal = Table([[Paragraph(legal_text, style_legal_text)]], colWidths=[540])
     table_legal.setStyle(
         TableStyle(
@@ -2242,7 +2363,11 @@ def generar_pdf_acta_restitucion(
             ]
         )
     )
-    story.append(KeepTogether([firmas_table]))
+    firmas_elements = [firmas_table]
+    if acta_cfg.get("pie_pagina"):
+        firmas_elements.append(Spacer(1, 4))
+        firmas_elements.append(Paragraph(f"<font size='6' color='#64748B'>{acta_cfg['pie_pagina']}</font>", style_signature_sub))
+    story.append(KeepTogether(firmas_elements))
 
     doc.build(story, canvasmaker=ReciboNumberedCanvas)
     buffer.seek(0)

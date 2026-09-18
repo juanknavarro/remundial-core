@@ -8,11 +8,13 @@ from app.core.config import settings
 from app.routers.abonos import router as abonos_router
 from app.routers.auth import router as auth_router
 from app.routers.clientes import router as clientes_router
+from app.routers.configuracion import router as configuracion_router
 from app.routers.creditos import router as creditos_router
 from app.routers.health import router as health_router
 from app.routers.productos import router as productos_router
 from app.routers.reportes import router as reportes_router
 from app.routers.usuarios import router as usuarios_router
+
 
 
 async def ensure_master_user() -> None:
@@ -82,6 +84,7 @@ app.include_router(clientes_router)
 app.include_router(creditos_router)
 app.include_router(abonos_router)
 app.include_router(reportes_router)
+app.include_router(configuracion_router)
 
 # Registro también bajo prefijo versionado /api/v1
 app.include_router(health_router, prefix=settings.API_V1_STR)
@@ -92,6 +95,8 @@ app.include_router(clientes_router, prefix=settings.API_V1_STR)
 app.include_router(creditos_router, prefix=settings.API_V1_STR)
 app.include_router(abonos_router, prefix=settings.API_V1_STR)
 app.include_router(reportes_router, prefix=settings.API_V1_STR)
+app.include_router(configuracion_router, prefix=settings.API_V1_STR)
+
 
 
 @app.get("/", include_in_schema=False)

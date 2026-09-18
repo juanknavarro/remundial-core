@@ -391,11 +391,20 @@ class CreditoResponse(CreditoBase):
     esta_vencido: bool = False
     exigible_hoy: bool = False
     dias_mora: int = 0
+    es_contado: bool = False
 
     model_config = ConfigDict(from_attributes=True)
 
     @model_validator(mode="after")
     def autogenerar_cronograma(self) -> "CreditoResponse":
+        financiado = Decimal(str(self.monto_financiado or 0))
+        saldo = Decimal(str(self.saldo_pendiente or 0))
+        cuotas = int(self.numero_cuotas or 1)
+        self.es_contado = bool(
+            financiado == Decimal("0.00")
+            or (cuotas <= 1 and saldo == Decimal("0.00"))
+        )
+
         if self.numero_cuotas > 0 and self.fecha_primera_cuota:
             res = generar_cronograma_con_arrastre(
                 fecha_primera_cuota=self.fecha_primera_cuota,

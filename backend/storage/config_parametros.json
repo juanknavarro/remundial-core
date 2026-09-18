@@ -1,0 +1,57 @@
+{
+  "empresa": {
+    "razon_social": "REMUNDIAL ARTE'S S.A.S.",
+    "nit": "901.888.777-1",
+    "ciudad_principal": "Monteria, Cordoba",
+    "telefono_soporte": "310 999 8888",
+    "lema": "El arte a tu alcance con financiamiento transparente"
+  },
+  "identidad_visual": {
+    "eslogan_login": "Plataforma Central de Crédito & Cobranza",
+    "eslogan_mobile": "Plataforma Central de Campo & Cobranza",
+    "pie_login": "Acceso restringido únicamente a colaboradores autorizados de Remundial.",
+    "pie_mobile": "Remundial Core v1.2.0 • Operaciones de Campo",
+    "tiene_logo": false,
+    "logo_url": null
+  },
+  "reglas_credito": {
+    "plazos_permitidos": [
+      2,
+      4,
+      6,
+      9
+    ],
+    "unidad_plazo": "meses",
+    "tipo_pago_defecto": "mensual",
+    "dia_vencimiento": "ultimo_dia_mes",
+    "umbral_mora_critica": 3,
+    "descripcion_mora_critica": "Se clasifica en Cartera Crítica a partir de 3 cuotas vencidas (excluyendo créditos de 2 cuotas).",
+    "cuota_inicial_minima": 0.0,
+    "tasa_interes_incluida": true
+  },
+  "sistema": {
+    "version": "1.2.0",
+    "ambiente": "Producción Local",
+    "modulo_migracion_activo": true,
+    "formato_migracion": "Excel (.xlsx Multi-Hoja)"
+  },
+  "plantillas_pdf": {
+    "membrete": {
+      "razon_social": "REMUNDIAL ARTE'S",
+      "subtitulo": "Mueblería, Artesanías, Mecedoras & Cuadros por Encargo",
+      "nit": "901.458.321-0",
+      "regimen": "Régimen Comercial Colombiano",
+      "ciudad": "Montería, Córdoba",
+      "direccion": "Carrera 5 # 31-20, Centro",
+      "telefono_pbx": "3189998877",
+      "correo": "info@remundialartes.com"
+    },
+    "clausulas_venta": "<b>CLÁUSULAS GENERALES DE COMPRAVENTA Y FINANCIACIÓN:</b><br/><b>1. Objeto y Recepción:</b> El CLIENTE adquiere a entera satisfacción los artículos y muebles descritos en este comprobante. <b>2. Cuadros al Óleo y Por Encargo:</b> Las obras artísticas por encargo se elaboran a mano con especificaciones acordadas; una vez iniciada la producción artística no se admiten cancelaciones ni retractos unilaterales. <b>3. Plan de Pagos Mensual:</b> Las cuotas pactadas vencen puntualmente el último día calendario de cada mes respectivo. Los abonos parciales reducen el saldo, y cualquier diferencia insoluta se arrastra a la siguiente exigibilidad sin alterar el plazo. <b>4. Reserva de Dominio y Mérito Ejecutivo:</b> Remundial Arte's conserva la propiedad de los bienes hasta el pago total de la obligación. El presente documento presta mérito ejecutivo de conformidad con la legislación mercantil colombiana.",
+    "certificacion_recaudo": "<b>CERTIFICACIÓN DE PAGO:</b> Este recibo digital certifica formalmente la recepción y registro del recaudo en las cuentas de Remundial Arte's. La presente constancia amortiza el saldo del contrato especificado y queda asentada de manera inmutable en los libros auxiliares de cartera. Conserve este comprobante para cualquier conciliación contable.",
+    "acta_restitucion": {
+      "clausula_legal": "<b>CLÁUSULA DE ENTREGA Y RESTITUCIÓN VOLUNTARIA DE BIENES:</b> En la fecha y hora señaladas en el encabezado, el CLIENTE / DEUDOR TITULAR hace entrega material, formal y pacífica a REMUNDIAL ARTE'S de los artículos descritos en el inventario anterior, en aplicación estricta de las estipulaciones contractuales sobre reserva de dominio y garantía mobiliaria pactadas en el contrato original de venta a crédito, motivado por la mora grave de tres (3) o más cuotas vencidas. REMUNDIAL ARTE'S recibe los bienes en calidad de custodia y para los trámites legales de avalúo, liquidación y compensación del saldo deudor remanente. Ambas partes declaran haber verificado el estado físico de los bienes retirados y estampan su consentimiento formal mediante firma digitalizada.",
+      "observaciones_defecto": "Departamento de Cartera y Recuperación de Bienes",
+      "pie_pagina": "Diligencia ejecutada conforme al régimen de garantías mobiliarias y reserva de dominio contractual."
+    }
+  }
+}
