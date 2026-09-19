@@ -12,6 +12,7 @@ from sqlalchemy import (
     ForeignKey,
     Integer,
     Numeric,
+    String,
     UniqueConstraint,
     func,
 )
@@ -120,6 +121,16 @@ class Credito(Base):
         Numeric(12, 2),
         nullable=False,
     )
+    numero_contrato: Mapped[Optional[str]] = mapped_column(
+        String(50),
+        nullable=True,
+        index=True,
+    )
+    ciudad_venta: Mapped[Optional[str]] = mapped_column(
+        String(100),
+        nullable=True,
+        index=True,
+    )
     creado_en: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         server_default=func.now(),
@@ -161,8 +172,8 @@ class Credito(Base):
 
     def __repr__(self) -> str:
         return (
-            f"<Credito(id_contrato={self.id_contrato}, cliente_id={self.cliente_id}, "
-            f"monto={self.monto_financiado}, estado='{self.estado}')>"
+            f"<Credito(id_contrato={self.id_contrato}, numero_contrato={self.numero_contrato}, "
+            f"cliente_id={self.cliente_id}, monto={self.monto_financiado}, estado='{self.estado}')>"
         )
 
 

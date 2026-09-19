@@ -43,6 +43,8 @@ async def _obtener_datos_reporte(
     fecha_fin: Optional[date] = None,
     tipo_venta: Optional[str] = "todos",
     cliente_id: Optional[UUID] = None,
+    ciudad_venta: Optional[str] = None,
+    numero_contrato: Optional[str] = None,
     search: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Consulta la base de datos y calcula las métricas financieras del reporte."""
@@ -70,6 +72,22 @@ async def _obtener_datos_reporte(
     if cliente_id:
         query = query.where(Credito.cliente_id == cliente_id)
 
+    # Filtro geográfico por ciudad de venta
+    if ciudad_venta and ciudad_venta.strip():
+        ciu_clean = ciudad_venta.strip()
+        if ciu_clean.lower() not in ("todas", "todos", "todas las ciudades", "todas las localidades", "all"):
+            query = query.where(Credito.ciudad_venta.ilike(ciu_clean))
+
+    # Filtro por número de contrato o folio físico
+    if numero_contrato and numero_contrato.strip():
+        term_contrato = f"%{numero_contrato.strip()}%"
+        query = query.where(
+            or_(
+                Credito.numero_contrato.ilike(term_contrato),
+                cast(Credito.id_contrato, String).ilike(term_contrato),
+            )
+        )
+
     # Filtro por búsqueda de texto
     if search and search.strip():
         term = f"%{search.strip()}%"
@@ -78,6 +96,8 @@ async def _obtener_datos_reporte(
                 Cliente.nombres.ilike(term),
                 Cliente.cedula.ilike(term),
                 cast(Credito.id_contrato, String).ilike(term),
+                Credito.numero_contrato.ilike(term),
+                Credito.ciudad_venta.ilike(term),
             )
         )
 
@@ -132,9 +152,12 @@ async def _obtener_datos_reporte(
 
         articulos_resumen_txt = ", ".join(articulos_resumen_parts) if articulos_resumen_parts else "Artículos de catálogo"
 
+        ctr_label = c.numero_contrato or f"CTR-{str(c.id_contrato)[:8].upper()}"
         operaciones_raw.append({
             "id_contrato": str(c.id_contrato),
-            "codigo_contrato": f"CTR-{str(c.id_contrato)[:8].upper()}",
+            "codigo_contrato": ctr_label,
+            "numero_contrato": c.numero_contrato,
+            "ciudad_venta": c.ciudad_venta or "Montería",
             "fecha": c.creado_en.isoformat() if c.creado_en else datetime.now().isoformat(),
             "cliente_id": str(c.cliente_id),
             "cliente_nombre": c.cliente.nombres if c.cliente else "Consumidor Final",
@@ -174,6 +197,8 @@ async def _obtener_datos_reporte(
         "tipo_venta": tipo_venta,
         "cliente_id": str(cliente_id) if cliente_id else None,
         "cliente_nombre": cliente_filtrado_nombre,
+        "ciudad_venta": ciudad_venta.strip() if (ciudad_venta and ciudad_venta.strip().lower() not in ("todas", "todos", "all")) else None,
+        "numero_contrato": numero_contrato.strip() if numero_contrato and numero_contrato.strip() else None,
         "search": search,
     }
 
@@ -194,6 +219,8 @@ async def reporte_ventas_json(
     fecha_fin: Optional[date] = Query(None, description="Fecha final del filtro (YYYY-MM-DD)"),
     tipo_venta: Optional[str] = Query("todos", pattern="^(todos|credito|contado)$", description="Modalidad de venta"),
     cliente_id: Optional[UUID] = Query(None, description="ID del cliente para ver su histórico"),
+    ciudad_venta: Optional[str] = Query(None, description="Filtrar por ciudad o localidad de venta"),
+    numero_contrato: Optional[str] = Query(None, description="Filtrar por número de contrato o folio"),
     search: Optional[str] = Query(None, description="Término de búsqueda por cliente o cédula"),
     db: AsyncSession = Depends(get_db),
     current_user: Usuario = Depends(require_supervisor_o_secretaria),
@@ -205,6 +232,8 @@ async def reporte_ventas_json(
         fecha_fin=fecha_fin,
         tipo_venta=tipo_venta,
         cliente_id=cliente_id,
+        ciudad_venta=ciudad_venta,
+        numero_contrato=numero_contrato,
         search=search,
     )
     return datos
@@ -220,6 +249,8 @@ async def reporte_ventas_pdf(
     fecha_fin: Optional[date] = Query(None, description="Fecha final del filtro (YYYY-MM-DD)"),
     tipo_venta: Optional[str] = Query("todos", pattern="^(todos|credito|contado)$", description="Modalidad de venta"),
     cliente_id: Optional[UUID] = Query(None, description="ID del cliente para ver su histórico"),
+    ciudad_venta: Optional[str] = Query(None, description="Filtrar por ciudad o localidad de venta"),
+    numero_contrato: Optional[str] = Query(None, description="Filtrar por número de contrato o folio"),
     search: Optional[str] = Query(None, description="Término de búsqueda por cliente o cédula"),
     db: AsyncSession = Depends(get_db),
     current_user: Usuario = Depends(require_supervisor_o_secretaria),
@@ -231,6 +262,8 @@ async def reporte_ventas_pdf(
         fecha_fin=fecha_fin,
         tipo_venta=tipo_venta,
         cliente_id=cliente_id,
+        ciudad_venta=ciudad_venta,
+        numero_contrato=numero_contrato,
         search=search,
     )
 
@@ -264,6 +297,8 @@ async def exportar_excel_reporte_ventas(
     fecha_fin: Optional[date] = Query(None, description="Fecha de fin (YYYY-MM-DD)"),
     tipo_venta: Optional[str] = Query("todos", description="Tipo de venta: 'todos', 'credito', 'contado'"),
     cliente_id: Optional[UUID] = Query(None, description="ID del cliente para ver su histórico"),
+    ciudad_venta: Optional[str] = Query(None, description="Filtrar por ciudad o localidad de venta"),
+    numero_contrato: Optional[str] = Query(None, description="Filtrar por número de contrato o folio"),
     search: Optional[str] = Query(None, description="Término de búsqueda por cliente o cédula"),
     db: AsyncSession = Depends(get_db),
     current_user: Usuario = Depends(require_supervisor_o_secretaria),
@@ -275,12 +310,15 @@ async def exportar_excel_reporte_ventas(
         fecha_fin=fecha_fin,
         tipo_venta=tipo_venta,
         cliente_id=cliente_id,
+        ciudad_venta=ciudad_venta,
+        numero_contrato=numero_contrato,
         search=search,
     )
 
     operaciones = datos["operaciones"]
     headers = [
         "CONTRATO",
+        "CIUDAD_VENTA",
         "FECHA",
         "CLIENTE_TITULAR",
         "CEDULA",
@@ -308,6 +346,7 @@ async def exportar_excel_reporte_ventas(
 
         row = [
             f'"{op.get("codigo_contrato", "")}"',
+            f'"{str(op.get("ciudad_venta", "")).replace(chr(34), chr(34)*2)}"',
             f'"{fecha_str}"',
             f'"{str(op.get("cliente_nombre", "")).replace(chr(34), chr(34)*2)}"',
             f'"{op.get("cliente_cedula", "")}"',
@@ -348,6 +387,8 @@ async def _obtener_datos_reporte_cartera(
     fecha_inicio: Optional[date] = None,
     fecha_fin: Optional[date] = None,
     periodo_preset: Optional[str] = "mes",
+    ciudad_venta: Optional[str] = None,
+    numero_contrato: Optional[str] = None,
     search: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Consulta la cartera asignada a cobradores y desglosa el cronograma de cuotas con su marca de verificación."""
@@ -373,6 +414,22 @@ async def _obtener_datos_reporte_cartera(
         fin_dt = datetime.combine(fecha_fin, time.max)
         query = query.where(Credito.creado_en <= fin_dt)
 
+    # Filtro geográfico por ciudad de venta
+    if ciudad_venta and ciudad_venta.strip():
+        ciu_clean = ciudad_venta.strip()
+        if ciu_clean.lower() not in ("todas", "todos", "todas las ciudades", "todas las localidades", "all"):
+            query = query.where(Credito.ciudad_venta.ilike(ciu_clean))
+
+    # Filtro por número de contrato o folio físico
+    if numero_contrato and numero_contrato.strip():
+        term_contrato = f"%{numero_contrato.strip()}%"
+        query = query.where(
+            or_(
+                Credito.numero_contrato.ilike(term_contrato),
+                cast(Credito.id_contrato, String).ilike(term_contrato),
+            )
+        )
+
     if search and search.strip():
         term = f"%{search.strip()}%"
         query = query.where(
@@ -380,6 +437,8 @@ async def _obtener_datos_reporte_cartera(
                 Cliente.nombres.ilike(term),
                 Cliente.cedula.ilike(term),
                 cast(Credito.id_contrato, String).ilike(term),
+                Credito.numero_contrato.ilike(term),
+                Credito.ciudad_venta.ilike(term),
             )
         )
 
@@ -437,9 +496,12 @@ async def _obtener_datos_reporte_cartera(
         cuotas_pagadas += c_pagas_count
         cuotas_pendientes += c_pen_count
 
+        ctr_label = c.numero_contrato or f"CTR-{str(c.id_contrato)[:8].upper()}"
         creditos_out.append({
             "id_contrato": str(c.id_contrato),
-            "codigo_contrato": f"CTR-{str(c.id_contrato)[:8].upper()}",
+            "codigo_contrato": ctr_label,
+            "numero_contrato": c.numero_contrato,
+            "ciudad_venta": c.ciudad_venta or "Montería",
             "fecha_inicio": c.creado_en.isoformat() if c.creado_en else None,
             "cliente_nombre": c.cliente.nombres if c.cliente else "Cliente Titular",
             "cliente_cedula": c.cliente.cedula if c.cliente else "",
@@ -481,6 +543,8 @@ async def _obtener_datos_reporte_cartera(
             "periodo_texto": periodo_map.get(periodo_preset or "mes", "Periodo Seleccionado"),
             "fecha_inicio": fecha_inicio.isoformat() if fecha_inicio else None,
             "fecha_fin": fecha_fin.isoformat() if fecha_fin else None,
+            "ciudad_venta": ciudad_venta.strip() if (ciudad_venta and ciudad_venta.strip().lower() not in ("todas", "todos", "all")) else None,
+            "numero_contrato": numero_contrato.strip() if numero_contrato and numero_contrato.strip() else None,
             "search": search,
         },
         "creditos": creditos_out,
@@ -497,6 +561,8 @@ async def reporte_cartera_datos(
     fecha_inicio: Optional[date] = Query(None, description="Fecha de inicio (YYYY-MM-DD)"),
     fecha_fin: Optional[date] = Query(None, description="Fecha de fin (YYYY-MM-DD)"),
     periodo_preset: Optional[str] = Query("mes", description="Preset de periodo: hoy, semana, mes, todos"),
+    ciudad_venta: Optional[str] = Query(None, description="Filtrar por ciudad o localidad de venta"),
+    numero_contrato: Optional[str] = Query(None, description="Filtrar por número de contrato o folio"),
     search: Optional[str] = Query(None, description="Búsqueda por cliente o cédula"),
     db: AsyncSession = Depends(get_db),
     current_user: Usuario = Depends(require_supervisor_o_secretaria),
@@ -508,6 +574,8 @@ async def reporte_cartera_datos(
         fecha_inicio=fecha_inicio,
         fecha_fin=fecha_fin,
         periodo_preset=periodo_preset,
+        ciudad_venta=ciudad_venta,
+        numero_contrato=numero_contrato,
         search=search,
     )
 
@@ -522,6 +590,8 @@ async def reporte_cartera_pdf(
     fecha_inicio: Optional[date] = Query(None, description="Fecha de inicio (YYYY-MM-DD)"),
     fecha_fin: Optional[date] = Query(None, description="Fecha de fin (YYYY-MM-DD)"),
     periodo_preset: Optional[str] = Query("mes", description="Preset de periodo: hoy, semana, mes, todos"),
+    ciudad_venta: Optional[str] = Query(None, description="Filtrar por ciudad o localidad de venta"),
+    numero_contrato: Optional[str] = Query(None, description="Filtrar por número de contrato o folio"),
     search: Optional[str] = Query(None, description="Búsqueda por cliente o cédula"),
     db: AsyncSession = Depends(get_db),
     current_user: Usuario = Depends(require_supervisor_o_secretaria),
@@ -533,6 +603,8 @@ async def reporte_cartera_pdf(
         fecha_inicio=fecha_inicio,
         fecha_fin=fecha_fin,
         periodo_preset=periodo_preset,
+        ciudad_venta=ciudad_venta,
+        numero_contrato=numero_contrato,
         search=search,
     )
 
@@ -564,6 +636,8 @@ async def reporte_calendario_mensual(
     year: Optional[int] = Query(None, description="Año a consultar (ej. 2026)"),
     month: Optional[int] = Query(None, ge=1, le=12, description="Mes a consultar (1..12)"),
     cobrador_id: Optional[UUID] = Query(None, description="ID del cobrador asignado"),
+    ciudad_venta: Optional[str] = Query(None, description="Filtrar por ciudad o localidad de venta"),
+    numero_contrato: Optional[str] = Query(None, description="Filtrar por número de contrato o folio"),
     search: Optional[str] = Query(None, description="Búsqueda por cliente o contrato"),
     db: AsyncSession = Depends(get_db),
     current_user: Usuario = Depends(require_supervisor_o_secretaria),
@@ -580,6 +654,8 @@ async def reporte_calendario_mensual(
         db=db,
         cobrador_id=c_id,
         periodo_preset="todos",
+        ciudad_venta=ciudad_venta,
+        numero_contrato=numero_contrato,
         search=s_term,
     )
     creditos = datos_cartera.get("creditos", [])

@@ -75,6 +75,46 @@ app.add_middleware(
     expose_headers=["Content-Disposition"],
 )
 
+# Router de alias para /config
+from app.routers.configuracion import (
+    _obtener_ciudades_venta,
+    _guardar_ciudades_venta,
+    CiudadesVentaRequest,
+    AgregarCiudadRequest,
+)
+from app.core.deps import require_supervisor
+from fastapi import APIRouter, Depends, HTTPException
+
+config_alias_router = APIRouter(prefix="/config", tags=["Configuración Global"])
+
+
+@config_alias_router.get("/ciudades", summary="Obtener lista dinámica de ciudades operativas autorizadas")
+async def get_config_ciudades_alias():
+    """Retorna la lista de ciudades autorizadas para radicación de ventas y créditos."""
+    ciudades = _obtener_ciudades_venta()
+    return {"success": True, "ciudades": ciudades, "total": len(ciudades)}
+
+
+@config_alias_router.put("/ciudades", summary="Actualizar lista de ciudades operativas")
+async def put_config_ciudades_alias(datos: CiudadesVentaRequest, current_user=Depends(require_supervisor)):
+    ciudades = _guardar_ciudades_venta(datos.ciudades)
+    return {"success": True, "ciudades": ciudades, "total": len(ciudades)}
+
+
+@config_alias_router.post("/ciudades", summary="Agregar una nueva ciudad operativa")
+async def post_config_ciudades_alias(datos: AgregarCiudadRequest, current_user=Depends(require_supervisor)):
+    ciudad_nueva = datos.ciudad.strip()
+    ciudades_actuales = _obtener_ciudades_venta()
+    if any(c.lower() == ciudad_nueva.lower() for c in ciudades_actuales):
+        raise HTTPException(
+            status_code=400,
+            detail=f"La ciudad '{ciudad_nueva}' ya se encuentra registrada en el sistema.",
+        )
+    ciudades_actuales.append(ciudad_nueva)
+    resultado = _guardar_ciudades_venta(ciudades_actuales)
+    return {"success": True, "ciudades": resultado, "total": len(resultado)}
+
+
 # Registro de rutas principales
 app.include_router(health_router)
 app.include_router(auth_router)
@@ -85,6 +125,7 @@ app.include_router(creditos_router)
 app.include_router(abonos_router)
 app.include_router(reportes_router)
 app.include_router(configuracion_router)
+app.include_router(config_alias_router)
 
 # Registro también bajo prefijo versionado /api/v1
 app.include_router(health_router, prefix=settings.API_V1_STR)
@@ -96,6 +137,7 @@ app.include_router(creditos_router, prefix=settings.API_V1_STR)
 app.include_router(abonos_router, prefix=settings.API_V1_STR)
 app.include_router(reportes_router, prefix=settings.API_V1_STR)
 app.include_router(configuracion_router, prefix=settings.API_V1_STR)
+app.include_router(config_alias_router, prefix=settings.API_V1_STR)
 
 
 

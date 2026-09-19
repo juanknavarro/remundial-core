@@ -358,18 +358,22 @@ def generar_pdf_reporte_ventas(
     f_fin = filtros.get("fecha_fin") or "Fecha actual"
     f_tipo = filtros.get("tipo_venta", "todos").capitalize()
     f_cliente = filtros.get("cliente_nombre") or "Todos los clientes"
+    f_ciudad = filtros.get("ciudad_venta") or "Todas las Localidades"
+    f_contrato = filtros.get("numero_contrato") or "Todos"
 
     filter_box_data = [
         [
-            Paragraph("<b>Rango de Fecha:</b>", filter_label_style),
-            Paragraph(f"{f_inicio}  al  {f_fin}", filter_val_style),
-            Paragraph("<b>Modalidad de Venta:</b>", filter_label_style),
+            Paragraph("<b>Rango Fecha:</b>", filter_label_style),
+            Paragraph(f"{f_inicio} al {f_fin}", filter_val_style),
+            Paragraph("<b>Modalidad:</b>", filter_label_style),
             Paragraph(f"{f_tipo}", filter_val_style),
-            Paragraph("<b>Filtro Cliente:</b>", filter_label_style),
-            Paragraph(f"{f_cliente}", filter_val_style),
+            Paragraph("<b>Localidad:</b>", filter_label_style),
+            Paragraph(f"{f_ciudad}", filter_val_style),
+            Paragraph("<b>Filtro Folio:</b>", filter_label_style),
+            Paragraph(f"{f_contrato}", filter_val_style),
         ]
     ]
-    filter_box = Table(filter_box_data, colWidths=[80, 160, 100, 120, 80, 180])
+    filter_box = Table(filter_box_data, colWidths=[70, 130, 65, 80, 65, 110, 70, 130])
     filter_box.setStyle(
         TableStyle([
             ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#F8FAFC")),
@@ -541,8 +545,10 @@ def generar_pdf_reporte_ventas(
             monto_str = format_cop(op.get("monto_total", 0))
             saldo_str = format_cop(op.get("saldo_pendiente", 0))
 
+            contrato_str = op.get("codigo_contrato") or f"CTR-{str(op.get('id_contrato', ''))[:8].upper()}"
+            ciu_str = op.get("ciudad_venta") or "Montería"
             table_rows.append([
-                Paragraph(f"<b>{contrato_str}</b>", table_cell_bold),
+                Paragraph(f"<b>{contrato_str}</b><br/><font color='#64748B' size='6'>{ciu_str}</font>", table_cell_bold),
                 Paragraph(fecha_str, table_cell_style),
                 Paragraph(cliente_info, table_cell_style),
                 Paragraph(modalidad_text, badge_style),
@@ -781,11 +787,14 @@ def generar_pdf_reporte_cartera(
     cobrador_str = filtros.get("cobrador_nombre") or "Todos los Cobradores"
     periodo_str = filtros.get("periodo_texto") or "Jornada Completa"
     fecha_rango = f"{filtros.get('fecha_inicio', '')} al {filtros.get('fecha_fin', '')}".strip(" al ")
+    ciudad_str = filtros.get("ciudad_venta") or "Todas las Localidades"
+    contrato_str = filtros.get("numero_contrato")
 
     header_right = [
         Paragraph(f"<b>Supervisor Auditor:</b> {usuario_auditor}", table_cell_style),
         Paragraph(f"<b>Cobrador / Ruta:</b> {cobrador_str}", table_cell_style),
-        Paragraph(f"<b>Periodo Auditado:</b> {periodo_str} {('(' + fecha_rango + ')') if fecha_rango else ''}", table_cell_style),
+        Paragraph(f"<b>Localidad Geográfica:</b> {ciudad_str}" + (f" • <b>Folio:</b> {contrato_str}" if contrato_str else ""), table_cell_style),
+        Paragraph(f"<b>Periodo:</b> {periodo_str} {('(' + fecha_rango + ')') if fecha_rango else ''}", table_cell_style),
         Paragraph(f"<b>Emisión:</b> {fecha_emision_str}", table_cell_style),
     ]
 
@@ -861,7 +870,8 @@ def generar_pdf_reporte_cartera(
         for c in creditos:
             contrato_code = c.get("codigo_contrato") or f"CTR-{str(c.get('id_contrato', ''))[:8].upper()}"
             f_inicio = str(c.get("fecha_inicio") or "")[:10]
-            contrato_cell = f"<b>{contrato_code}</b><br/><font color='#64748B' size='6.5'>{f_inicio}</font>"
+            ciu_cartera = c.get("ciudad_venta") or "Montería"
+            contrato_cell = f"<b>{contrato_code}</b><br/><font color='#64748B' size='6.5'>{f_inicio} • {ciu_cartera}</font>"
 
             cliente_nom = c.get("cliente_nombre") or "Cliente Titular"
             cliente_ced = c.get("cliente_cedula") or ""

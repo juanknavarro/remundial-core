@@ -211,6 +211,15 @@ class CreditoBase(BaseModel):
     vendedor_id: Optional[UUID] = Field(None, description="UUID del asesor comercial que originó la venta")
     supervisor_id: Optional[UUID] = Field(None, description="UUID del supervisor a cargo")
     cobrador_id: Optional[UUID] = Field(None, description="UUID del cobrador asignado a la ruta")
+    numero_contrato: Optional[str] = Field(
+        None, max_length=50, description="Número o consecutivo del contrato original/físico si aplica"
+    )
+    generacion_automatica_contrato: Optional[bool] = Field(
+        None, description="Indica si se solicitó la generación automática del número de contrato"
+    )
+    ciudad_venta: Optional[str] = Field(
+        None, max_length=100, description="Ciudad o municipio donde se celebró la venta"
+    )
     estado: EstadoCredito = Field(
         default=EstadoCredito.PENDIENTE,
         description="Estado inicial del crédito (pendiente, activo, etc.)",
@@ -346,6 +355,8 @@ class CreditoUpdate(BaseModel):
     estado: Optional[Union[EstadoCredito, str]] = None
     supervisor_id: Optional[UUID] = None
     cobrador_id: Optional[UUID] = None
+    numero_contrato: Optional[str] = Field(None, max_length=50)
+    ciudad_venta: Optional[str] = Field(None, max_length=100)
     saldo_pendiente: Optional[Decimal] = Field(None, ge=0)
     codeudor: Optional[CodeudorCreate] = None
     referencia: Optional[ReferenciaFamiliarCreate] = None
@@ -370,6 +381,7 @@ class CreditoUpdate(BaseModel):
 class CreditoResponse(CreditoBase):
     """Esquema de salida completo para un crédito originado."""
     id_contrato: UUID
+    codigo_contrato: Optional[str] = None
     saldo_pendiente: Decimal
     creado_en: datetime
     actualizado_en: datetime
@@ -404,6 +416,14 @@ class CreditoResponse(CreditoBase):
             financiado == Decimal("0.00")
             or (cuotas <= 1 and saldo == Decimal("0.00"))
         )
+
+        # Resolver identificador legible del contrato (físico/manual si existe, o sintético CTR-XXXXXXXX)
+        if self.numero_contrato and self.numero_contrato.strip():
+            self.codigo_contrato = self.numero_contrato.strip()
+            self.generacion_automatica_contrato = False
+        else:
+            self.codigo_contrato = f"CTR-{str(self.id_contrato)[:8].upper()}"
+            self.generacion_automatica_contrato = True
 
         if self.numero_cuotas > 0 and self.fecha_primera_cuota:
             res = generar_cronograma_con_arrastre(

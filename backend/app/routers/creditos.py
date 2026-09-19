@@ -345,6 +345,8 @@ async def listar_creditos(
     cobrador_id: Optional[UUID] = Query(None, description="Filtrar por cobrador asignado"),
     estado: Optional[EstadoCredito] = Query(None, description="Filtrar por estado del crédito"),
     fecha: Optional[date] = Query(None, description="Filtrar por fecha de creación (YYYY-MM-DD)"),
+    ciudad_venta: Optional[str] = Query(None, description="Filtrar por ciudad o municipio de venta"),
+    numero_contrato: Optional[str] = Query(None, description="Filtrar por número de contrato"),
     solo_exigibles: Optional[bool] = Query(None, description="Filtrar cuotas exigibles hoy o vencidas"),
     solo_cartera_critica: Optional[bool] = Query(None, description="Filtrar créditos en cartera crítica (>= 3 cuotas vencidas)"),
     db: AsyncSession = Depends(get_db),
@@ -368,6 +370,8 @@ async def listar_creditos(
         cobrador_id=cobrador_id,
         estado=estado,
         fecha=fecha,
+        ciudad_venta=ciudad_venta,
+        numero_contrato=numero_contrato,
         solo_exigibles=solo_exigibles,
         solo_cartera_critica=solo_cartera_critica,
     )

@@ -76,6 +76,61 @@ class IdentidadVisualRequest(BaseModel):
     pie_mobile: Optional[str] = Field(None, max_length=300)
 
 
+DEFAULT_CIUDADES_VENTA: List[str] = [
+    "Montería",
+    "Cereté",
+    "Lorica",
+    "Sincelejo",
+    "Chinú",
+    "Sahagún",
+    "Planeta Rica",
+    "Montelíbano",
+    "Ciénaga de Oro",
+    "San Pelayo",
+    "Tierralta",
+    "Corozal",
+]
+
+
+class CiudadesVentaRequest(BaseModel):
+    ciudades: List[str] = Field(..., min_length=1, description="Lista de ciudades operativas autorizadas")
+
+
+class AgregarCiudadRequest(BaseModel):
+    ciudad: str = Field(..., min_length=2, max_length=100, description="Nombre de la ciudad o municipio a agregar")
+
+
+def _obtener_ciudades_venta() -> List[str]:
+    """Obtiene la lista actual de ciudades de venta autorizadas."""
+    params = _obtener_parametros_locales()
+    ciudades = params.get("ciudades_venta")
+    if not ciudades or not isinstance(ciudades, list):
+        ciudades = list(DEFAULT_CIUDADES_VENTA)
+    resultado = []
+    for c in ciudades:
+        c_str = str(c).strip()
+        if c_str and c_str not in resultado:
+            resultado.append(c_str)
+    return resultado or list(DEFAULT_CIUDADES_VENTA)
+
+
+def _guardar_ciudades_venta(ciudades: List[str]) -> List[str]:
+    """Persiste la lista de ciudades de venta en el archivo de configuración."""
+    resultado = []
+    for c in ciudades:
+        c_str = str(c).strip()
+        if c_str and c_str not in resultado:
+            resultado.append(c_str)
+    if not resultado:
+        resultado = list(DEFAULT_CIUDADES_VENTA)
+    current = _obtener_parametros_locales()
+    current["ciudades_venta"] = resultado
+    os.makedirs(os.path.dirname(CONFIG_FILE_PATH), exist_ok=True)
+    with open(CONFIG_FILE_PATH, "w", encoding="utf-8") as f:
+        json.dump(current, f, ensure_ascii=False, indent=2)
+    return resultado
+
+
 def _obtener_parametros_locales() -> Dict[str, Any]:
     """Carga los parámetros operativos y reglas de negocio vigentes."""
     defaults = {
@@ -110,6 +165,7 @@ def _obtener_parametros_locales() -> Dict[str, Any]:
             "modulo_migracion_activo": True,
             "formato_migracion": "Excel (.xlsx Multi-Hoja)",
         },
+        "ciudades_venta": list(DEFAULT_CIUDADES_VENTA),
         "plantillas_pdf": obtener_configuracion_pdf(),
     }
     if os.path.exists(CONFIG_FILE_PATH):
@@ -265,6 +321,99 @@ async def obtener_identidad_publica() -> Dict[str, Any]:
         "pie_mobile": vis.get("pie_mobile", "Remundial Core v1.2.0 • Operaciones de Campo"),
         "tiene_logo": tiene_logo,
         "logo_url": f"/configuracion/logo?t={logo_ts}" if tiene_logo else None,
+    }
+
+
+@router.get(
+    "/ciudades",
+    summary="Obtener lista dinámica de ciudades operativas de venta",
+    status_code=status.HTTP_200_OK,
+)
+async def obtener_ciudades():
+    """Retorna la lista de localidades permitidas y configuradas para radicación de ventas y créditos."""
+    ciudades = _obtener_ciudades_venta()
+    return {
+        "success": True,
+        "ciudades": ciudades,
+        "total": len(ciudades),
+    }
+
+
+@router.put(
+    "/ciudades",
+    summary="Actualizar catálogo completo de ciudades operativas de venta",
+    status_code=status.HTTP_200_OK,
+)
+async def actualizar_ciudades(
+    datos: CiudadesVentaRequest,
+    current_user: Usuario = Depends(require_supervisor),
+):
+    """Permite al supervisor o administrador actualizar el catálogo de municipios autorizados."""
+    ciudades = _guardar_ciudades_venta(datos.ciudades)
+    return {
+        "success": True,
+        "mensaje": "Listado de ciudades operativas actualizado exitosamente.",
+        "ciudades": ciudades,
+        "total": len(ciudades),
+    }
+
+
+@router.post(
+    "/ciudades",
+    summary="Agregar una nueva ciudad operativa de venta",
+    status_code=status.HTTP_200_OK,
+)
+async def agregar_ciudad(
+    datos: AgregarCiudadRequest,
+    current_user: Usuario = Depends(require_supervisor),
+):
+    """Permite registrar una nueva localidad comercial en la configuración del sistema."""
+    ciudad_nueva = datos.ciudad.strip()
+    ciudades_actuales = _obtener_ciudades_venta()
+    if any(c.lower() == ciudad_nueva.lower() for c in ciudades_actuales):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"La ciudad '{ciudad_nueva}' ya se encuentra registrada en el sistema.",
+        )
+    ciudades_actuales.append(ciudad_nueva)
+    resultado = _guardar_ciudades_venta(ciudades_actuales)
+    return {
+        "success": True,
+        "mensaje": f"Ciudad '{ciudad_nueva}' agregada exitosamente.",
+        "ciudades": resultado,
+        "total": len(resultado),
+    }
+
+
+@router.delete(
+    "/ciudades/{ciudad}",
+    summary="Eliminar una ciudad operativa de venta",
+    status_code=status.HTTP_200_OK,
+)
+async def eliminar_ciudad(
+    ciudad: str,
+    current_user: Usuario = Depends(require_supervisor),
+):
+    """Permite remover una localidad del catálogo activo de ciudades permitidas."""
+    ciudad_limpia = ciudad.strip().lower()
+    ciudades_actuales = _obtener_ciudades_venta()
+    nuevas = [c for c in ciudades_actuales if c.lower() != ciudad_limpia]
+    if len(nuevas) == len(ciudades_actuales):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"La ciudad '{ciudad}' no fue encontrada en la lista activa.",
+        )
+    if not nuevas:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="No es posible eliminar todas las ciudades. Debe existir al menos una localidad activa.",
+        )
+    resultado = _guardar_ciudades_venta(nuevas)
+    return {
+        "success": True,
+        "mensaje": f"Ciudad '{ciudad}' eliminada exitosamente.",
+        "ciudades": resultado,
+        "total": len(resultado),
     }
 
 
@@ -529,12 +678,14 @@ async def descargar_plantilla_migracion(
     ws_cred.views.sheetView[0].showGridLines = True
 
     headers_cred = [
+        ("Numero_Contrato", 20, align_center, "@"),
         ("Cedula_Cliente", 18, align_center, "@"),
         ("Valor_Total", 18, align_right, "$#,##0"),
         ("Plazo_Cuotas", 16, align_center, "#,##0"),
         ("Cuotas_Pagadas", 16, align_center, "#,##0"),
         ("Saldo_Insoluto_Actual", 22, align_right, "$#,##0"),
         ("Fecha_Credito", 18, align_center, "yyyy-mm-dd"),
+        ("Ciudad_Venta", 20, align_center, "@"),
         ("Codigo_Articulo_SKU", 22, align_center, "@"),
         ("Cobrador_Asignado", 28, align_center, "@"),
     ]
@@ -549,10 +700,10 @@ async def descargar_plantilla_migracion(
 
     ws_cred.row_dimensions[1].height = 28
 
-    # Ejemplos reales: Cobrador_Asignado acepta Documento, Teléfono o Nombre (Opcional)
+    # Ejemplos reales con Numero_Contrato, Ciudad_Venta y Cobrador_Asignado opcional
     ejemplos_cred = [
-        ("1065823411", 600000, 6, 2, 400000, "2026-01-15", "ART-001", "Carlos Cobrador"),
-        ("1067234589", 450000, 4, 1, 337500, "2026-02-10", "ART-002", "1065998877"),
+        ("CTR-2025-1042", "1065823411", 600000, 6, 2, 400000, "2026-01-15", "Montería", "ART-001", "Carlos Cobrador"),
+        ("CTR-2026-0089", "1067234589", 450000, 4, 1, 337500, "2026-02-10", "Cereté", "ART-002", "1065998877"),
     ]
 
     for r_idx, row_data in enumerate(ejemplos_cred, start=2):
@@ -565,7 +716,7 @@ async def descargar_plantilla_migracion(
             cell.alignment = headers_cred[c_idx - 1][2]
             cell.number_format = headers_cred[c_idx - 1][3]
 
-    # Validación de datos para Plazo_Cuotas en Hoja 3 (Solo 2, 4, 6 o 9)
+    # Validación de datos para Plazo_Cuotas en Hoja 3 (Solo 2, 4, 6 o 9) - Columna D
     dv_plazos = DataValidation(
         type="list",
         formula1='"2,4,6,9"',
@@ -576,7 +727,21 @@ async def descargar_plantilla_migracion(
         promptTitle="Plazos Autorizados",
     )
     ws_cred.add_data_validation(dv_plazos)
-    dv_plazos.add("C2:C5000")
+    dv_plazos.add("D2:D5000")
+
+    # Validación y lista sugerida de ciudades para Ciudad_Venta en Hoja 3 - Columna H
+    lista_ciudades_str = ','.join(_obtener_ciudades_venta())
+    dv_ciudades = DataValidation(
+        type="list",
+        formula1=f'"{lista_ciudades_str}"',
+        allow_blank=True,
+        error="Seleccione una ciudad de la lista sugerida o ingrese el municipio correspondiente.",
+        errorTitle="Ciudad de Venta",
+        prompt="Seleccione o escriba la ciudad donde se celebró la venta",
+        promptTitle="Ciudad Comercial",
+    )
+    ws_cred.add_data_validation(dv_ciudades)
+    dv_ciudades.add("H2:H5000")
 
     # -------------------------------------------------------------
     # HOJA 4: Instrucciones
@@ -603,11 +768,13 @@ async def descargar_plantilla_migracion(
         ("1. Estructura del Libro", "No cambie los nombres ni el orden de las 4 hojas del archivo. El sistema reconoce automáticamente 'Inventario', 'Clientes_y_Referencias' y 'Creditos_Historicos'."),
         ("2. Hoja 'Inventario'", "Diligencie los códigos SKU únicos, descripciones, precio base y existencias físicas iniciales (sin columna de categoría). Si un producto ya existe en catálogo, el sistema sumará el stock sin duplicar el registro."),
         ("3. Hoja 'Clientes'", "La Cédula es la clave primaria de vinculación. Debe ingresar los datos obligatorios del cliente y sus contactos de respaldo (Codeudor solidario y Referencia familiar)."),
-        ("4. Regla de Plazos (Estricta)", "En la columna 'Plazo_Cuotas' solo se permiten exactamente 2, 4, 6 o 9 cuotas mensuales. Cualquier otro valor detendrá la importación de esa fila."),
-        ("5. Fechas Históricas Reales", "En 'Fecha_Credito' ingrese la fecha real en que nació el crédito (formato AAAA-MM-DD o formato fecha estándar). El sistema respetará dicha fecha original sin forzar recálculos retroactivos erróneos."),
-        ("6. Saldo Insoluto y Cuotas", "Indique las 'Cuotas_Pagadas' y el 'Saldo_Insoluto_Actual'. Si el crédito ya está liquidado (saldo 0), el sistema lo registrará automáticamente como 'terminado'."),
-        ("7. Asignación de Cobrador (Opcional)", "En 'Cobrador_Asignado' puede ingresar el documento (cédula), teléfono o nombre del cobrador ya existente en el sistema. Si se deja vacío o no coincide, el crédito quedará listo para asignación de ruta posterior desde Cartera."),
-        ("8. Idempotencia y Seguridad", "El cargue es transaccional. Las filas de ejemplo sombreadas en gris pueden ser borradas o reemplazadas por sus registros reales."),
+        ("4. Número de Contrato (Opcional)", "En 'Numero_Contrato' puede registrar el folio, número de talonario físico o código del contrato original de su sistema anterior (ej. CTR-2025-1042 o 0451). Si se deja vacío, el sistema autogenerará un identificador único seguro. Si se especifica, debe ser único en el sistema."),
+        ("5. Ciudad de Venta", "En 'Ciudad_Venta' indique el municipio donde se realizó la operación comercial (ej: Montería, Cereté, Lorica, Sincelejo). Si se deja en blanco, tomará automáticamente la ciudad registrada del cliente titular."),
+        ("6. Regla de Plazos (Estricta)", "En la columna 'Plazo_Cuotas' solo se permiten exactamente 2, 4, 6 o 9 cuotas mensuales. Cualquier otro valor detendrá la importación de esa fila."),
+        ("7. Fechas Históricas Reales", "En 'Fecha_Credito' ingrese la fecha real en que nació el crédito (formato AAAA-MM-DD o formato fecha estándar). El sistema respetará dicha fecha original sin forzar recálculos retroactivos erróneos."),
+        ("8. Saldo Insoluto y Cuotas", "Indique las 'Cuotas_Pagadas' y el 'Saldo_Insoluto_Actual'. Si el crédito ya está liquidado (saldo 0), el sistema lo registrará automáticamente como 'terminado'."),
+        ("9. Asignación de Cobrador (Opcional)", "En 'Cobrador_Asignado' puede ingresar el documento (cédula), teléfono o nombre del cobrador ya existente en el sistema. Si se deja vacío o no coincide, el crédito quedará listo para asignación de ruta posterior desde Cartera."),
+        ("10. Idempotencia y Seguridad", "El cargue es transaccional. Las filas de ejemplo sombreadas en gris pueden ser borradas o reemplazadas por sus registros reales."),
     ]
 
     for idx, (seccion, detalle) in enumerate(instrucciones_data, start=5):
@@ -894,14 +1061,18 @@ async def procesar_migracion_masiva(
     headers_cred = [cell.value for cell in ws_cred[1] if cell.value is not None]
     h_cred_map = {str(h).strip().lower(): idx for idx, h in enumerate(headers_cred, start=1)}
 
-    col_cr_ced = h_cred_map.get("cedula_cliente") or h_cred_map.get("cedula") or 1
-    col_cr_val = h_cred_map.get("valor_total") or h_cred_map.get("monto_total") or 2
-    col_cr_plz = h_cred_map.get("plazo_cuotas") or h_cred_map.get("plazo") or 3
-    col_cr_pag = h_cred_map.get("cuotas_pagadas") or 4
-    col_cr_sal = h_cred_map.get("saldo_insoluto_actual") or h_cred_map.get("saldo_pendiente") or 5
-    col_cr_fec = h_cred_map.get("fecha_credito") or h_cred_map.get("fecha") or 6
-    col_cr_sku = h_cred_map.get("codigo_articulo_sku") or h_cred_map.get("sku") or 7
-    col_cr_cob = h_cred_map.get("cobrador_asignado") or h_cred_map.get("cobrador") or 8
+    col_cr_num = h_cred_map.get("numero_contrato") or h_cred_map.get("contrato") or h_cred_map.get("folio")
+    col_cr_ced = h_cred_map.get("cedula_cliente") or h_cred_map.get("cedula") or (2 if col_cr_num == 1 else 1)
+    col_cr_val = h_cred_map.get("valor_total") or h_cred_map.get("monto_total") or (3 if col_cr_num == 1 else 2)
+    col_cr_plz = h_cred_map.get("plazo_cuotas") or h_cred_map.get("plazo") or (4 if col_cr_num == 1 else 3)
+    col_cr_pag = h_cred_map.get("cuotas_pagadas") or (5 if col_cr_num == 1 else 4)
+    col_cr_sal = h_cred_map.get("saldo_insoluto_actual") or h_cred_map.get("saldo_pendiente") or (6 if col_cr_num == 1 else 5)
+    col_cr_fec = h_cred_map.get("fecha_credito") or h_cred_map.get("fecha") or (7 if col_cr_num == 1 else 6)
+    col_cr_ciu = h_cred_map.get("ciudad_venta") or h_cred_map.get("ciudad") or h_cred_map.get("municipio")
+    col_cr_sku = h_cred_map.get("codigo_articulo_sku") or h_cred_map.get("sku") or (9 if col_cr_num == 1 else 7)
+    col_cr_cob = h_cred_map.get("cobrador_asignado") or h_cred_map.get("cobrador") or (10 if col_cr_num == 1 else 8)
+
+    contratos_procesados_set = set()
 
     # Asegurar producto comodín para créditos migrados sin SKU de catálogo
     res_mighist = await db.execute(select(Producto).where(Producto.sku == "MIG-HIST"))
@@ -1058,13 +1229,56 @@ async def procesar_migracion_masiva(
         if not prod_target:
             prod_target = prod_mig_hist
 
-        # 8. Crear contrato de crédito histórico con fechas reales
+        # Extraer Numero_Contrato y Ciudad_Venta
+        numero_contrato_val = None
+        if col_cr_num:
+            raw_num = ws_cred.cell(row=row_idx, column=col_cr_num).value
+            if raw_num is not None and str(raw_num).strip():
+                numero_contrato_val = str(raw_num).strip()
+
+        ciudad_venta_val = None
+        if col_cr_ciu:
+            raw_ciu = ws_cred.cell(row=row_idx, column=col_cr_ciu).value
+            if raw_ciu is not None and str(raw_ciu).strip():
+                ciudad_venta_val = str(raw_ciu).strip()
+
+        if not ciudad_venta_val:
+            ciudad_venta_val = getattr(cliente_obj, "ciudad", None) or "Montería"
+
+        # Validar unicidad si se provee numero_contrato
+        if numero_contrato_val:
+            if numero_contrato_val.upper() in contratos_procesados_set:
+                errores.append({
+                    "hoja": "Creditos_Historicos",
+                    "fila": row_idx,
+                    "motivo": f"El número de contrato '{numero_contrato_val}' está duplicado en este archivo Excel.",
+                })
+                resumen["creditos_omitidos"] += 1
+                continue
+
+            res_dup = await db.execute(
+                select(Credito.id_contrato).where(Credito.numero_contrato.ilike(numero_contrato_val))
+            )
+            if res_dup.scalar_one_or_none():
+                errores.append({
+                    "hoja": "Creditos_Historicos",
+                    "fila": row_idx,
+                    "motivo": f"El número de contrato '{numero_contrato_val}' ya existe registrado en la base de datos.",
+                })
+                resumen["creditos_omitidos"] += 1
+                continue
+
+            contratos_procesados_set.add(numero_contrato_val.upper())
+
+        # 8. Crear contrato de crédito histórico con fechas reales, número de contrato y ciudad
         dt_creacion = datetime.combine(fecha_real, datetime.min.time())
         nuevo_credito = Credito(
             cliente_id=cliente_obj.id,
             vendedor_id=current_user.id,
             supervisor_id=current_user.id if current_user.rol in (RolUsuario.SUPERVISOR, RolUsuario.MASTER) else None,
             cobrador_id=cobrador_id,
+            numero_contrato=numero_contrato_val,
+            ciudad_venta=ciudad_venta_val,
             estado=estado_cred,
             tipo_pago=TipoPago.MENSUAL,
             cuota_inicial=Decimal("0.00"),

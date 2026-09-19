@@ -614,7 +614,12 @@ def generar_pdf_recibo_venta(credito: Credito) -> bytes:
     )
 
     # 1. EXTRACCIÓN Y FORMATEO DE METADATOS CON TIMESTAMP LOCAL REAL
-    codigo_ctr = f"CTR-{str(credito.id_contrato)[:8].upper()}"
+    num_manual = getattr(credito, "numero_contrato", None)
+    codigo_ctr = (
+        num_manual.strip()
+        if (num_manual and num_manual.strip())
+        else f"CTR-{str(credito.id_contrato)[:8].upper()}"
+    )
     dt_orden = getattr(credito, "creado_en", None) or datetime.now()
     dt_local = obtener_timestamp_local_servidor(dt_orden)
     fecha_emision = dt_local.strftime("%d/%m/%Y %I:%M %p")

@@ -148,6 +148,8 @@ CREATE TABLE IF NOT EXISTS creditos (
     valor_cuota NUMERIC(12, 2) NOT NULL CHECK (valor_cuota > 0),
     fecha_primera_cuota DATE NOT NULL,
     saldo_pendiente NUMERIC(12, 2) NOT NULL CHECK (saldo_pendiente >= 0),
+    numero_contrato VARCHAR(50),
+    ciudad_venta VARCHAR(100),
     creado_en TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
     actualizado_en TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
@@ -276,6 +278,9 @@ CREATE INDEX IF NOT EXISTS idx_creditos_supervisor_id ON creditos (supervisor_id
 CREATE INDEX IF NOT EXISTS idx_creditos_cobrador_id ON creditos (cobrador_id);
 CREATE INDEX IF NOT EXISTS idx_creditos_estado ON creditos (estado);
 CREATE INDEX IF NOT EXISTS idx_creditos_fecha_primera_cuota ON creditos (fecha_primera_cuota);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_creditos_numero_contrato ON creditos (numero_contrato) WHERE numero_contrato IS NOT NULL AND TRIM(numero_contrato) != '';
+CREATE INDEX IF NOT EXISTS idx_creditos_numero_contrato ON creditos (numero_contrato);
+CREATE INDEX IF NOT EXISTS idx_creditos_ciudad_venta ON creditos (ciudad_venta);
 
 -- Detalle Crédito (FK lookups)
 CREATE INDEX IF NOT EXISTS idx_credito_detalle_credito_id ON credito_detalle (credito_id);

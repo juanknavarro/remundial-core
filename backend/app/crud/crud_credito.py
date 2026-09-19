@@ -4,7 +4,7 @@ from typing import List, Optional
 from uuid import UUID
 
 from fastapi import HTTPException, status
-from sqlalchemy import cast, func, select, String
+from sqlalchemy import cast, func, or_, select, String
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -83,7 +83,7 @@ async def get_credito_por_id_o_hash(db: AsyncSession, id_o_hash: str) -> Optiona
     except (ValueError, TypeError, AttributeError):
         pass
 
-    # 2. Si es un hash corto o código de contrato, buscar por coincidencia inicial en id_contrato
+    # 2. Si es un hash corto, código de contrato o número de contrato manual, buscar por coincidencia
     query = (
         select(Credito)
         .options(
@@ -93,7 +93,13 @@ async def get_credito_por_id_o_hash(db: AsyncSession, id_o_hash: str) -> Optiona
             selectinload(Credito.supervisor),
             selectinload(Credito.cobrador),
         )
-        .where(cast(Credito.id_contrato, String).ilike(f"{clean}%"))
+        .where(
+            or_(
+                Credito.numero_contrato == raw,
+                Credito.numero_contrato == clean,
+                cast(Credito.id_contrato, String).ilike(f"{clean}%"),
+            )
+        )
         .order_by(Credito.creado_en.desc())
     )
     result = await db.execute(query)
@@ -109,6 +115,8 @@ async def get_creditos(
     cobrador_id: Optional[UUID] = None,
     estado: Optional[EstadoCredito] = None,
     fecha: Optional[date] = None,
+    ciudad_venta: Optional[str] = None,
+    numero_contrato: Optional[str] = None,
     solo_exigibles: Optional[bool] = None,
     solo_cartera_critica: Optional[bool] = None,
 ) -> List[Credito]:
@@ -137,6 +145,10 @@ async def get_creditos(
         query = query.where(Credito.estado == estado)
     if fecha:
         query = query.where(func.date(Credito.creado_en) == fecha)
+    if ciudad_venta:
+        query = query.where(Credito.ciudad_venta.ilike(ciudad_venta.strip()))
+    if numero_contrato:
+        query = query.where(Credito.numero_contrato.ilike(f"%{numero_contrato.strip()}%"))
 
     result = await db.execute(query)
     creditos = list(result.scalars().all())
@@ -299,11 +311,26 @@ async def create_credito(db: AsyncSession, credito_in: CreditoCreate) -> Credito
 
     try:
         # A. Insertar cabecera del crédito
+        if getattr(credito_in, "generacion_automatica_contrato", False) is True:
+            num_contrato = None
+        else:
+            num_contrato = (
+                credito_in.numero_contrato.strip()
+                if (credito_in.numero_contrato and credito_in.numero_contrato.strip())
+                else None
+            )
+        ciu_venta = (
+            credito_in.ciudad_venta.strip()
+            if (credito_in.ciudad_venta and credito_in.ciudad_venta.strip())
+            else None
+        )
         db_credito = Credito(
             cliente_id=credito_in.cliente_id,
             vendedor_id=credito_in.vendedor_id,
             supervisor_id=credito_in.supervisor_id,
             cobrador_id=credito_in.cobrador_id,
+            numero_contrato=num_contrato,
+            ciudad_venta=ciu_venta,
             estado=estado_final,
             tipo_pago=credito_in.tipo_pago,
             cuota_inicial=credito_in.cuota_inicial,
@@ -432,6 +459,18 @@ async def update_credito(
 
     if credito_in.cobrador_id is not None:
         credito.cobrador_id = credito_in.cobrador_id
+
+    if getattr(credito_in, "generacion_automatica_contrato", None) is True:
+        credito.numero_contrato = None
+    elif credito_in.numero_contrato is not None:
+        credito.numero_contrato = (
+            credito_in.numero_contrato.strip() if credito_in.numero_contrato.strip() else None
+        )
+
+    if credito_in.ciudad_venta is not None:
+        credito.ciudad_venta = (
+            credito_in.ciudad_venta.strip() if credito_in.ciudad_venta.strip() else None
+        )
 
     if credito_in.saldo_pendiente is not None:
         credito.saldo_pendiente = credito_in.saldo_pendiente
