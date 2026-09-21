@@ -131,6 +131,11 @@ class Credito(Base):
         nullable=True,
         index=True,
     )
+    departamento_venta: Mapped[Optional[str]] = mapped_column(
+        String(100),
+        nullable=True,
+        index=True,
+    )
     creado_en: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         server_default=func.now(),

@@ -220,6 +220,9 @@ class CreditoBase(BaseModel):
     ciudad_venta: Optional[str] = Field(
         None, max_length=100, description="Ciudad o municipio donde se celebró la venta"
     )
+    departamento_venta: Optional[str] = Field(
+        None, max_length=100, description="Departamento donde se celebró la venta (ej. Córdoba, Sucre)"
+    )
     estado: EstadoCredito = Field(
         default=EstadoCredito.PENDIENTE,
         description="Estado inicial del crédito (pendiente, activo, etc.)",
@@ -357,6 +360,7 @@ class CreditoUpdate(BaseModel):
     cobrador_id: Optional[UUID] = None
     numero_contrato: Optional[str] = Field(None, max_length=50)
     ciudad_venta: Optional[str] = Field(None, max_length=100)
+    departamento_venta: Optional[str] = Field(None, max_length=100)
     saldo_pendiente: Optional[Decimal] = Field(None, ge=0)
     codeudor: Optional[CodeudorCreate] = None
     referencia: Optional[ReferenciaFamiliarCreate] = None

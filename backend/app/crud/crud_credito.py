@@ -324,6 +324,11 @@ async def create_credito(db: AsyncSession, credito_in: CreditoCreate) -> Credito
             if (credito_in.ciudad_venta and credito_in.ciudad_venta.strip())
             else None
         )
+        dep_venta = (
+            credito_in.departamento_venta.strip()
+            if (credito_in.departamento_venta and credito_in.departamento_venta.strip())
+            else None
+        )
         db_credito = Credito(
             cliente_id=credito_in.cliente_id,
             vendedor_id=credito_in.vendedor_id,
@@ -331,6 +336,7 @@ async def create_credito(db: AsyncSession, credito_in: CreditoCreate) -> Credito
             cobrador_id=credito_in.cobrador_id,
             numero_contrato=num_contrato,
             ciudad_venta=ciu_venta,
+            departamento_venta=dep_venta,
             estado=estado_final,
             tipo_pago=credito_in.tipo_pago,
             cuota_inicial=credito_in.cuota_inicial,
@@ -470,6 +476,11 @@ async def update_credito(
     if credito_in.ciudad_venta is not None:
         credito.ciudad_venta = (
             credito_in.ciudad_venta.strip() if credito_in.ciudad_venta.strip() else None
+        )
+
+    if credito_in.departamento_venta is not None:
+        credito.departamento_venta = (
+            credito_in.departamento_venta.strip() if credito_in.departamento_venta.strip() else None
         )
 
     if credito_in.saldo_pendiente is not None:

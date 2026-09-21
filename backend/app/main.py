@@ -88,31 +88,78 @@ from fastapi import APIRouter, Depends, HTTPException
 config_alias_router = APIRouter(prefix="/config", tags=["Configuración Global"])
 
 
-@config_alias_router.get("/ciudades", summary="Obtener lista dinámica de ciudades operativas autorizadas")
+@config_alias_router.get("/ciudades", summary="Obtener catálogo estructurado de departamentos y municipios")
 async def get_config_ciudades_alias():
     """Retorna la lista de ciudades autorizadas para radicación de ventas y créditos."""
     ciudades = _obtener_ciudades_venta()
-    return {"success": True, "ciudades": ciudades, "total": len(ciudades)}
+    lista_plana = []
+    for munis in ciudades.values():
+        for m in munis:
+            if m not in lista_plana:
+                lista_plana.append(m)
+    total = sum(len(m) for m in ciudades.values())
+    return {
+        "success": True,
+        "departamentos": ciudades,
+        "ciudades": ciudades,
+        "ciudades_plano": lista_plana,
+        "total": total,
+    }
 
 
 @config_alias_router.put("/ciudades", summary="Actualizar lista de ciudades operativas")
 async def put_config_ciudades_alias(datos: CiudadesVentaRequest, current_user=Depends(require_supervisor)):
-    ciudades = _guardar_ciudades_venta(datos.ciudades)
-    return {"success": True, "ciudades": ciudades, "total": len(ciudades)}
+    payload = datos.departamentos if datos.departamentos is not None else datos.ciudades
+    ciudades = _guardar_ciudades_venta(payload)
+    lista_plana = []
+    for munis in ciudades.values():
+        for m in munis:
+            if m not in lista_plana:
+                lista_plana.append(m)
+    total = sum(len(m) for m in ciudades.values())
+    return {
+        "success": True,
+        "mensaje": "Catálogo de ciudades operativas actualizado exitosamente.",
+        "departamentos": ciudades,
+        "ciudades": ciudades,
+        "ciudades_plano": lista_plana,
+        "total": total,
+    }
 
 
 @config_alias_router.post("/ciudades", summary="Agregar una nueva ciudad operativa")
 async def post_config_ciudades_alias(datos: AgregarCiudadRequest, current_user=Depends(require_supervisor)):
-    ciudad_nueva = datos.ciudad.strip()
+    ciudad_nueva = datos.ciudad.strip().title()
+    dep = (datos.departamento or "Córdoba").strip().title()
+    if "Sucre" in dep:
+        dep = "Sucre"
+    elif "Cordoba" in dep or "Córdoba" in dep:
+        dep = "Córdoba"
+
     ciudades_actuales = _obtener_ciudades_venta()
-    if any(c.lower() == ciudad_nueva.lower() for c in ciudades_actuales):
+    if dep not in ciudades_actuales:
+        ciudades_actuales[dep] = []
+
+    if any(c.lower() == ciudad_nueva.lower() for c in ciudades_actuales[dep]):
         raise HTTPException(
             status_code=400,
-            detail=f"La ciudad '{ciudad_nueva}' ya se encuentra registrada en el sistema.",
+            detail=f"El municipio '{ciudad_nueva}' ya se encuentra registrado en {dep}.",
         )
-    ciudades_actuales.append(ciudad_nueva)
+    ciudades_actuales[dep].append(ciudad_nueva)
     resultado = _guardar_ciudades_venta(ciudades_actuales)
-    return {"success": True, "ciudades": resultado, "total": len(resultado)}
+    lista_plana = []
+    for munis in resultado.values():
+        for m in munis:
+            if m not in lista_plana:
+                lista_plana.append(m)
+    return {
+        "success": True,
+        "mensaje": f"Municipio '{ciudad_nueva}' agregado exitosamente a {dep}.",
+        "departamentos": resultado,
+        "ciudades": resultado,
+        "ciudades_plano": lista_plana,
+        "total": sum(len(m) for m in resultado.values()),
+    }
 
 
 # Registro de rutas principales
