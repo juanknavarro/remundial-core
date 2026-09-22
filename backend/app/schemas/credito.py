@@ -236,6 +236,12 @@ class CreditoBase(BaseModel):
         ge=0,
         description="Valor pagado de contado al momento de la venta",
     )
+    metodo_pago_inicial: Optional[str] = Field(
+        None, max_length=50, description="Método de pago de la cuota inicial (Efectivo / Transferencia)"
+    )
+    referencia_pago_inicial: Optional[str] = Field(
+        None, max_length=100, description="No. de comprobante o referencia de pago del anticipo"
+    )
     monto_financiado: Decimal = Field(..., ge=0, description="Valor neto a financiar en cuotas (0 para venta de contado)")
     numero_cuotas: int = Field(..., gt=0, description="Cantidad total de cuotas pactadas")
     valor_cuota: Decimal = Field(..., ge=0, description="Valor de cada cuota individual (0 para venta de contado)")
@@ -362,6 +368,8 @@ class CreditoUpdate(BaseModel):
     ciudad_venta: Optional[str] = Field(None, max_length=100)
     departamento_venta: Optional[str] = Field(None, max_length=100)
     saldo_pendiente: Optional[Decimal] = Field(None, ge=0)
+    metodo_pago_inicial: Optional[str] = Field(None, max_length=50)
+    referencia_pago_inicial: Optional[str] = Field(None, max_length=100)
     codeudor: Optional[CodeudorCreate] = None
     referencia: Optional[ReferenciaFamiliarCreate] = None
 

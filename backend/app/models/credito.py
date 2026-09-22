@@ -136,6 +136,14 @@ class Credito(Base):
         nullable=True,
         index=True,
     )
+    metodo_pago_inicial: Mapped[Optional[str]] = mapped_column(
+        String(50),
+        nullable=True,
+    )
+    referencia_pago_inicial: Mapped[Optional[str]] = mapped_column(
+        String(100),
+        nullable=True,
+    )
     creado_en: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         server_default=func.now(),

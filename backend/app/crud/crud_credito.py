@@ -340,6 +340,16 @@ async def create_credito(db: AsyncSession, credito_in: CreditoCreate) -> Credito
             estado=estado_final,
             tipo_pago=credito_in.tipo_pago,
             cuota_inicial=credito_in.cuota_inicial,
+            metodo_pago_inicial=(
+                credito_in.metodo_pago_inicial.strip()
+                if (credito_in.metodo_pago_inicial and credito_in.metodo_pago_inicial.strip())
+                else None
+            ),
+            referencia_pago_inicial=(
+                credito_in.referencia_pago_inicial.strip()
+                if (credito_in.referencia_pago_inicial and credito_in.referencia_pago_inicial.strip())
+                else None
+            ),
             monto_financiado=credito_in.monto_financiado,
             numero_cuotas=credito_in.numero_cuotas,
             valor_cuota=credito_in.valor_cuota,
@@ -481,6 +491,16 @@ async def update_credito(
     if credito_in.departamento_venta is not None:
         credito.departamento_venta = (
             credito_in.departamento_venta.strip() if credito_in.departamento_venta.strip() else None
+        )
+
+    if credito_in.metodo_pago_inicial is not None:
+        credito.metodo_pago_inicial = (
+            credito_in.metodo_pago_inicial.strip() if credito_in.metodo_pago_inicial.strip() else None
+        )
+
+    if credito_in.referencia_pago_inicial is not None:
+        credito.referencia_pago_inicial = (
+            credito_in.referencia_pago_inicial.strip() if credito_in.referencia_pago_inicial.strip() else None
         )
 
     if credito_in.saldo_pendiente is not None:

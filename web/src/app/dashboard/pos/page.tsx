@@ -31,9 +31,10 @@ import {
   HelpCircle,
   Search,
   PenTool,
+  Image as ImageIcon,
 } from 'lucide-react';
 import { formatCOP, cn } from '@/lib/utils';
-import { api } from '@/lib/api';
+import { api, API_BASE_URL } from '@/lib/api';
 import WebSignaturePad from '@/components/WebSignaturePad';
 
 export type ModalidadVenta = 'credito' | 'contado';
@@ -47,6 +48,7 @@ interface ArticuloCatalogo {
   categoria: 'mecedora' | 'arte' | 'mueble';
   stock?: number;
   maneja_stock?: boolean;
+  imagen_url?: string | null;
 }
 
 interface ItemCarrito {
@@ -217,6 +219,8 @@ export default function PosOriginacionCreditoPage() {
 
   const tipoPago = 'mensual';
   const [cuotaInicial, setCuotaInicial] = useState<number>(0);
+  const [metodoPagoInicial, setMetodoPagoInicial] = useState<'Efectivo' | 'Transferencia'>('Efectivo');
+  const [referenciaPagoInicial, setReferenciaPagoInicial] = useState('');
   const [numeroCuotas, setNumeroCuotas] = useState<number>(4);
   const [fechaPrimeraCuota, setFechaPrimeraCuota] = useState<string>(() => getFechaPrimerVencimientoFinMes());
 
@@ -285,6 +289,7 @@ export default function PosOriginacionCreditoPage() {
             categoria: p.es_precio_variable ? 'arte' : 'mecedora',
             stock: typeof p.stock === 'number' ? p.stock : 0,
             maneja_stock: p.maneja_stock !== false,
+            imagen_url: p.imagen_url || null,
           }));
           setCatalogo(prodsFormateados);
           if (prodsFormateados.length > 0) {
@@ -460,6 +465,12 @@ export default function PosOriginacionCreditoPage() {
     }
     const supervisorId = '66b28f2f-7c15-47e0-9751-965fb51ed314'; // Ana Supervisora
 
+    if (cuotaInicialEfectiva > 0 && metodoPagoInicial === 'Transferencia' && !referenciaPagoInicial.trim()) {
+      alert('Debe ingresar el número de referencia o aprobación para el pago por transferencia.');
+      setIsSubmitting(false);
+      return;
+    }
+
     const payload: any = {
       cliente_id: resolvedClienteId,
       vendedor_id: vendedorId,
@@ -468,6 +479,8 @@ export default function PosOriginacionCreditoPage() {
       estado: esContado ? 'terminado' : 'pendiente',
       tipo_pago: esContado ? 'mensual' : tipoPago,
       cuota_inicial: cuotaInicialEfectiva,
+      metodo_pago_inicial: metodoPagoInicial,
+      referencia_pago_inicial: referenciaPagoInicial.trim() || null,
       monto_financiado: montoFinanciado,
       numero_cuotas: esContado ? 1 : numeroCuotas,
       valor_cuota: valorCuotaCalculado,
@@ -1404,7 +1417,7 @@ export default function PosOriginacionCreditoPage() {
                         key={prod.id}
                         onClick={() => handleSeleccionarProducto(prod.id)}
                         className={cn(
-                          'p-3.5 rounded-xl border text-left transition-all cursor-pointer flex flex-col justify-between space-y-2',
+                          'p-3.5 rounded-xl border text-left transition-all cursor-pointer flex flex-col justify-between space-y-2 relative hover:z-20',
                           isSelected
                             ? 'border-emerald-600 bg-emerald-50/30 shadow-xs ring-1 ring-emerald-500'
                             : 'border-slate-200 hover:border-slate-300 hover:bg-slate-50/40'
@@ -1427,9 +1440,34 @@ export default function PosOriginacionCreditoPage() {
                             )}
                           </div>
 
-                          <h3 className="text-xs font-bold text-slate-900 leading-snug line-clamp-2">
-                            {prod.nombre}
-                          </h3>
+                          <div className="flex items-start justify-between gap-1.5">
+                            <h3 className="text-xs font-bold text-slate-900 leading-snug line-clamp-2">
+                              {prod.nombre}
+                            </h3>
+                            {prod.imagen_url && (
+                              <div
+                                className="relative group shrink-0 inline-flex items-center"
+                                onClick={(e) => e.stopPropagation()}
+                              >
+                                <span
+                                  className="p-0.5 rounded text-gray-400 hover:text-blue-500 hover:bg-blue-50 transition-colors cursor-zoom-in"
+                                  title="Ver foto del artículo"
+                                >
+                                  <ImageIcon className="w-3.5 h-3.5" />
+                                </span>
+
+                                <img
+                                  src={
+                                    prod.imagen_url.startsWith('http')
+                                      ? prod.imagen_url
+                                      : `${API_BASE_URL}${prod.imagen_url}`
+                                  }
+                                  alt={prod.nombre}
+                                  className="absolute z-[100] w-48 h-48 max-w-none object-cover rounded-lg shadow-2xl -top-20 left-10 pointer-events-none opacity-0 invisible scale-95 group-hover:opacity-100 group-hover:visible group-hover:scale-100 transition-all duration-300 ease-out"
+                                />
+                              </div>
+                            )}
+                          </div>
                         </div>
 
                         <div className="pt-2 border-t border-slate-200/50 flex items-center justify-between text-[11px]">
@@ -1701,7 +1739,7 @@ export default function PosOriginacionCreditoPage() {
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   <div>
                     <label className="block text-xs font-semibold text-slate-700 mb-1">
-                      CUOTA INICIAL EN EFECTIVO (COP)
+                      CUOTA INICIAL (COP)
                     </label>
                     <div className="relative">
                       <span className="absolute left-3 top-2.5 text-xs text-slate-400 font-mono">$</span>
@@ -1734,6 +1772,49 @@ export default function PosOriginacionCreditoPage() {
                     </span>
                   </div>
                 </div>
+
+                {/* BLOQUE CONDICIONAL: MÉTODO DE PAGO SI HAY CUOTA INICIAL */}
+                {Number(cuotaInicial) > 0 && (
+                  <div className="p-4 rounded-xl bg-slate-50 border border-slate-200 space-y-3">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                      <div>
+                        <label className="block text-xs font-semibold text-slate-700 mb-1">
+                          MÉTODO DE PAGO (CUOTA INICIAL) *
+                        </label>
+                        <select
+                          value={metodoPagoInicial}
+                          onChange={(e) => setMetodoPagoInicial(e.target.value as 'Efectivo' | 'Transferencia')}
+                          className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 text-xs font-semibold text-slate-900 bg-white focus:outline-hidden focus:ring-2 focus:ring-emerald-500"
+                        >
+                          <option value="Efectivo">Efectivo</option>
+                          <option value="Transferencia">Transferencia</option>
+                        </select>
+                      </div>
+
+                      {metodoPagoInicial === 'Transferencia' ? (
+                        <div>
+                          <label className="block text-xs font-semibold text-slate-700 mb-1">
+                            NO. REFERENCIA / APROBACIÓN *
+                          </label>
+                          <input
+                            type="text"
+                            required
+                            placeholder="Ej. Comprobante Nequi / Bancolombia"
+                            value={referenciaPagoInicial}
+                            onChange={(e) => setReferenciaPagoInicial(e.target.value)}
+                            className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 text-xs font-semibold text-slate-900 bg-white focus:outline-hidden focus:ring-2 focus:ring-blue-500"
+                          />
+                        </div>
+                      ) : (
+                        <div className="flex items-end pb-1">
+                          <span className="text-[11px] text-slate-500">
+                            Recepción de dinero en efectivo en el punto de atención o despacho.
+                          </span>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )}
 
                 {/* SELECTOR EXCLUSIVO DE PLAZOS DE CUOTAS PERMITIDOS */}
                 <div>
