@@ -67,6 +67,7 @@ async def create_producto(db: AsyncSession, producto_in: ProductoCreate) -> Prod
         stock=producto_in.stock,
         maneja_stock=producto_in.maneja_stock,
         estado_activo=producto_in.estado_activo,
+        imagen_url=producto_in.imagen_url,
     )
     db.add(db_producto)
     await db.commit()

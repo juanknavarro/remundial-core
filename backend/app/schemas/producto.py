@@ -28,6 +28,11 @@ class ProductoBase(BaseModel):
         True,
         description="Estado operativo del artículo en el catálogo (activo o inactivo)",
     )
+    imagen_url: Optional[str] = Field(
+        None,
+        max_length=500,
+        description="URL relativa o absoluta de la imagen del producto",
+    )
 
 
 class ProductoCreate(ProductoBase):
@@ -44,6 +49,9 @@ class ProductoUpdate(BaseModel):
     stock: Optional[int] = Field(None, ge=0, description="Existencias físicas disponibles")
     maneja_stock: Optional[bool] = Field(
         None, description="Indica si controla inventario físico"
+    )
+    imagen_url: Optional[str] = Field(
+        None, max_length=500, description="URL de la imagen del producto"
     )
     estado_activo: Optional[bool] = Field(
         None, description="Permite activar o desactivar lógicamente el producto"

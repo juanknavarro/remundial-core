@@ -1,7 +1,10 @@
-from typing import List, Optional
+import os
+import re
+import uuid
+from typing import Any, Dict, List, Optional
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, status
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -25,6 +28,59 @@ router = APIRouter(
     prefix="/productos",
     tags=["Productos"],
 )
+
+PRODUCTOS_STORAGE_DIR = os.path.abspath(
+    os.path.join(os.path.dirname(__file__), "..", "..", "storage", "productos")
+)
+
+
+@router.post(
+    "/upload-imagen",
+    summary="Cargar imagen optimizada de producto (WebP/JPEG)",
+    status_code=status.HTTP_200_OK,
+)
+async def upload_imagen_producto(
+    file: UploadFile = File(...),
+    current_user: Usuario = Depends(require_supervisor_o_secretaria),
+) -> Dict[str, Any]:
+    """Recibe la imagen optimizada (WebP/JPEG procesada en frontend), la guarda con un UUID único y retorna la URL relativa."""
+    os.makedirs(PRODUCTOS_STORAGE_DIR, exist_ok=True)
+
+    # Validar extensión
+    original_filename = file.filename or "producto.webp"
+    ext = os.path.splitext(original_filename)[1].lower()
+    allowed_exts = [".webp", ".jpg", ".jpeg", ".png"]
+    if not ext or ext not in allowed_exts:
+        ext = ".webp"
+
+    # Sanitizar prefijo de nombre
+    base_name = os.path.splitext(original_filename)[0]
+    safe_name = re.sub(r"[^a-zA-Z0-9_\-]", "", base_name).strip()[:30] or "producto"
+
+    # Generar nombre único con UUID
+    unique_suffix = uuid.uuid4().hex[:10]
+    final_filename = f"{safe_name}-{unique_suffix}{ext}"
+    destination_path = os.path.join(PRODUCTOS_STORAGE_DIR, final_filename)
+
+    # Leer contenido y validar tamaño (máx 10 MB por seguridad)
+    content = await file.read()
+    if len(content) > 10 * 1024 * 1024:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="La imagen excede el límite máximo permitido de 10 MB.",
+        )
+
+    # Guardar archivo físicamente
+    with open(destination_path, "wb") as f:
+        f.write(content)
+
+    relative_url = f"/storage/productos/{final_filename}"
+    return {
+        "success": True,
+        "url": relative_url,
+        "filename": final_filename,
+        "size": len(content),
+    }
 
 
 @router.get(

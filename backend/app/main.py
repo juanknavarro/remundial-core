@@ -1,8 +1,10 @@
+import os
 from contextlib import asynccontextmanager
 from typing import AsyncGenerator
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 
 from app.core.config import settings
 from app.routers.abonos import router as abonos_router
@@ -74,6 +76,13 @@ app.add_middleware(
     allow_headers=["*"],
     expose_headers=["Content-Disposition"],
 )
+
+# Servir archivos estáticos públicos (imágenes de productos, firmas, etc.)
+STORAGE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "storage"))
+PRODUCTOS_STORAGE_DIR = os.path.join(STORAGE_DIR, "productos")
+os.makedirs(PRODUCTOS_STORAGE_DIR, exist_ok=True)
+
+app.mount("/storage", StaticFiles(directory=STORAGE_DIR), name="storage")
 
 # Router de alias para /config
 from app.routers.configuracion import (

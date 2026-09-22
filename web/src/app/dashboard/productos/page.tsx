@@ -21,9 +21,11 @@ import {
   PowerOff,
   RefreshCw,
   AlertCircle,
+  UploadCloud,
+  Image as ImageIcon,
 } from 'lucide-react';
 import { formatCOP, cn } from '@/lib/utils';
-import { api } from '@/lib/api';
+import { api, API_BASE_URL } from '@/lib/api';
 
 interface Producto {
   id: string;
@@ -35,6 +37,7 @@ interface Producto {
   categoria?: string;
   stock?: number;
   maneja_stock?: boolean;
+  imagen_url?: string | null;
 }
 
 
@@ -73,6 +76,115 @@ export default function ProductosPage() {
   const [formEstadoActivo, setFormEstadoActivo] = useState(true);
   const [formManejaStock, setFormManejaStock] = useState(true);
   const [formStock, setFormStock] = useState('10');
+  const [formImagenUrl, setFormImagenUrl] = useState('');
+  const [isSubiendoImagen, setIsSubiendoImagen] = useState(false);
+  const [isDragging, setIsDragging] = useState(false);
+
+  // Procesamiento Frontend con HTML5 Canvas puro (máx 800x800 px, WebP al 80%)
+  const procesarImagenCliente = (file: File): Promise<Blob> => {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = (event) => {
+        const img = new Image();
+        img.onload = () => {
+          const MAX_DIM = 800;
+          let width = img.width;
+          let height = img.height;
+
+          if (width > height) {
+            if (width > MAX_DIM) {
+              height = Math.round((height * MAX_DIM) / width);
+              width = MAX_DIM;
+            }
+          } else {
+            if (height > MAX_DIM) {
+              width = Math.round((width * MAX_DIM) / height);
+              height = MAX_DIM;
+            }
+          }
+
+          const canvas = document.createElement('canvas');
+          canvas.width = width;
+          canvas.height = height;
+
+          const ctx = canvas.getContext('2d');
+          if (!ctx) {
+            reject(new Error('No se pudo inicializar el lienzo para optimizar la imagen'));
+            return;
+          }
+
+          ctx.drawImage(img, 0, 0, width, height);
+
+          canvas.toBlob(
+            (blob) => {
+              if (blob) {
+                resolve(blob);
+              } else {
+                canvas.toBlob(
+                  (jpegBlob) => {
+                    if (jpegBlob) resolve(jpegBlob);
+                    else reject(new Error('No se pudo comprimir la imagen'));
+                  },
+                  'image/jpeg',
+                  0.8
+                );
+              }
+            },
+            'image/webp',
+            0.8
+          );
+        };
+        img.onerror = () => reject(new Error('El archivo no es una imagen válida'));
+        img.src = event.target?.result as string;
+      };
+      reader.onerror = () => reject(new Error('Error al leer el archivo'));
+      reader.readAsDataURL(file);
+    });
+  };
+
+  const handleSubirArchivo = async (file: File) => {
+    if (!file.type.startsWith('image/')) {
+      setNotice({
+        type: 'error',
+        title: 'Archivo no permitido',
+        message: 'Debe seleccionar un archivo de imagen (PNG, JPG o WEBP).',
+      });
+      return;
+    }
+
+    try {
+      setIsSubiendoImagen(true);
+      const blobOptimizado = await procesarImagenCliente(file);
+      const safeBaseName = file.name.replace(/\.[^/.]+$/, '').replace(/[^a-zA-Z0-9_-]/g, '_') || 'articulo';
+      const nombreFinal = `${safeBaseName}.webp`;
+
+      const formData = new FormData();
+      formData.append('file', blobOptimizado, nombreFinal);
+
+      const res = await api.post('/productos/upload-imagen', formData, {
+        headers: {
+          'Content-Type': 'multipart/form-data',
+        },
+      });
+
+      if (res.data?.url) {
+        setFormImagenUrl(res.data.url);
+        setNotice({
+          type: 'success',
+          title: 'Foto Optimizada y Cargada',
+          message: 'La imagen ha sido optimizada a WebP y vinculada al artículo.',
+        });
+      }
+    } catch (err: any) {
+      setNotice({
+        type: 'error',
+        title: 'Error al cargar imagen',
+        message: err?.response?.data?.detail || err.message || 'No fue posible subir la imagen.',
+      });
+    } finally {
+      setIsSubiendoImagen(false);
+    }
+  };
 
   // Modal de Reabastecimiento Rápido
   const [isReabastecerModalOpen, setIsReabastecerModalOpen] = useState(false);
@@ -111,6 +223,7 @@ export default function ProductosPage() {
       setFormEstadoActivo(producto.estado_activo !== false);
       setFormManejaStock(producto.maneja_stock !== false);
       setFormStock((producto.stock ?? 0).toString());
+      setFormImagenUrl(producto.imagen_url || '');
     } else {
       setProductoEditando(null);
       setFormSku(`SKU-${Math.floor(1000 + Math.random() * 9000)}`);
@@ -120,6 +233,7 @@ export default function ProductosPage() {
       setFormEstadoActivo(true);
       setFormManejaStock(true);
       setFormStock('10');
+      setFormImagenUrl('');
     }
     setIsModalOpen(true);
   };
@@ -140,6 +254,7 @@ export default function ProductosPage() {
           estado_activo: formEstadoActivo,
           maneja_stock: formManejaStock,
           stock: formManejaStock ? stockNum : 0,
+          imagen_url: formImagenUrl.trim() || null,
         });
         setNotice({
           type: 'success',
@@ -164,6 +279,7 @@ export default function ProductosPage() {
           estado_activo: formEstadoActivo,
           maneja_stock: formManejaStock,
           stock: formManejaStock ? stockNum : 0,
+          imagen_url: formImagenUrl.trim() || null,
         });
         setNotice({
           type: 'success',
@@ -646,17 +762,17 @@ export default function ProductosPage() {
       </div>
 
       {/* TABLA DE PRODUCTOS MODERNA CON ACCIÓN DE ELIMINAR */}
-      <div className="bg-white rounded-2xl border border-slate-200/80 shadow-xs overflow-hidden">
-        <div className="overflow-x-auto">
+      <div className="bg-white rounded-2xl border border-slate-200/80 shadow-xs">
+        <div className="overflow-x-auto min-h-[340px]">
           <table className="w-full text-left text-xs">
             <thead className="bg-slate-50/75 border-b border-slate-100 text-slate-600 uppercase font-semibold">
               <tr>
-                <th className="px-6 py-3.5">Artículo / SKU</th>
+                <th className="px-6 py-3.5 first:rounded-tl-2xl">Artículo / SKU</th>
                 <th className="px-6 py-3.5">Modalidad de Precio</th>
                 <th className="px-6 py-3.5">Precio Base</th>
                 <th className="px-6 py-3.5">Existencias / Stock</th>
                 <th className="px-6 py-3.5">Estado Operativo</th>
-                <th className="px-6 py-3.5 text-right">Acciones</th>
+                <th className="px-6 py-3.5 text-right last:rounded-tr-2xl">Acciones</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100 font-medium text-slate-700">
@@ -686,34 +802,99 @@ export default function ProductosPage() {
                   </td>
                 </tr>
               ) : (
-                productosFiltrados.map((item) => {
+                productosFiltrados.map((item, index) => {
                   const estaInactivo = item.estado_activo === false;
 
                   return (
                     <tr
                       key={item.id}
                       className={cn(
-                        'hover:bg-slate-50/50 transition-colors',
+                        'hover:bg-slate-50/50 transition-colors relative hover:z-40',
                         estaInactivo && 'bg-slate-50/40 opacity-75'
                       )}
                     >
                       {/* Artículo / SKU */}
-                      <td className="px-6 py-4">
+                      <td className="px-6 py-4 relative">
                         <div className="flex items-center gap-3">
-                          <div
-                            className={cn(
-                              'w-10 h-10 rounded-xl flex items-center justify-center shrink-0 border',
-                              item.es_precio_variable
-                                ? 'bg-purple-50 text-purple-700 border-purple-200'
-                                : 'bg-slate-100 text-slate-700 border-slate-200'
-                            )}
-                          >
-                            {item.es_precio_variable ? (
-                              <Palette className="w-5 h-5" />
-                            ) : (
-                              <Armchair className="w-5 h-5" />
+                          {/* Miniatura con Hover Preview */}
+                          <div className="relative group/preview shrink-0">
+                            <div
+                              className={cn(
+                                'w-11 h-11 rounded-xl flex items-center justify-center shrink-0 border overflow-hidden bg-slate-50 transition-all duration-200',
+                                item.imagen_url && 'cursor-zoom-in group-hover/preview:ring-2 group-hover/preview:ring-emerald-500 group-hover/preview:shadow-md',
+                                item.es_precio_variable
+                                  ? 'border-purple-200 text-purple-700'
+                                  : 'border-slate-200 text-slate-700'
+                              )}
+                            >
+                              {item.imagen_url ? (
+                                <img
+                                  src={
+                                    item.imagen_url.startsWith('http')
+                                      ? item.imagen_url
+                                      : `${API_BASE_URL}${item.imagen_url}`
+                                  }
+                                  alt={item.nombre}
+                                  className="w-full h-full object-cover"
+                                />
+                              ) : item.es_precio_variable ? (
+                                <Palette className="w-5 h-5" />
+                              ) : (
+                                <Armchair className="w-5 h-5" />
+                              )}
+                            </div>
+
+                            {/* RECUADRO FLOTANTE "HOVER PREVIEW" ELEGANTE */}
+                            {item.imagen_url && (
+                              <div
+                                className={cn(
+                                  'pointer-events-none absolute left-14 z-50 invisible opacity-0 scale-95 group-hover/preview:visible group-hover/preview:opacity-100 group-hover/preview:scale-100 transition-all duration-200 ease-in-out',
+                                  index === 0
+                                    ? 'top-0'
+                                    : index >= productosFiltrados.length - 2 && productosFiltrados.length > 2
+                                    ? 'bottom-0'
+                                    : 'top-1/2 -translate-y-1/2'
+                                )}
+                              >
+                                <div className="w-72 bg-white/95 backdrop-blur-md rounded-2xl p-2.5 shadow-2xl border border-slate-200/90 ring-1 ring-black/5 text-left">
+                                  {/* Imagen Ampliada */}
+                                  <div className="w-full h-64 rounded-xl overflow-hidden bg-slate-100 relative shadow-inner">
+                                    <img
+                                      src={
+                                        item.imagen_url.startsWith('http')
+                                          ? item.imagen_url
+                                          : `${API_BASE_URL}${item.imagen_url}`
+                                      }
+                                      alt={item.nombre}
+                                      className="w-full h-full object-cover"
+                                    />
+                                    <div className="absolute top-2 right-2 bg-slate-900/75 backdrop-blur-xs text-white text-[10px] font-bold px-2.5 py-0.5 rounded-full shadow-xs">
+                                      Vista Ampliada
+                                    </div>
+                                  </div>
+
+                                  {/* Info Inferior del Artículo */}
+                                  <div className="pt-2 px-1 pb-0.5 space-y-1">
+                                    <div className="flex items-center justify-between gap-2">
+                                      <p className="text-xs font-bold text-slate-900 truncate">
+                                        {item.nombre}
+                                      </p>
+                                      <span className="font-mono text-[10px] font-semibold text-slate-500 bg-slate-100 px-1.5 py-0.5 rounded shrink-0">
+                                        {item.sku}
+                                      </span>
+                                    </div>
+                                    <div className="flex items-center justify-between text-xs pt-1 border-t border-slate-100">
+                                      <span className="text-slate-500 text-[11px]">Precio Base:</span>
+                                      <span className="font-bold text-emerald-700">
+                                        {formatCOP(item.precio_base)}
+                                      </span>
+                                    </div>
+                                  </div>
+                                </div>
+                              </div>
                             )}
                           </div>
+
                           <div>
                             <span className="font-semibold text-slate-900 text-sm block">
                               {item.nombre}
@@ -922,8 +1103,8 @@ export default function ProductosPage() {
       {/* MODAL DE CREACIÓN Y EDICIÓN DE PRODUCTOS */}
       {isModalOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/50 backdrop-blur-xs">
-          <div className="bg-white rounded-2xl w-full max-w-lg border border-slate-200 shadow-xl overflow-hidden animate-in fade-in zoom-in-95 duration-150">
-            <div className="px-6 py-4 border-b border-slate-100 flex items-center justify-between">
+          <div className="bg-white rounded-2xl w-full max-w-lg border border-slate-200 shadow-xl overflow-hidden max-h-[90vh] flex flex-col animate-in fade-in zoom-in-95 duration-150">
+            <div className="px-6 py-4 border-b border-slate-100 flex items-center justify-between shrink-0">
               <div>
                 <h3 className="font-bold text-base text-slate-900">
                   {productoEditando ? 'Editar Artículo' : 'Nuevo Artículo para Catálogo'}
@@ -940,7 +1121,119 @@ export default function ProductosPage() {
               </button>
             </div>
 
-            <form onSubmit={handleGuardarProducto} className="p-6 space-y-4">
+            <form onSubmit={handleGuardarProducto} className="p-6 space-y-4 overflow-y-auto flex-1">
+              {/* ZONA DE CARGA DE IMAGEN (CANVAS OPTIMIZADO A WEBP 800x800) */}
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-1">
+                  FOTOGRAFÍA DEL ARTÍCULO (CATÁLOGO)
+                </label>
+
+                {formImagenUrl ? (
+                  <div className="rounded-xl border border-slate-200 bg-slate-50/70 p-3 flex items-center gap-3">
+                    <div className="w-16 h-16 rounded-lg overflow-hidden border border-slate-200 bg-white shrink-0 relative">
+                      <img
+                        src={
+                          formImagenUrl.startsWith('http')
+                            ? formImagenUrl
+                            : `${API_BASE_URL}${formImagenUrl}`
+                        }
+                        alt="Previsualización de producto"
+                        className="w-full h-full object-cover"
+                      />
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-1 text-emerald-700 text-xs font-bold">
+                        <CheckCircle2 className="w-3.5 h-3.5" />
+                        <span>Imagen optimizada cargada</span>
+                      </div>
+                      <p className="text-[11px] text-slate-500 font-mono truncate mt-0.5">
+                        {formImagenUrl}
+                      </p>
+                      <div className="mt-2 flex items-center gap-2">
+                        <label className="text-[11px] font-semibold text-slate-700 hover:text-slate-900 bg-white border border-slate-200 px-2.5 py-1 rounded-lg cursor-pointer hover:bg-slate-50 transition-colors inline-block">
+                          Reemplazar
+                          <input
+                            type="file"
+                            accept="image/*"
+                            className="hidden"
+                            onChange={(e) => {
+                              const file = e.target.files?.[0];
+                              if (file) handleSubirArchivo(file);
+                              e.target.value = '';
+                            }}
+                          />
+                        </label>
+                        <button
+                          type="button"
+                          onClick={() => setFormImagenUrl('')}
+                          className="text-[11px] font-semibold text-red-600 hover:text-red-700 hover:bg-red-50 px-2.5 py-1 rounded-lg transition-colors cursor-pointer"
+                        >
+                          Quitar
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                ) : (
+                  <div
+                    onDragOver={(e) => {
+                      e.preventDefault();
+                      setIsDragging(true);
+                    }}
+                    onDragLeave={(e) => {
+                      e.preventDefault();
+                      setIsDragging(false);
+                    }}
+                    onDrop={(e) => {
+                      e.preventDefault();
+                      setIsDragging(false);
+                      const file = e.dataTransfer.files?.[0];
+                      if (file) handleSubirArchivo(file);
+                    }}
+                    className={cn(
+                      'relative border-2 border-dashed rounded-xl p-4 text-center transition-all cursor-pointer group',
+                      isDragging
+                        ? 'border-emerald-500 bg-emerald-50/50'
+                        : 'border-slate-200 hover:border-slate-400 bg-slate-50/50 hover:bg-slate-50',
+                      isSubiendoImagen && 'opacity-60 pointer-events-none'
+                    )}
+                  >
+                    <input
+                      type="file"
+                      accept="image/*"
+                      className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
+                      disabled={isSubiendoImagen}
+                      onChange={(e) => {
+                        const file = e.target.files?.[0];
+                        if (file) handleSubirArchivo(file);
+                        e.target.value = '';
+                      }}
+                    />
+                    <div className="flex flex-col items-center justify-center space-y-1">
+                      {isSubiendoImagen ? (
+                        <>
+                          <RefreshCw className="w-6 h-6 text-emerald-600 animate-spin" />
+                          <span className="text-xs font-semibold text-slate-800">
+                            Optimizando imagen (Canvas WebP) y subiendo...
+                          </span>
+                        </>
+                      ) : (
+                        <>
+                          <div className="w-8 h-8 rounded-full bg-slate-100 flex items-center justify-center text-slate-500 group-hover:text-slate-800 group-hover:bg-slate-200 transition-colors">
+                            <UploadCloud className="w-4 h-4" />
+                          </div>
+                          <div className="text-xs font-semibold text-slate-700">
+                            <span className="text-emerald-700 underline">Haz clic para buscar</span> o arrastra la foto aquí
+                          </div>
+                          <p className="text-[10px] text-slate-600">
+                            Se optimizará a máx 800x800 px (WebP 80%) en tu navegador antes de subir
+                          </p>
+                        </>
+                      )}
+                    </div>
+                  </div>
+                )}
+              </div>
+
               <div>
                 <label className="block text-xs font-semibold text-slate-700 mb-1">
                   SKU (CÓDIGO ÚNICO)
@@ -1069,7 +1362,7 @@ export default function ProductosPage() {
                 </label>
               </div>
 
-              <div className="pt-3 flex items-center justify-end gap-3 border-t border-slate-100">
+              <div className="pt-3 flex items-center justify-end gap-3 border-t border-slate-100 shrink-0 sticky bottom-0 bg-white pb-1">
                 <button
                   type="button"
                   onClick={() => setIsModalOpen(false)}

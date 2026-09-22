@@ -1,3 +1,4 @@
+from typing import Optional
 import uuid
 from datetime import datetime
 from decimal import Decimal
@@ -51,6 +52,10 @@ class Producto(Base):
         default=True,
         server_default="true",
         nullable=False,
+    )
+    imagen_url: Mapped[Optional[str]] = mapped_column(
+        String(500),
+        nullable=True,
     )
     estado_activo: Mapped[bool] = mapped_column(
         Boolean,
