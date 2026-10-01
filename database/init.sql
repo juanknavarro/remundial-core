@@ -19,7 +19,7 @@ DO $$
 BEGIN
     -- Roles permitidos en el sistema
     IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'rol_usuario_enum') THEN
-        CREATE TYPE rol_usuario_enum AS ENUM ('master', 'supervisor', 'secretaria', 'vendedor', 'cobrador');
+        CREATE TYPE rol_usuario_enum AS ENUM ('master', 'supervisor', 'vendedor', 'cobrador');
     END IF;
 
     -- Clasificación de referencias personales del cliente
@@ -61,7 +61,7 @@ CREATE TABLE IF NOT EXISTS usuarios (
     actualizado_en TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
-COMMENT ON TABLE usuarios IS 'Personal de la empresa: supervisores, secretarias, vendedores y cobradores.';
+COMMENT ON TABLE usuarios IS 'Personal de la empresa: supervisores, vendedores y cobradores.';
 COMMENT ON COLUMN usuarios.id IS 'Identificador único del usuario (UUID v4).';
 COMMENT ON COLUMN usuarios.rol IS 'Rol asignado para control de acceso y asignación operativa en créditos y cobranza.';
 COMMENT ON COLUMN usuarios.estado_activo IS 'Bandera de activación lógica para habilitar o inhabilitar acceso al sistema.';
@@ -236,6 +236,10 @@ CREATE TABLE IF NOT EXISTS abonos (
     valor_abonado NUMERIC(12, 2) NOT NULL CHECK (valor_abonado > 0),
     coordenadas_gps_cobro POINT, -- Convención nativa PostgreSQL: POINT(longitud, latitud) -> (X, Y)
     estado estado_abono_enum NOT NULL DEFAULT 'registrado',
+    metodo_pago VARCHAR(50) DEFAULT 'efectivo',
+    monto_efectivo NUMERIC(12, 2) DEFAULT 0.00,
+    monto_transferencia NUMERIC(12, 2) DEFAULT 0.00,
+    referencia_pago VARCHAR(255),
     creado_en TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
     CONSTRAINT fk_abonos_credito

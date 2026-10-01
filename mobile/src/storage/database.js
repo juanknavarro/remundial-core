@@ -1,4 +1,6 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import * as FileSystem from 'expo-file-system';
+import { Platform } from 'react-native';
 
 /**
  * Capa de Persistencia Local para Arquitectura Offline-First de Remundial Core.
@@ -239,3 +241,54 @@ export async function obtenerDeCache(key) {
     return null;
   }
 }
+
+// ============================================================================
+// GESTIÓN DE ARCHIVOS MULTIMEDIA OFFLINE (EXPO-FILE-SYSTEM)
+// ============================================================================
+
+/**
+ * Descarga y almacena localmente una imagen en disco para disponibilidad offline.
+ * Si ya fue descargada previamente, retorna la URI local en caché.
+ * En Web o ante fallos, retorna la URL original como respaldo resiliente.
+ * 
+ * @param {string} urlBackend URL completa o relativa de la imagen.
+ * @returns {Promise<string>} URI local del archivo (file://...) o la URL original.
+ */
+export async function cachearImagenOffline(urlBackend) {
+  if (!urlBackend || typeof urlBackend !== 'string') return urlBackend;
+
+  // En entorno Web o si no hay directorio de documentos nativo, delegar a la URL directa
+  if (Platform.OS === 'web' || !FileSystem.documentDirectory) {
+    return urlBackend;
+  }
+
+  try {
+    // Generar un nombre de archivo seguro y único basado en la URL
+    let cleanName = urlBackend.split('?')[0].split('/').pop() || 'producto';
+    cleanName = cleanName.replace(/[^a-zA-Z0-9._-]/g, '_');
+    if (!cleanName.includes('.')) cleanName += '.webp';
+
+    const dirPath = `${FileSystem.documentDirectory}catalog_images/`;
+    const localUri = `${dirPath}${cleanName}`;
+
+    // Asegurar existencia del directorio local
+    const dirInfo = await FileSystem.getInfoAsync(dirPath);
+    if (!dirInfo.exists) {
+      await FileSystem.makeDirectoryAsync(dirPath, { intermediates: true });
+    }
+
+    // Verificar si el archivo ya existe en disco
+    const fileInfo = await FileSystem.getInfoAsync(localUri);
+    if (fileInfo.exists && fileInfo.size > 0) {
+      return localUri;
+    }
+
+    // Descargar imagen al almacenamiento local
+    const downloadResult = await FileSystem.downloadAsync(urlBackend, localUri);
+    return downloadResult?.uri || localUri;
+  } catch (err) {
+    console.warn('[Database] Error descargando imagen para caché offline:', err);
+    return urlBackend;
+  }
+}
+

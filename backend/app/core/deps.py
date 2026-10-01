@@ -119,5 +119,5 @@ class RoleChecker:
 # Dependencias preconfiguradas para acceso rápido
 require_cobrador_o_supervisor = RoleChecker([RolUsuario.COBRADOR, RolUsuario.SUPERVISOR])
 require_vendedor_o_supervisor = RoleChecker([RolUsuario.VENDEDOR, RolUsuario.SUPERVISOR])
-require_supervisor_o_secretaria = RoleChecker([RolUsuario.SUPERVISOR, RolUsuario.SECRETARIA])
 require_supervisor = RoleChecker([RolUsuario.SUPERVISOR])
+require_supervisor_o_secretaria = require_supervisor  # Alias de compatibilidad hacia require_supervisor

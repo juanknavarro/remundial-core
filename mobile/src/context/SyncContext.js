@@ -124,6 +124,15 @@ export function SyncProvider({ children }) {
               },
               metodo_pago: String(rawP.metodo_pago || 'efectivo').trim(),
             };
+            if (rawP.monto_efectivo != null) {
+              payloadCola.monto_efectivo = Number(rawP.monto_efectivo) || 0;
+            }
+            if (rawP.monto_transferencia != null) {
+              payloadCola.monto_transferencia = Number(rawP.monto_transferencia) || 0;
+            }
+            if (rawP.referencia_pago) {
+              payloadCola.referencia_pago = String(rawP.referencia_pago).trim();
+            }
             if (rawP.notas) {
               payloadCola.notas = String(rawP.notas).trim();
             }
@@ -406,6 +415,16 @@ export function SyncProvider({ children }) {
       },
       metodo_pago: (payload.metodo_pago || 'efectivo').toString().trim(),
     };
+
+    if (payload.monto_efectivo != null) {
+      payloadAbono.monto_efectivo = Number(payload.monto_efectivo) || 0;
+    }
+    if (payload.monto_transferencia != null) {
+      payloadAbono.monto_transferencia = Number(payload.monto_transferencia) || 0;
+    }
+    if (payload.referencia_pago) {
+      payloadAbono.referencia_pago = payload.referencia_pago.toString().trim();
+    }
 
     if (payload.notas && typeof payload.notas === 'string' && payload.notas.trim().length > 0) {
       payloadAbono.notas = payload.notas.trim();

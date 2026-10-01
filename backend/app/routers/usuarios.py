@@ -9,7 +9,6 @@ from app.core.database import get_db
 from app.core.deps import (
     get_current_user,
     require_supervisor,
-    require_supervisor_o_secretaria,
 )
 from app.core.security import get_password_hash
 from app.models.usuario import RolUsuario, Usuario
@@ -24,7 +23,7 @@ router = APIRouter(
 @router.get(
     "",
     response_model=List[UsuarioResponse],
-    summary="Listar usuarios del sistema (Supervisor o Secretaria)",
+    summary="Listar usuarios del sistema (Supervisor)",
     status_code=status.HTTP_200_OK,
 )
 async def listar_usuarios(
@@ -33,9 +32,9 @@ async def listar_usuarios(
     skip: int = Query(0, ge=0, description="Número de registros a omitir para paginación"),
     limit: int = Query(100, ge=1, le=200, description="Cantidad máxima de registros a retornar"),
     db: AsyncSession = Depends(get_db),
-    current_user: Usuario = Depends(require_supervisor_o_secretaria),
+    current_user: Usuario = Depends(require_supervisor),
 ) -> List[Usuario]:
-    """Retorna la lista de usuarios registrados. Requiere rol 'supervisor' o 'secretaria'."""
+    """Retorna la lista de usuarios registrados. Requiere rol 'supervisor' o 'master'."""
     query = select(Usuario).offset(skip).limit(limit).order_by(Usuario.nombre.asc())
 
     if rol is not None:

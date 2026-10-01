@@ -54,7 +54,7 @@ interface RutaConsolidada {
   estado: 'pendiente' | 'conciliada' | 'sin_movimiento';
 }
 
-export default function SecretariaDashboardPage() {
+export default function RutasCobranzaPage() {
   const [cobradores, setCobradores] = useState<Cobrador[]>([]);
   const [abonos, setAbonos] = useState<AbonoItem[]>([]);
   const [isLoading, setIsLoading] = useState<boolean>(true);

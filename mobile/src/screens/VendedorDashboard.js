@@ -29,7 +29,6 @@ export default function VendedorDashboard({ navigation }) {
 
   // Estados de navegación interna (Tabs)
   const [activeTab, setActiveTab] = useState('ventas'); // 'ventas' | 'acciones'
-  const [filtroEstado, setFiltroEstado] = useState('todas'); // 'todas' | 'pendiente' | 'activo'
 
   // Estados de ventas
   const [ventas, setVentas] = useState([]);
@@ -204,32 +203,14 @@ export default function VendedorDashboard({ navigation }) {
       (acc, v) => acc + (Number(v.monto_financiado || 0) + Number(v.cuota_inicial || 0)),
       0
     );
-    const aprobadas = ventasHoy.filter(
-      (v) => v.estado === 'activo' || v.estado === 'terminado'
-    ).length;
-    const pendientes = ventasHoy.filter(
-      (v) => v.estado === 'pendiente' || v.estado === 'offline_pending'
-    ).length;
     const offlineCount = ventasHoy.filter((v) => v.estado === 'offline_pending').length;
 
     return {
       totalVentas: ventasHoy.length,
       totalColocado,
-      aprobadas,
-      pendientes,
       offlineCount,
     };
   }, [ventasHoy]);
-
-  const ventasFiltradas = useMemo(() => {
-    if (filtroEstado === 'pendiente') {
-      return ventasHoy.filter((v) => v.estado === 'pendiente' || v.estado === 'offline_pending');
-    }
-    if (filtroEstado === 'activo') {
-      return ventasHoy.filter((v) => v.estado === 'activo' || v.estado === 'terminado');
-    }
-    return ventasHoy;
-  }, [ventasHoy, filtroEstado]);
 
   // ==========================================
   // CONFIGURACIÓN DE INDICADORES DE ESTADO
@@ -394,26 +375,21 @@ export default function VendedorDashboard({ navigation }) {
           </View>
         </View>
 
-        {/* RESUMEN DE VENTAS DE HOY (KPIS DINÁMICOS) */}
+        {/* RESUMEN DE VENTAS DE HOY (TOTAL HOY) */}
         <View style={styles.kpiRow}>
           <View style={styles.kpiCardColocado}>
-            <Text style={styles.kpiLabelColocado}>TOTAL HOY</Text>
+            <View style={styles.kpiCardHeaderRow}>
+              <Text style={styles.kpiLabelColocado}>TOTAL HOY (VENTAS DE LA JORNADA)</Text>
+              <View style={styles.kpiCountBadge}>
+                <Text style={styles.kpiCountBadgeText}>
+                  {kpis.totalVentas} {kpis.totalVentas === 1 ? 'venta' : 'ventas'}
+                </Text>
+              </View>
+            </View>
             <Text style={styles.kpiValueColocado}>{formatCOP(kpis.totalColocado)}</Text>
             <Text style={styles.kpiSubColocado}>
-              {kpis.totalVentas} venta{kpis.totalVentas !== 1 ? 's' : ''} en jornada
+              Monto total originado hoy en terreno
             </Text>
-          </View>
-
-          <View style={styles.kpiCardAprobadas}>
-            <Text style={styles.kpiLabelAprobadas}>APROBADAS</Text>
-            <Text style={styles.kpiValueAprobadas}>{kpis.aprobadas}</Text>
-            <Text style={styles.kpiSubAprobadas}>En ruta de cobro</Text>
-          </View>
-
-          <View style={styles.kpiCardPendientes}>
-            <Text style={styles.kpiLabelPendientes}>POR REVISAR</Text>
-            <Text style={styles.kpiValuePendientes}>{kpis.pendientes}</Text>
-            <Text style={styles.kpiSubPendientes}>En auditoría</Text>
           </View>
         </View>
 
@@ -452,12 +428,12 @@ export default function VendedorDashboard({ navigation }) {
         {/* ========================================================================= */}
         {activeTab === 'ventas' && (
           <View style={styles.salesSection}>
-            {/* Cabecera de Sección con Filtros Rápidos */}
+            {/* Cabecera de Sección */}
             <View style={styles.salesSectionHeader}>
               <View>
                 <Text style={styles.salesSectionTitle}>VENTAS ORIGINADAS HOY</Text>
                 <Text style={styles.salesSectionSub}>
-                  Seguimiento de aprobación y despacho en tiempo real
+                  Registro directo de transacciones en terreno
                 </Text>
               </View>
 
@@ -472,51 +448,6 @@ export default function VendedorDashboard({ navigation }) {
                 ) : (
                   <Text style={styles.refreshIconText}>🔄</Text>
                 )}
-              </TouchableOpacity>
-            </View>
-
-            {/* Chips de Filtro de Estado */}
-            <View style={styles.filterChipsRow}>
-              <TouchableOpacity
-                style={[styles.chipBtn, filtroEstado === 'todas' && styles.chipBtnActive]}
-                onPress={() => setFiltroEstado('todas')}
-              >
-                <Text
-                  style={[
-                    styles.chipBtnText,
-                    filtroEstado === 'todas' && styles.chipBtnTextActive,
-                  ]}
-                >
-                  Todas ({ventasHoy.length})
-                </Text>
-              </TouchableOpacity>
-
-              <TouchableOpacity
-                style={[styles.chipBtn, filtroEstado === 'pendiente' && styles.chipBtnActive]}
-                onPress={() => setFiltroEstado('pendiente')}
-              >
-                <Text
-                  style={[
-                    styles.chipBtnText,
-                    filtroEstado === 'pendiente' && styles.chipBtnTextActive,
-                  ]}
-                >
-                  ⏳ Pendientes ({kpis.pendientes})
-                </Text>
-              </TouchableOpacity>
-
-              <TouchableOpacity
-                style={[styles.chipBtn, filtroEstado === 'activo' && styles.chipBtnActive]}
-                onPress={() => setFiltroEstado('activo')}
-              >
-                <Text
-                  style={[
-                    styles.chipBtnText,
-                    filtroEstado === 'activo' && styles.chipBtnTextActive,
-                  ]}
-                >
-                  ✓ Aprobadas ({kpis.aprobadas})
-                </Text>
               </TouchableOpacity>
             </View>
 
@@ -553,20 +484,14 @@ export default function VendedorDashboard({ navigation }) {
                 <ActivityIndicator size="large" color="#10B981" />
                 <Text style={styles.loadingText}>Consultando ventas de la jornada...</Text>
               </View>
-            ) : ventasFiltradas.length === 0 ? (
+            ) : ventasHoy.length === 0 ? (
               <View style={styles.emptyCard}>
                 <View style={styles.emptyIconBox}>
                   <Text style={styles.emptyIconText}>🛍️</Text>
                 </View>
-                <Text style={styles.emptyTitle}>
-                  {filtroEstado === 'todas'
-                    ? 'Sin ventas registradas hoy'
-                    : 'No hay contratos con este estado'}
-                </Text>
+                <Text style={styles.emptyTitle}>Sin ventas registradas hoy</Text>
                 <Text style={styles.emptySubtitle}>
-                  {filtroEstado === 'todas'
-                    ? 'Los contratos de crédito y ventas que registres en terreno aparecerán aquí con su estado de auditoría en tiempo real.'
-                    : 'Prueba cambiando de filtro para visualizar las demás ventas de la jornada.'}
+                  Los contratos de crédito y ventas que registres en terreno aparecerán aquí listados en tiempo real.
                 </Text>
                 <TouchableOpacity
                   style={styles.emptyActionBtn}
@@ -577,7 +502,7 @@ export default function VendedorDashboard({ navigation }) {
                 </TouchableOpacity>
               </View>
             ) : (
-              ventasFiltradas.map((item) => {
+              ventasHoy.map((item) => {
                 const cfg = getEstadoConfig(item.estado);
                 const contratoCodigo = item.id_contrato
                   ? (item.id_contrato.startsWith('VENTA-OFF-') ? item.id_contrato : `CTR-${item.id_contrato.slice(0, 8).toUpperCase()}`)
@@ -1181,83 +1106,56 @@ const styles = StyleSheet.create({
   // KPIS DINÁMICOS
   kpiRow: {
     flexDirection: 'row',
-    gap: 8,
     marginTop: 12,
   },
   kpiCardColocado: {
-    flex: 1.3,
+    flex: 1,
     backgroundColor: '#ECFDF5',
     borderWidth: 1,
     borderColor: '#A7F3D0',
-    borderRadius: 12,
-    padding: 10,
+    borderRadius: 14,
+    padding: 14,
+    shadowColor: '#0F172A',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.03,
+    shadowRadius: 5,
+    elevation: 1,
+  },
+  kpiCardHeaderRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 2,
   },
   kpiLabelColocado: {
-    fontSize: 9,
+    fontSize: 10,
     fontWeight: '800',
     color: '#047857',
     letterSpacing: 0.5,
   },
   kpiValueColocado: {
-    fontSize: 13,
+    fontSize: 22,
     fontWeight: '800',
     color: '#065F46',
-    marginTop: 2,
+    marginVertical: 3,
   },
   kpiSubColocado: {
-    fontSize: 9,
+    fontSize: 11,
     color: '#059669',
-    marginTop: 1,
+    fontWeight: '500',
   },
-  kpiCardAprobadas: {
-    flex: 1,
-    backgroundColor: '#FFFFFF',
+  kpiCountBadge: {
+    backgroundColor: '#D1FAE5',
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 8,
     borderWidth: 1,
-    borderColor: '#E2E8F0',
-    borderRadius: 12,
-    padding: 10,
+    borderColor: '#A7F3D0',
   },
-  kpiLabelAprobadas: {
-    fontSize: 9,
-    fontWeight: '700',
-    color: '#10B981',
-    letterSpacing: 0.5,
-  },
-  kpiValueAprobadas: {
-    fontSize: 14,
+  kpiCountBadgeText: {
+    fontSize: 11,
     fontWeight: '800',
-    color: '#0F172A',
-    marginTop: 2,
-  },
-  kpiSubAprobadas: {
-    fontSize: 9,
-    color: '#64748B',
-    marginTop: 1,
-  },
-  kpiCardPendientes: {
-    flex: 1,
-    backgroundColor: '#FFFBEB',
-    borderWidth: 1,
-    borderColor: '#FDE68A',
-    borderRadius: 12,
-    padding: 10,
-  },
-  kpiLabelPendientes: {
-    fontSize: 9,
-    fontWeight: '800',
-    color: '#B45309',
-    letterSpacing: 0.5,
-  },
-  kpiValuePendientes: {
-    fontSize: 14,
-    fontWeight: '800',
-    color: '#92400E',
-    marginTop: 2,
-  },
-  kpiSubPendientes: {
-    fontSize: 9,
-    color: '#B45309',
-    marginTop: 1,
+    color: '#047857',
   },
 
   // SELECTOR SEGMENTADO (TABS)

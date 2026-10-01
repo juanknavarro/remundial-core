@@ -89,6 +89,22 @@ class Abono(Base):
         default="efectivo",
         server_default="efectivo",
     )
+    monto_efectivo: Mapped[Optional[Decimal]] = mapped_column(
+        Numeric(12, 2),
+        nullable=True,
+        default=Decimal("0.00"),
+        server_default="0.00",
+    )
+    monto_transferencia: Mapped[Optional[Decimal]] = mapped_column(
+        Numeric(12, 2),
+        nullable=True,
+        default=Decimal("0.00"),
+        server_default="0.00",
+    )
+    referencia_pago: Mapped[Optional[str]] = mapped_column(
+        String(255),
+        nullable=True,
+    )
     creado_en: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         server_default=func.now(),

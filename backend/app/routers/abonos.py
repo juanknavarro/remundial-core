@@ -13,7 +13,7 @@ from app.core.deps import (
     get_current_user,
     get_user_from_header_or_query,
     require_cobrador_o_supervisor,
-    require_supervisor_o_secretaria,
+    require_supervisor,
 )
 from app.crud import crud_abono
 from app.models.abono import EstadoAbono
@@ -88,7 +88,7 @@ async def listar_abonos_por_credito(
 @router.get(
     "/cierres-caja",
     response_model=List[CierreCajaResponse],
-    summary="Listar actas históricas de cierre de caja (Supervisor o Secretaria)",
+    summary="Listar actas históricas de cierre de caja (Solo Supervisor)",
     status_code=status.HTTP_200_OK,
 )
 async def listar_cierres_caja(
@@ -96,7 +96,7 @@ async def listar_cierres_caja(
     skip: int = Query(0, ge=0, description="Paginación: registros a omitir"),
     limit: int = Query(100, ge=1, le=500, description="Límite de registros"),
     db: AsyncSession = Depends(get_db),
-    current_user: Usuario = Depends(require_supervisor_o_secretaria),
+    current_user: Usuario = Depends(require_supervisor),
 ):
     """Retorna las actas históricas de arqueo y cierre de caja realizadas en secretaría."""
     return await crud_abono.get_cierres_caja_list(
@@ -419,7 +419,7 @@ async def generar_recibo_offline_pdf(
 @router.get(
     "",
     response_model=List[AbonoResponse],
-    summary="Listar abonos con filtros (Cobrador, Secretaria o Supervisor)",
+    summary="Listar abonos con filtros (Cobrador o Supervisor)",
     status_code=status.HTTP_200_OK,
 )
 async def listar_abonos(
@@ -434,11 +434,11 @@ async def listar_abonos(
     
     Seguridad RBAC:
     - Si es COBRADOR: se restringe estrictamente a consultar sus propios recaudos (cobrador_id = current_user.id).
-    - Si es SUPERVISOR, SECRETARIA o MASTER: puede consultar cualquier cobrador o toda la cartera.
+    - Si es SUPERVISOR o MASTER: puede consultar cualquier cobrador o toda la cartera.
     """
     if current_user.rol == RolUsuario.COBRADOR:
         cobrador_id = current_user.id
-    elif current_user.rol not in [RolUsuario.SECRETARIA, RolUsuario.SUPERVISOR, RolUsuario.MASTER]:
+    elif current_user.rol not in [RolUsuario.SUPERVISOR, RolUsuario.MASTER]:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="No posee autorización para consultar el historial de recaudos.",
@@ -456,13 +456,13 @@ async def listar_abonos(
 @router.post(
     "/conciliar-ruta",
     response_model=ConciliacionRutaResponse,
-    summary="Conciliar y cerrar caja de una ruta (Secretaria o Supervisor)",
+    summary="Conciliar y cerrar caja de una ruta (Solo Supervisor)",
     status_code=status.HTTP_200_OK,
 )
 async def conciliar_ruta(
     datos: ConciliacionRutaRequest,
     db: AsyncSession = Depends(get_db),
-    current_user: Usuario = Depends(require_supervisor_o_secretaria),
+    current_user: Usuario = Depends(require_supervisor),
 ):
     """Realiza el arqueo y conciliación de caja para la ruta de un cobrador.
     

@@ -14,7 +14,6 @@ class RolUsuario(str, enum.Enum):
     """Roles disponibles para los usuarios del sistema."""
     MASTER = "master"
     SUPERVISOR = "supervisor"
-    SECRETARIA = "secretaria"
     VENDEDOR = "vendedor"
     COBRADOR = "cobrador"
 

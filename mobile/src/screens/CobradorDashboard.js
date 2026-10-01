@@ -727,6 +727,10 @@ export default function CobradorDashboard({ navigation }) {
   const [modalAbonoVisible, setModalAbonoVisible] = useState(false);
   const [creditoSeleccionado, setCreditoSeleccionado] = useState(null);
   const [montoAbono, setMontoAbono] = useState('');
+  const [metodoPagoAbono, setMetodoPagoAbono] = useState('efectivo');
+  const [montoEfectivoAbono, setMontoEfectivoAbono] = useState('');
+  const [montoTransferenciaAbono, setMontoTransferenciaAbono] = useState('');
+  const [referenciaPagoAbono, setReferenciaPagoAbono] = useState('');
   const [gpsCoords, setGpsCoords] = useState(null);
   const [isCapturingGps, setIsCapturingGps] = useState(false);
   const [gpsStatusText, setGpsStatusText] = useState('Esperando captura satelital...');
@@ -1515,9 +1519,57 @@ export default function CobradorDashboard({ navigation }) {
       ? String(Math.round(cuotaPendiente.saldo_cuota || cuotaPendiente.valor_exigible || cuotaPendiente.monto || credito.valor_cuota || 0))
       : (credito.valor_cuota ? String(Math.round(credito.valor_cuota)) : '');
     setMontoAbono(cuotaSugerida);
+    setMetodoPagoAbono('efectivo');
+    const valSug = parseFloat(cuotaSugerida) || 0;
+    setMontoEfectivoAbono(valSug > 0 ? String(valSug) : '');
+    setMontoTransferenciaAbono('0');
+    setReferenciaPagoAbono('');
     setGpsCoords(null);
     setModalAbonoVisible(true);
     capturarUbicacionGps();
+  };
+
+  const handleCambiarMetodoPagoAbono = (metodo) => {
+    const mLower = String(metodo).toLowerCase();
+    setMetodoPagoAbono(mLower);
+    const val = parseFloat(String(montoAbono).replace(/[^0-9.-]+/g, '')) || 0;
+    if (mLower === 'efectivo') {
+      setMontoEfectivoAbono(val > 0 ? String(val) : '');
+      setMontoTransferenciaAbono('0');
+    } else if (mLower === 'transferencia') {
+      setMontoEfectivoAbono('0');
+      setMontoTransferenciaAbono(val > 0 ? String(val) : '');
+    } else if (mLower === 'mixto') {
+      if (val > 0) {
+        const mitad = Math.floor(val / 2);
+        setMontoEfectivoAbono(String(mitad));
+        setMontoTransferenciaAbono(String(val - mitad));
+      } else {
+        setMontoEfectivoAbono('');
+        setMontoTransferenciaAbono('');
+      }
+    }
+  };
+
+  const actualizarMontoAbono = (nuevoMonto, metodo = metodoPagoAbono) => {
+    setMontoAbono(nuevoMonto);
+    const val = parseFloat(String(nuevoMonto).replace(/[^0-9.-]+/g, '')) || 0;
+    if (metodo === 'efectivo') {
+      setMontoEfectivoAbono(val > 0 ? String(val) : '');
+      setMontoTransferenciaAbono('0');
+    } else if (metodo === 'transferencia') {
+      setMontoEfectivoAbono('0');
+      setMontoTransferenciaAbono(val > 0 ? String(val) : '');
+    } else if (metodo === 'mixto') {
+      if (val > 0) {
+        const mitad = Math.floor(val / 2);
+        setMontoEfectivoAbono(String(mitad));
+        setMontoTransferenciaAbono(String(val - mitad));
+      } else {
+        setMontoEfectivoAbono('');
+        setMontoTransferenciaAbono('');
+      }
+    }
   };
 
   // ==========================================
@@ -1585,6 +1637,41 @@ export default function CobradorDashboard({ navigation }) {
         `El valor a abonar ($${valor.toLocaleString('es-CO')}) no puede superar el saldo pendiente ($${saldoPendienteActual.toLocaleString('es-CO')}).`
       );
       return;
+    }
+
+    // Regla de validación de Pago Mixto / Transferencia
+    if (metodoPagoAbono === 'transferencia') {
+      if (!referenciaPagoAbono || !referenciaPagoAbono.trim()) {
+        console.warn('❌ [DEBUG 4ca - REFERENCIA REQUERIDA] Falta comprobante/referencia bancaria');
+        Alert.alert(
+          'Referencia Requerida',
+          'Debe ingresar el número de comprobante o referencia bancaria para pagos por transferencia.'
+        );
+        return;
+      }
+    } else if (metodoPagoAbono === 'mixto') {
+      const mEfec = parseFloat(montoEfectivoAbono) || 0;
+      const mTrans = parseFloat(montoTransferenciaAbono) || 0;
+      const suma = Math.round((mEfec + mTrans) * 100) / 100;
+      const valorRedondeado = Math.round(valor * 100) / 100;
+
+      if (suma !== valorRedondeado) {
+        console.warn('❌ [DEBUG 4cb - DESCUADRE MIXTO] Suma:', suma, 'Valor:', valorRedondeado);
+        Alert.alert(
+          'Descuadre en Pago Mixto',
+          `La suma de efectivo ($${mEfec.toLocaleString('es-CO')}) y transferencia ($${mTrans.toLocaleString('es-CO')}) debe ser exactamente igual al total a recaudar ($${valor.toLocaleString('es-CO')}). Actualmente suma $${suma.toLocaleString('es-CO')}.`
+        );
+        return;
+      }
+
+      if (mTrans > 0 && (!referenciaPagoAbono || !referenciaPagoAbono.trim())) {
+        console.warn('❌ [DEBUG 4cc - REFERENCIA TRANSFERENCIA REQUERIDA]');
+        Alert.alert(
+          'Referencia Requerida',
+          'Debe ingresar el número de comprobante o referencia bancaria de la transferencia en el pago mixto.'
+        );
+        return;
+      }
     }
 
     // Validación preventiva obligatoria de la firma manuscrita del cliente titular
@@ -1665,6 +1752,21 @@ export default function CobradorDashboard({ navigation }) {
         ? `Cuota ${cActual} de ${tCuotas} (Abono Parcial en Terreno)`
         : `Cuota ${cActual} de ${tCuotas} (Pago Total de Cuota)`;
 
+      let finalMontoEfectivo = 0;
+      let finalMontoTransferencia = 0;
+      const finalReferenciaPago = referenciaPagoAbono ? referenciaPagoAbono.trim() : null;
+
+      if (metodoPagoAbono === 'efectivo') {
+        finalMontoEfectivo = valor;
+        finalMontoTransferencia = 0;
+      } else if (metodoPagoAbono === 'transferencia') {
+        finalMontoEfectivo = 0;
+        finalMontoTransferencia = valor;
+      } else if (metodoPagoAbono === 'mixto') {
+        finalMontoEfectivo = parseFloat(montoEfectivoAbono) || 0;
+        finalMontoTransferencia = parseFloat(montoTransferenciaAbono) || 0;
+      }
+
       const payload = {
         credito_id: targetCreditoId,
         cobrador_id: targetCobradorId,
@@ -1674,7 +1776,10 @@ export default function CobradorDashboard({ navigation }) {
           latitud: lat,
           longitud: lon,
         },
-        metodo_pago: 'efectivo',
+        metodo_pago: metodoPagoAbono,
+        monto_efectivo: finalMontoEfectivo,
+        monto_transferencia: finalMontoTransferencia,
+        referencia_pago: finalReferenciaPago,
         notas: `Abono en ruta (${cuotaTexto}) - Cobrador ${nombreCobradorReal}`,
         firma_cliente: firmaCliente,
         firma_cobrador: firmaCobrador,
@@ -1688,6 +1793,10 @@ export default function CobradorDashboard({ navigation }) {
         cliente_telefono: creditoSeleccionado.cliente?.telefono || '',
         numero_contrato: targetContrato,
         valor,
+        metodo_pago: metodoPagoAbono,
+        monto_efectivo: finalMontoEfectivo,
+        monto_transferencia: finalMontoTransferencia,
+        referencia_pago: finalReferenciaPago,
         credito_id: targetCreditoId,
         cobrador_id: targetCobradorId,
         cobrador_nombre: nombreCobradorReal,
@@ -3399,7 +3508,7 @@ export default function CobradorDashboard({ navigation }) {
                       disabled={isSubmittingAbono}
                       onPress={() => {
                         if (montoCuotaActual > 0) {
-                          setMontoAbono(String(montoCuotaActual));
+                          actualizarMontoAbono(String(montoCuotaActual));
                         }
                       }}
                     >
@@ -3418,7 +3527,7 @@ export default function CobradorDashboard({ navigation }) {
                         disabled={isSubmittingAbono}
                         onPress={() => {
                           if (montoDosCuotas > 0) {
-                            setMontoAbono(String(montoDosCuotas));
+                            actualizarMontoAbono(String(montoDosCuotas));
                           }
                         }}
                       >
@@ -3436,9 +3545,9 @@ export default function CobradorDashboard({ navigation }) {
                         disabled={isSubmittingAbono}
                         onPress={() => {
                           if (sPendiente > 0) {
-                            setMontoAbono(String(Math.round(sPendiente)));
+                            actualizarMontoAbono(String(Math.round(sPendiente)));
                           } else if (montoCuotaActual > 0) {
-                            setMontoAbono(String(montoCuotaActual));
+                            actualizarMontoAbono(String(montoCuotaActual));
                           }
                         }}
                       >
@@ -3459,11 +3568,139 @@ export default function CobradorDashboard({ navigation }) {
                   keyboardType="numeric"
                   editable={!isSubmittingAbono}
                   value={montoAbono}
-                  onChangeText={setMontoAbono}
+                  onChangeText={actualizarMontoAbono}
                   placeholder="0"
                   placeholderTextColor="#94A3B8"
                 />
               </View>
+
+              {/* Selector de Método de Pago: Efectivo / Transferencia / Mixto */}
+              {(() => {
+                const valorTotalAbonoNum = parseFloat(String(montoAbono).replace(/[^0-9.-]+/g, '')) || 0;
+                const mEfecNum = parseFloat(montoEfectivoAbono) || 0;
+                const mTransNum = parseFloat(montoTransferenciaAbono) || 0;
+                const sumaMixtaAbono = Math.round((mEfecNum + mTransNum) * 100) / 100;
+                const totalRedondeado = Math.round(valorTotalAbonoNum * 100) / 100;
+                const estaCuadradoMixto = Math.abs(sumaMixtaAbono - totalRedondeado) < 0.01;
+
+                return (
+                  <View style={styles.metodoPagoBox}>
+                    <Text style={styles.inputLabel}>MÉTODO DE PAGO</Text>
+                    <View style={styles.metodoPagoTabs}>
+                      {[
+                        { id: 'efectivo', label: 'Efectivo', icon: '💵 ' },
+                        { id: 'transferencia', label: 'Transferencia', icon: '📱 ' },
+                        { id: 'mixto', label: 'Mixto', icon: '⚖️ ' },
+                      ].map((m) => {
+                        const isSelected = metodoPagoAbono === m.id;
+                        return (
+                          <TouchableOpacity
+                            key={m.id}
+                            disabled={isSubmittingAbono}
+                            style={[
+                              styles.metodoPagoTabBtn,
+                              isSelected && styles.metodoPagoTabBtnActive,
+                            ]}
+                            onPress={() => handleCambiarMetodoPagoAbono(m.id)}
+                            accessibilityRole="button"
+                            accessibilityState={{ selected: isSelected }}
+                          >
+                            <Text
+                              style={[
+                                styles.metodoPagoTabText,
+                                isSelected && styles.metodoPagoTabTextActive,
+                              ]}
+                            >
+                              {m.icon}{m.label}
+                            </Text>
+                          </TouchableOpacity>
+                        );
+                      })}
+                    </View>
+
+                    {/* Si es 'transferencia': Campo para Número de Comprobante / Referencia */}
+                    {metodoPagoAbono === 'transferencia' && (
+                      <View style={styles.metodoDetalleBox}>
+                        <Text style={styles.fieldLabel}>NÚMERO DE COMPROBANTE / REFERENCIA *</Text>
+                        <TextInput
+                          style={styles.fieldInput}
+                          placeholder="Ej. Nequi, Bancolombia, Daviplata (Ref. #)"
+                          placeholderTextColor="#94A3B8"
+                          value={referenciaPagoAbono}
+                          onChangeText={setReferenciaPagoAbono}
+                          autoCapitalize="characters"
+                          editable={!isSubmittingAbono}
+                        />
+                        <Text style={styles.fieldHelpText}>
+                          Código o número de aprobación bancario del recaudo.
+                        </Text>
+                      </View>
+                    )}
+
+                    {/* Si es 'mixto': Dos inputs numéricos, aviso de sugerencia 50/50 y campo de Referencia */}
+                    {metodoPagoAbono === 'mixto' && (
+                      <View style={styles.metodoDetalleBox}>
+                        <View style={styles.cuadreBoxHeader}>
+                          <Text style={styles.cuadreBoxTitle}>DESGLOSE DE PAGO SIMULTÁNEO</Text>
+                          {valorTotalAbonoNum > 0 && (
+                            <View style={[styles.cuadreBadge, estaCuadradoMixto ? styles.cuadreBadgeOk : styles.cuadreBadgeWarn]}>
+                              <Text style={[styles.cuadreBadgeText, estaCuadradoMixto ? styles.cuadreBadgeTextOk : styles.cuadreBadgeTextWarn]}>
+                                {estaCuadradoMixto
+                                  ? `✓ Cuadrado: ${formatCOP(valorTotalAbonoNum)}`
+                                  : `⚠️ Total: ${formatCOP(sumaMixtaAbono)} de ${formatCOP(valorTotalAbonoNum)}`}
+                              </Text>
+                            </View>
+                          )}
+                        </View>
+
+                        <View style={styles.formRowTwoCols}>
+                          <View style={{ flex: 1, justifyContent: 'flex-end' }}>
+                            <Text style={styles.fieldLabel}>EFECTIVO *</Text>
+                            <TextInput
+                              style={styles.fieldInput}
+                              keyboardType="numeric"
+                              placeholder="0"
+                              placeholderTextColor="#94A3B8"
+                              value={montoEfectivoAbono}
+                              onChangeText={setMontoEfectivoAbono}
+                              editable={!isSubmittingAbono}
+                            />
+                          </View>
+                          <View style={{ flex: 1, justifyContent: 'flex-end' }}>
+                            <Text style={styles.fieldLabel}>TRANSFERENCIA *</Text>
+                            <TextInput
+                              style={styles.fieldInput}
+                              keyboardType="numeric"
+                              placeholder="0"
+                              placeholderTextColor="#94A3B8"
+                              value={montoTransferenciaAbono}
+                              onChangeText={setMontoTransferenciaAbono}
+                              editable={!isSubmittingAbono}
+                            />
+                          </View>
+                        </View>
+
+                        <Text style={styles.sugerenciaMixtoText}>
+                          ⚠️ Valores sugeridos. Verifica y ajusta el dinero físico recibido.
+                        </Text>
+
+                        <View style={{ marginTop: 8 }}>
+                          <Text style={styles.fieldLabel}>NÚMERO DE COMPROBANTE / REFERENCIA *</Text>
+                          <TextInput
+                            style={styles.fieldInput}
+                            placeholder="Ej. Nequi, Bancolombia, Daviplata (Ref. #)"
+                            placeholderTextColor="#94A3B8"
+                            value={referenciaPagoAbono}
+                            onChangeText={setReferenciaPagoAbono}
+                            autoCapitalize="characters"
+                            editable={!isSubmittingAbono}
+                          />
+                        </View>
+                      </View>
+                    )}
+                  </View>
+                );
+              })()}
 
               {/* Lienzo de Firma Digital Manuscrita del Cliente Titular */}
               <View style={styles.signatureContainer}>
@@ -6949,5 +7186,124 @@ const styles = StyleSheet.create({
     color: '#15803D',
     fontSize: 11,
     fontWeight: '700',
+  },
+  // Estilos de Pagos Mixtos (Cobranza)
+  metodoPagoBox: {
+    backgroundColor: '#F8FAFC',
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    borderRadius: 12,
+    padding: 12,
+    marginTop: 8,
+    marginBottom: 8,
+    gap: 10,
+  },
+  metodoPagoTabs: {
+    flexDirection: 'row',
+    backgroundColor: '#E2E8F0',
+    borderRadius: 10,
+    padding: 3,
+    gap: 4,
+  },
+  metodoPagoTabBtn: {
+    flex: 1,
+    paddingVertical: 8,
+    alignItems: 'center',
+    borderRadius: 8,
+  },
+  metodoPagoTabBtnActive: {
+    backgroundColor: '#FFFFFF',
+    shadowColor: '#000000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.1,
+    shadowRadius: 2,
+    elevation: 2,
+  },
+  metodoPagoTabText: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#64748B',
+  },
+  metodoPagoTabTextActive: {
+    color: '#059669',
+    fontWeight: '800',
+  },
+  metodoDetalleBox: {
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1,
+    borderColor: '#CBD5E1',
+    borderRadius: 10,
+    padding: 10,
+    gap: 8,
+    marginTop: 6,
+  },
+  cuadreBoxHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 4,
+    flexWrap: 'wrap',
+    gap: 4,
+  },
+  cuadreBoxTitle: {
+    fontSize: 10,
+    fontWeight: '800',
+    color: '#334155',
+    letterSpacing: 0.5,
+  },
+  cuadreBadge: {
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 6,
+    borderWidth: 1,
+  },
+  cuadreBadgeOk: {
+    backgroundColor: '#ECFDF5',
+    borderColor: '#A7F3D0',
+  },
+  cuadreBadgeWarn: {
+    backgroundColor: '#FFFBEB',
+    borderColor: '#FDE68A',
+  },
+  cuadreBadgeText: {
+    fontSize: 10,
+    fontWeight: '800',
+  },
+  cuadreBadgeTextOk: {
+    color: '#047857',
+  },
+  cuadreBadgeTextWarn: {
+    color: '#B45309',
+  },
+  formRowTwoCols: {
+    flexDirection: 'row',
+    gap: 8,
+  },
+  fieldLabel: {
+    fontSize: 10,
+    fontWeight: '700',
+    color: '#475569',
+    marginBottom: 4,
+  },
+  fieldInput: {
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1,
+    borderColor: '#CBD5E1',
+    borderRadius: 8,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    fontSize: 13,
+    color: '#0F172A',
+  },
+  fieldHelpText: {
+    fontSize: 9,
+    color: '#94A3B8',
+    marginTop: 2,
+  },
+  sugerenciaMixtoText: {
+    fontSize: 10,
+    color: '#D97706',
+    marginTop: 4,
+    fontWeight: '600',
   },
 });

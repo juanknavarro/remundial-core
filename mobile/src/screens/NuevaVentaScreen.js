@@ -136,6 +136,12 @@ export default function NuevaVentaScreen({ route, navigation }) {
   const [numeroCuotas, setNumeroCuotas] = useState(4);
   const [fechaPrimeraCuota, setFechaPrimeraCuota] = useState(() => getFechaPrimerCobroSugerida());
 
+  // Pagos Mixtos en Cuota Inicial
+  const [metodoPagoInicial, setMetodoPagoInicial] = useState('Efectivo');
+  const [montoEfectivoInput, setMontoEfectivoInput] = useState('');
+  const [montoTransferenciaInput, setMontoTransferenciaInput] = useState('');
+  const [referenciaPagoInicial, setReferenciaPagoInicial] = useState('');
+
   // Datos de respaldo: Codeudor Solidario (Sólo Venta a Crédito)
   const [codeudorNombre, setCodeudorNombre] = useState('');
   const [codeudorCedula, setCodeudorCedula] = useState('');
@@ -217,6 +223,10 @@ export default function NuevaVentaScreen({ route, navigation }) {
     setModalidad('credito');
     setTipoPago('mensual');
     setCuotaInicialInput('0');
+    setMetodoPagoInicial('Efectivo');
+    setMontoEfectivoInput('');
+    setMontoTransferenciaInput('');
+    setReferenciaPagoInicial('');
     setNumeroCuotas(4);
     setFechaPrimeraCuota(getFechaPrimerCobroSugerida());
     setCodeudorNombre('');
@@ -418,6 +428,10 @@ export default function NuevaVentaScreen({ route, navigation }) {
         if (draft.modalidad) setModalidad(draft.modalidad);
         if (draft.tipoPago) setTipoPago(draft.tipoPago);
         if (draft.cuotaInicialInput) setCuotaInicialInput(draft.cuotaInicialInput);
+        if (draft.metodoPagoInicial) setMetodoPagoInicial(draft.metodoPagoInicial);
+        if (draft.montoEfectivoInput) setMontoEfectivoInput(draft.montoEfectivoInput);
+        if (draft.montoTransferenciaInput) setMontoTransferenciaInput(draft.montoTransferenciaInput);
+        if (draft.referenciaPagoInicial) setReferenciaPagoInicial(draft.referenciaPagoInicial);
         if (draft.numeroCuotas) setNumeroCuotas(draft.numeroCuotas);
         if (draft.fechaPrimeraCuota) setFechaPrimeraCuota(draft.fechaPrimeraCuota);
         if (draft.codeudorNombre) setCodeudorNombre(draft.codeudorNombre);
@@ -450,6 +464,10 @@ export default function NuevaVentaScreen({ route, navigation }) {
             modalidad,
             tipoPago,
             cuotaInicialInput,
+            metodoPagoInicial,
+            montoEfectivoInput,
+            montoTransferenciaInput,
+            referenciaPagoInicial,
             numeroCuotas,
             fechaPrimeraCuota,
             codeudorNombre,
@@ -478,6 +496,10 @@ export default function NuevaVentaScreen({ route, navigation }) {
         modalidad,
         tipoPago,
         cuotaInicialInput,
+        metodoPagoInicial,
+        montoEfectivoInput,
+        montoTransferenciaInput,
+        referenciaPagoInicial,
         numeroCuotas,
         fechaPrimeraCuota,
         codeudorNombre,
@@ -505,6 +527,10 @@ export default function NuevaVentaScreen({ route, navigation }) {
     modalidad,
     tipoPago,
     cuotaInicialInput,
+    metodoPagoInicial,
+    montoEfectivoInput,
+    montoTransferenciaInput,
+    referenciaPagoInicial,
     numeroCuotas,
     fechaPrimeraCuota,
     codeudorNombre,
@@ -677,6 +703,44 @@ export default function NuevaVentaScreen({ route, navigation }) {
       }
     }
 
+    // Validación estricta de Pago Mixto / Transferencia (Solo si monto a pagar > 0)
+    const montoEsperadoPago = modalidad === 'contado' ? totalArticulos : cuotaInicial;
+
+    if (montoEsperadoPago > 0) {
+      if (metodoPagoInicial === 'Mixto') {
+        const efectivoVal = parseFloat(montoEfectivoInput) || 0;
+        const transVal = parseFloat(montoTransferenciaInput) || 0;
+        const sumaMixta = Math.round((efectivoVal + transVal) * 100) / 100;
+        const totalEsperado = Math.round(montoEsperadoPago * 100) / 100;
+
+        if (sumaMixta !== totalEsperado) {
+          Alert.alert(
+            'Error',
+            modalidad === 'contado'
+              ? 'La suma de efectivo y transferencia debe coincidir con el valor total de la venta de contado.'
+              : 'La suma de efectivo y transferencia debe coincidir con la cuota inicial total.'
+          );
+          return;
+        }
+
+        if (transVal > 0 && !referenciaPagoInicial.trim()) {
+          Alert.alert(
+            'Referencia Requerida',
+            'Por favor ingresa el número de comprobante o referencia de la transferencia.'
+          );
+          return;
+        }
+      } else if (metodoPagoInicial === 'Transferencia') {
+        if (!referenciaPagoInicial.trim()) {
+          Alert.alert(
+            'Referencia Requerida',
+            'Por favor ingresa el número de comprobante o referencia de la transferencia.'
+          );
+          return;
+        }
+      }
+    }
+
     // Validación estricta de firmas: Titular y Vendedor son obligatorias; Codeudor es opcional
     if (!firmaTitular) {
       Alert.alert(
@@ -701,6 +765,32 @@ export default function NuevaVentaScreen({ route, navigation }) {
         ? fechaPrimeraCuota.trim()
         : getFechaPrimerCobroSugerida(tipoPago);
 
+      // Distribución granular de pago según método de pago (Contado o Crédito)
+      const montoBase = modalidad === 'contado' ? totalArticulos : cuotaInicial;
+      const esMontoCero = !montoBase || montoBase <= 0;
+
+      // Si cuotaInicial === 0 (o montoBase === 0), fuerza de forma predeterminada:
+      // metodo_pago_inicial: 'Efectivo', monto_inicial_efectivo: 0, monto_inicial_transferencia: 0, referencia_pago_inicial: ''
+      const metodoPagoFinal = esMontoCero ? 'Efectivo' : (metodoPagoInicial || 'Efectivo');
+
+      const montoInicialEfectivo = esMontoCero
+        ? 0
+        : (metodoPagoFinal === 'Mixto'
+            ? (parseFloat(montoEfectivoInput) || 0)
+            : (metodoPagoFinal === 'Efectivo' ? montoBase : 0));
+
+      const montoInicialTransferencia = esMontoCero
+        ? 0
+        : (metodoPagoFinal === 'Mixto'
+            ? (parseFloat(montoTransferenciaInput) || 0)
+            : (metodoPagoFinal === 'Transferencia' ? montoBase : 0));
+
+      const refPagoInicial = esMontoCero
+        ? ''
+        : ((metodoPagoFinal === 'Transferencia' || (metodoPagoFinal === 'Mixto' && montoInicialTransferencia > 0))
+            ? (referenciaPagoInicial.trim() || '')
+            : '');
+
       // Objetos de respaldo para crédito
       const codeudorObj = modalidad === 'credito' && codeudorNombre.trim() ? {
         nombre: codeudorNombre.trim(),
@@ -719,7 +809,11 @@ export default function NuevaVentaScreen({ route, navigation }) {
         cliente_id: clienteSeleccionado.id,
         vendedor_id: user?.id,
         tipo_pago: modalidad === 'contado' ? 'mensual' : tipoPago,
-        cuota_inicial: cuotaInicial,
+        cuota_inicial: modalidad === 'contado' ? totalArticulos : cuotaInicial,
+        metodo_pago_inicial: metodoPagoFinal,
+        monto_inicial_efectivo: montoInicialEfectivo,
+        monto_inicial_transferencia: montoInicialTransferencia,
+        referencia_pago_inicial: refPagoInicial,
         monto_financiado: montoFinanciado,
         numero_cuotas: modalidad === 'contado' ? 1 : numeroCuotas,
         valor_cuota: valorCuota,
@@ -750,6 +844,11 @@ export default function NuevaVentaScreen({ route, navigation }) {
         cuotas: modalidad === 'contado' ? 1 : numeroCuotas,
         valor_cuota: valorCuota,
         tipo_pago: tipoPago,
+        cuota_inicial: modalidad === 'contado' ? totalArticulos : cuotaInicial,
+        metodo_pago_inicial: metodoPagoFinal,
+        monto_inicial_efectivo: montoInicialEfectivo,
+        monto_inicial_transferencia: montoInicialTransferencia,
+        referencia_pago_inicial: refPagoInicial,
         departamento_venta: departamentoVenta.trim() || 'Córdoba',
         ciudad_venta: ciudadVenta.trim() || 'Montería',
         generacion_automatica_contrato: contratoAutomatico,
@@ -815,6 +914,11 @@ export default function NuevaVentaScreen({ route, navigation }) {
         cliente_telefono: clienteSeleccionado.telefono || '',
         modalidad: modalidad === 'contado' ? 'Venta de Contado' : 'Crédito Financiado',
         total: totalArticulos,
+        cuota_inicial: modalidad === 'contado' ? totalArticulos : cuotaInicial,
+        metodo_pago_inicial: metodoPagoFinal,
+        monto_inicial_efectivo: montoInicialEfectivo,
+        monto_inicial_transferencia: montoInicialTransferencia,
+        referencia_pago_inicial: refPagoInicial,
         cuotas: modalidad === 'contado' ? 'Liquidado' : `${numeroCuotas} cuotas de ${formatCOP(valorCuota)}`,
         codeudor: codeudorObj ? codeudorObj.nombre : null,
         referencia: referenciaObj ? `${referenciaObj.nombre} (${referenciaObj.parentesco || 'Familiar'})` : null,
@@ -1002,6 +1106,168 @@ export default function NuevaVentaScreen({ route, navigation }) {
       (p.sku?.toLowerCase() || '').includes(q)
     );
   });
+
+  // Selector reutilizable de método de pago (Aplica tanto a Contado como a Cuota Inicial de Crédito)
+  const renderSelectorMetodoPago = () => {
+    const esContado = modalidad === 'contado';
+    const montoObjetivo = esContado ? totalArticulos : cuotaInicial;
+    const isCero = !montoObjetivo || montoObjetivo <= 0;
+    const sumaMixta = Math.round(((parseFloat(montoEfectivoInput) || 0) + (parseFloat(montoTransferenciaInput) || 0)) * 100) / 100;
+    const montoObjetivoRedondeado = Math.round(montoObjetivo * 100) / 100;
+    const estaCuadrado = sumaMixta === montoObjetivoRedondeado;
+
+    return (
+      <View style={styles.metodoPagoBox}>
+        <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+          <Text style={styles.fieldLabel}>
+            {esContado ? 'MÉTODO DE PAGO (VENTA DE CONTADO) *' : 'MÉTODO DE PAGO (CUOTA INICIAL) *'}
+          </Text>
+          {montoObjetivo > 0 ? (
+            <Text style={{ fontSize: 9, fontWeight: '800', color: '#047857' }}>
+              {esContado ? `TOTAL: ${formatCOP(montoObjetivo)}` : `ANTICIPO: ${formatCOP(montoObjetivo)}`}
+            </Text>
+          ) : (
+            <Text style={{ fontSize: 9, fontWeight: '700', color: '#94A3B8' }}>
+              {esContado ? 'TOTAL: $ 0' : 'SIN ANTICIPO ($ 0)'}
+            </Text>
+          )}
+        </View>
+
+        {/* SegmentedControl: Efectivo, Transferencia, Mixto */}
+        <View style={[styles.metodoPagoTabs, isCero && styles.metodoPagoTabsDisabled]}>
+          {['Efectivo', 'Transferencia', 'Mixto'].map((metodo) => {
+            const isSelected = isCero ? metodo === 'Efectivo' : metodoPagoInicial === metodo;
+            return (
+              <TouchableOpacity
+                key={metodo}
+                disabled={isCero}
+                style={[
+                  styles.metodoPagoTabBtn,
+                  isSelected && styles.metodoPagoTabBtnActive,
+                  isCero && isSelected && styles.metodoPagoTabBtnDisabledActive,
+                ]}
+                onPress={() => {
+                  if (isCero) return;
+                  setMetodoPagoInicial(metodo);
+                  if (metodo === 'Efectivo') {
+                    setMontoEfectivoInput(montoObjetivo > 0 ? String(montoObjetivo) : '');
+                    setMontoTransferenciaInput('0');
+                  } else if (metodo === 'Transferencia') {
+                    setMontoEfectivoInput('0');
+                    setMontoTransferenciaInput(montoObjetivo > 0 ? String(montoObjetivo) : '');
+                  } else if (metodo === 'Mixto') {
+                    if (montoObjetivo > 0) {
+                      const mitad = Math.floor(montoObjetivo / 2);
+                      setMontoEfectivoInput(String(mitad));
+                      setMontoTransferenciaInput(String(montoObjetivo - mitad));
+                    }
+                  }
+                }}
+                accessibilityRole="button"
+                accessibilityState={{ disabled: isCero, selected: isSelected }}
+              >
+                <Text
+                  style={[
+                    styles.metodoPagoTabText,
+                    isSelected && styles.metodoPagoTabTextActive,
+                    isCero && isSelected && styles.metodoPagoTabTextDisabledActive,
+                    isCero && !isSelected && styles.metodoPagoTabTextDisabled,
+                  ]}
+                >
+                  {metodo === 'Efectivo' && '💵 '}
+                  {metodo === 'Transferencia' && '📱 '}
+                  {metodo === 'Mixto' && '⚖️ '}
+                  {metodo}
+                </Text>
+              </TouchableOpacity>
+            );
+          })}
+        </View>
+
+        {/* Si es 'Transferencia': Campo para Número de Comprobante / Referencia (Oculto si no hay monto a cobrar) */}
+        {!isCero && metodoPagoInicial === 'Transferencia' && (
+          <View style={styles.metodoDetalleBox}>
+            <Text style={styles.fieldLabel}>NÚMERO DE COMPROBANTE / REFERENCIA *</Text>
+            <TextInput
+              style={styles.fieldInput}
+              placeholder="Ej. Nequi, Bancolombia, Daviplata (Ref. #)"
+              placeholderTextColor="#94A3B8"
+              value={referenciaPagoInicial}
+              onChangeText={setReferenciaPagoInicial}
+              autoCapitalize="characters"
+            />
+            <Text style={styles.fieldHelpText}>
+              {esContado
+                ? 'Código o número de aprobación bancario del pago total de contado.'
+                : 'Código o número de aprobación bancario del anticipo.'}
+            </Text>
+          </View>
+        )}
+
+        {/* Si es 'Mixto': Dos inputs numéricos, aviso de sugerencia 50/50 y campo de Referencia (Completamente oculto si no hay monto a cobrar) */}
+        {!isCero && metodoPagoInicial === 'Mixto' && (
+          <View style={styles.metodoDetalleBox}>
+            <View style={styles.cuadreBoxHeader}>
+              <Text style={styles.cuadreBoxTitle}>DESGLOSE DE PAGO SIMULTÁNEO</Text>
+              {montoObjetivo > 0 && (
+                <View style={[styles.cuadreBadge, estaCuadrado ? styles.cuadreBadgeOk : styles.cuadreBadgeWarn]}>
+                  <Text style={[styles.cuadreBadgeText, estaCuadrado ? styles.cuadreBadgeTextOk : styles.cuadreBadgeTextWarn]}>
+                    {estaCuadrado
+                      ? `✓ Cuadrado: ${formatCOP(montoObjetivo)}`
+                      : `⚠️ Total: ${formatCOP(sumaMixta)} de ${formatCOP(montoObjetivo)}`}
+                  </Text>
+                </View>
+              )}
+            </View>
+
+            <View style={styles.formRowTwoCols}>
+              <View style={{ flex: 1, justifyContent: 'flex-end' }}>
+                <Text style={styles.fieldLabel}>EFECTIVO *</Text>
+                <TextInput
+                  style={styles.fieldInput}
+                  keyboardType="numeric"
+                  placeholder="0"
+                  placeholderTextColor="#94A3B8"
+                  value={montoEfectivoInput}
+                  onChangeText={setMontoEfectivoInput}
+                />
+              </View>
+              <View style={{ flex: 1, justifyContent: 'flex-end' }}>
+                <Text style={styles.fieldLabel}>TRANSFERENCIA *</Text>
+                <TextInput
+                  style={styles.fieldInput}
+                  keyboardType="numeric"
+                  placeholder="0"
+                  placeholderTextColor="#94A3B8"
+                  value={montoTransferenciaInput}
+                  onChangeText={setMontoTransferenciaInput}
+                />
+              </View>
+            </View>
+
+            <Text style={styles.sugerenciaMixtoText}>
+              ⚠️ Valores sugeridos. Verifica y ajusta el dinero físico recibido.
+            </Text>
+
+            <View style={{ marginTop: 8 }}>
+              <Text style={styles.fieldLabel}>NÚMERO DE COMPROBANTE / REFERENCIA *</Text>
+              <TextInput
+                style={styles.fieldInput}
+                placeholder="Ej. Nequi, Bancolombia, Daviplata (Ref. #)"
+                placeholderTextColor="#94A3B8"
+                value={referenciaPagoInicial}
+                onChangeText={setReferenciaPagoInicial}
+                autoCapitalize="characters"
+              />
+              <Text style={styles.fieldHelpText}>
+                Número de comprobante bancario para la parte en transferencia.
+              </Text>
+            </View>
+          </View>
+        )}
+      </View>
+    );
+  };
 
   return (
     <SafeAreaView style={styles.safeArea}>
@@ -1315,11 +1581,15 @@ export default function NuevaVentaScreen({ route, navigation }) {
           <Text style={styles.sectionTitle}>3. CONDICIONES DE PAGO</Text>
 
           {modalidad === 'contado' ? (
-            <View style={styles.contadoNoticeBox}>
-              <Text style={styles.contadoNoticeTitle}>✓ VENTA LIQUIDADA DE CONTADO</Text>
-              <Text style={styles.contadoNoticeText}>
-                Se registra el pago total de {formatCOP(totalArticulos)} al momento de la entrega. Sin financiación ni cuotas pendientes.
-              </Text>
+            <View style={{ gap: 10, marginTop: 8 }}>
+              <View style={styles.contadoNoticeBox}>
+                <Text style={styles.contadoNoticeTitle}>✓ VENTA LIQUIDADA DE CONTADO</Text>
+                <Text style={styles.contadoNoticeText}>
+                  Se registra el pago total de {formatCOP(totalArticulos)} al momento de la entrega. Sin financiación ni cuotas pendientes.
+                </Text>
+              </View>
+
+              {renderSelectorMetodoPago()}
             </View>
           ) : (
             <View style={{ gap: 12, marginTop: 8 }}>
@@ -1374,6 +1644,8 @@ export default function NuevaVentaScreen({ route, navigation }) {
                   </Text>
                 </View>
               </View>
+
+              {renderSelectorMetodoPago()}
 
               {/* Plazo / Número de Cuotas (4 Opciones Estrictas) */}
               <View>
@@ -2039,6 +2311,17 @@ export default function NuevaVentaScreen({ route, navigation }) {
                   <Text style={styles.receiptHighlightKey}>VALOR TOTAL:</Text>
                   <Text style={styles.receiptHighlightVal}>{formatCOP(ventaExitosa.total)}</Text>
                 </View>
+
+                {ventaExitosa.cuota_inicial > 0 && (
+                  <View style={styles.receiptRow}>
+                    <Text style={styles.receiptKey}>
+                      {ventaExitosa.modalidad === 'Venta de Contado' ? 'Método de Pago:' : 'Cuota Inicial:'}
+                    </Text>
+                    <Text style={[styles.receiptVal, { color: '#047857', fontWeight: '800' }]}>
+                      {formatCOP(ventaExitosa.cuota_inicial)} ({ventaExitosa.metodo_pago_inicial})
+                    </Text>
+                  </View>
+                )}
 
                 <View style={styles.receiptRow}>
                   <Text style={styles.receiptKey}>Plan de Pagos:</Text>
@@ -3687,5 +3970,113 @@ const styles = StyleSheet.create({
     borderColor: '#059669',
     color: '#0F172A',
     fontWeight: '700',
+  },
+  // Estilos de Pagos Mixtos (Cuota Inicial)
+  metodoPagoBox: {
+    backgroundColor: '#F8FAFC',
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    borderRadius: 12,
+    padding: 12,
+    marginTop: 4,
+    gap: 10,
+  },
+  metodoPagoTabs: {
+    flexDirection: 'row',
+    backgroundColor: '#E2E8F0',
+    borderRadius: 10,
+    padding: 3,
+    gap: 4,
+  },
+  metodoPagoTabBtn: {
+    flex: 1,
+    paddingVertical: 8,
+    alignItems: 'center',
+    borderRadius: 8,
+  },
+  metodoPagoTabBtnActive: {
+    backgroundColor: '#FFFFFF',
+    shadowColor: '#000000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.1,
+    shadowRadius: 2,
+    elevation: 2,
+  },
+  metodoPagoTabText: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#64748B',
+  },
+  metodoPagoTabTextActive: {
+    color: '#059669',
+    fontWeight: '800',
+  },
+  metodoPagoTabsDisabled: {
+    backgroundColor: '#F1F5F9',
+    opacity: 0.55,
+  },
+  metodoPagoTabBtnDisabledActive: {
+    backgroundColor: '#E2E8F0',
+    shadowOpacity: 0,
+    elevation: 0,
+  },
+  metodoPagoTabTextDisabled: {
+    color: '#94A3B8',
+  },
+  metodoPagoTabTextDisabledActive: {
+    color: '#475569',
+    fontWeight: '700',
+  },
+  metodoDetalleBox: {
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1,
+    borderColor: '#CBD5E1',
+    borderRadius: 10,
+    padding: 10,
+    gap: 8,
+  },
+  cuadreBoxHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 4,
+    flexWrap: 'wrap',
+    gap: 4,
+  },
+  cuadreBoxTitle: {
+    fontSize: 10,
+    fontWeight: '800',
+    color: '#334155',
+    letterSpacing: 0.5,
+  },
+  cuadreBadge: {
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 6,
+    borderWidth: 1,
+  },
+  cuadreBadgeOk: {
+    backgroundColor: '#ECFDF5',
+    borderColor: '#A7F3D0',
+  },
+  cuadreBadgeWarn: {
+    backgroundColor: '#FFFBEB',
+    borderColor: '#FDE68A',
+  },
+  cuadreBadgeText: {
+    fontSize: 10,
+    fontWeight: '800',
+  },
+  cuadreBadgeTextOk: {
+    color: '#047857',
+  },
+  cuadreBadgeTextWarn: {
+    color: '#B45309',
+  },
+  sugerenciaMixtoText: {
+    fontSize: 10,
+    color: '#D97706',
+    marginTop: 4,
+    fontWeight: '600',
   },
 });

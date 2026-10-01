@@ -2,10 +2,12 @@
  * Utilidades de Autenticación y Gestión de Sesión Segura para Remundial Core.
  */
 
+export type RolUsuario = 'master' | 'supervisor' | 'vendedor' | 'cobrador';
+
 export interface AuthUser {
   id?: string;
   nombre: string;
-  rol: string;
+  rol: RolUsuario | string;
   telefono?: string;
   cedula?: string;
   [key: string]: any;
@@ -92,7 +94,12 @@ export function getStoredUser(): AuthUser | null {
   try {
     const stored = localStorage.getItem(AUTH_STORAGE_KEYS.USER);
     if (stored) {
-      return JSON.parse(stored);
+      const user = JSON.parse(stored);
+      if (user?.rol?.toLowerCase() === 'secretaria') {
+        clearAuthSession();
+        return null;
+      }
+      return user;
     }
   } catch {
     // Error al parsear JSON
@@ -172,6 +179,10 @@ export function handleInactivityLogout(reason: string = 'inactividad'): void {
  */
 export function saveAuthSession(token: string, user: AuthUser): void {
   if (typeof window === 'undefined') return;
+  if (user?.rol?.toLowerCase() === 'secretaria') {
+    clearAuthSession();
+    throw new Error('El rol de secretaría ha sido dado de baja en el sistema.');
+  }
   try {
     localStorage.setItem(AUTH_STORAGE_KEYS.TOKEN, token);
     localStorage.setItem(AUTH_STORAGE_KEYS.USER, JSON.stringify(user));

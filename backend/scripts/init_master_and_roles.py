@@ -23,12 +23,6 @@ USERS_CONFIG = [
         "password": "password123",
     },
     {
-        "nombre": "María Secretaria",
-        "rol": RolUsuario.SECRETARIA,
-        "telefono": "3104445566",
-        "password": "password123",
-    },
-    {
         "nombre": "Juan Vendedor",
         "rol": RolUsuario.VENDEDOR,
         "telefono": "3151234567",

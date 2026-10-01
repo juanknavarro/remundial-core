@@ -107,9 +107,13 @@ export default function DashboardLayout({
       const token = getStoredToken();
       const user = getStoredUser();
 
-      // Validación estricta: si no hay token o expiró, o no hay usuario, o superó inactividad (3h) -> expulsión inmediata
-      if (!token || !user || !isTokenValid(token) || hasInactivityTimedOut()) {
-        const reason = hasInactivityTimedOut() ? 'inactividad' : 'expirado';
+      // Validación estricta: si no hay token o expiró, o no hay usuario, o superó inactividad (3h), o el rol es 'secretaria' -> expulsión inmediata
+      if (!token || !user || !isTokenValid(token) || hasInactivityTimedOut() || user?.rol?.toLowerCase() === 'secretaria') {
+        const reason = user?.rol?.toLowerCase() === 'secretaria'
+          ? 'rol_invalido'
+          : hasInactivityTimedOut()
+          ? 'inactividad'
+          : 'expirado';
         clearAuthSession();
         setIsAuthenticated(false);
         setIsCheckingAuth(false);

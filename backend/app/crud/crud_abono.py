@@ -22,6 +22,10 @@ def _enriquecer_abono_con_cronograma(a: Optional[Abono]) -> Optional[Abono]:
         return a
     if not getattr(a, "metodo_pago", None):
         setattr(a, "metodo_pago", "efectivo")
+    if getattr(a, "monto_efectivo", None) is None:
+        setattr(a, "monto_efectivo", a.valor_abonado if getattr(a, "metodo_pago", "efectivo") == "efectivo" else Decimal("0.00"))
+    if getattr(a, "monto_transferencia", None) is None:
+        setattr(a, "monto_transferencia", a.valor_abonado if getattr(a, "metodo_pago", "efectivo") == "transferencia" else Decimal("0.00"))
 
     if a.cobrador:
         setattr(a, "cobrador_nombre", a.cobrador.nombre)
@@ -362,12 +366,24 @@ async def create_abono(db: AsyncSession, abono_in: AbonoCreate) -> Abono:
 
     try:
         # A. Insertar el recibo en la tabla abonos
+        metodo = (abono_in.metodo_pago or "efectivo").lower().strip()
+        m_efectivo = abono_in.monto_efectivo if abono_in.monto_efectivo is not None else (
+            monto_abono if metodo == "efectivo" else Decimal("0.00")
+        )
+        m_transf = abono_in.monto_transferencia if abono_in.monto_transferencia is not None else (
+            monto_abono if metodo == "transferencia" else Decimal("0.00")
+        )
+        ref_pago = abono_in.referencia_pago.strip() if abono_in.referencia_pago else None
+
         db_abono = Abono(
             credito_id=credito.id_contrato,
             cobrador_id=cobrador.id,
             valor_abonado=monto_abono,
             coordenadas_gps_cobro=gps_tuple,
-            metodo_pago=(abono_in.metodo_pago or "efectivo").lower().strip(),
+            metodo_pago=metodo,
+            monto_efectivo=m_efectivo,
+            monto_transferencia=m_transf,
+            referencia_pago=ref_pago,
             estado=EstadoAbono.REGISTRADO,
         )
         db.add(db_abono)
@@ -450,6 +466,9 @@ async def create_abono(db: AsyncSession, abono_in: AbonoCreate) -> Abono:
         setattr(abono_creado, "cuota_afectada_numero", cuota_afectada)
         setattr(abono_creado, "valor_cuota_siguiente", valor_sig)
         setattr(abono_creado, "cobrador_nombre", cobrador_nombre_str)
+        setattr(abono_creado, "monto_efectivo", m_efectivo)
+        setattr(abono_creado, "monto_transferencia", m_transf)
+        setattr(abono_creado, "referencia_pago", ref_pago)
         if getattr(abono_in, "firma_cliente", None):
             setattr(abono_creado, "firma_cliente", abono_in.firma_cliente)
         if getattr(abono_in, "firma_cobrador", None):
@@ -462,6 +481,9 @@ async def create_abono(db: AsyncSession, abono_in: AbonoCreate) -> Abono:
     setattr(db_abono, "cuota_afectada_numero", cuota_afectada)
     setattr(db_abono, "valor_cuota_siguiente", valor_sig)
     setattr(db_abono, "cobrador_nombre", cobrador_nombre_str)
+    setattr(db_abono, "monto_efectivo", m_efectivo)
+    setattr(db_abono, "monto_transferencia", m_transf)
+    setattr(db_abono, "referencia_pago", ref_pago)
     if getattr(abono_in, "firma_cliente", None):
         setattr(db_abono, "firma_cliente", abono_in.firma_cliente)
     if getattr(abono_in, "firma_cobrador", None):

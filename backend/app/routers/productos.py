@@ -12,7 +12,6 @@ from app.core.database import get_db
 from app.core.deps import (
     get_current_user,
     require_supervisor,
-    require_supervisor_o_secretaria,
 )
 from app.crud import crud_producto
 from app.models.usuario import Usuario
@@ -41,7 +40,7 @@ PRODUCTOS_STORAGE_DIR = os.path.abspath(
 )
 async def upload_imagen_producto(
     file: UploadFile = File(...),
-    current_user: Usuario = Depends(require_supervisor_o_secretaria),
+    current_user: Usuario = Depends(require_supervisor),
 ) -> Dict[str, Any]:
     """Recibe la imagen optimizada (WebP/JPEG procesada en frontend), la guarda con un UUID único y retorna la URL relativa."""
     os.makedirs(PRODUCTOS_STORAGE_DIR, exist_ok=True)
@@ -138,12 +137,12 @@ async def obtener_producto(
     "",
     response_model=ProductoResponse,
     status_code=status.HTTP_201_CREATED,
-    summary="Crear un nuevo producto (Supervisor o Secretaria)",
+    summary="Crear un nuevo producto (Supervisor)",
 )
 async def crear_producto(
     producto_in: ProductoCreate,
     db: AsyncSession = Depends(get_db),
-    current_user: Usuario = Depends(require_supervisor_o_secretaria),
+    current_user: Usuario = Depends(require_supervisor),
 ):
     """Registra un nuevo producto en el catálogo verificando la unicidad del SKU."""
     producto_existente = await crud_producto.get_producto_by_sku(db=db, sku=producto_in.sku)
@@ -166,14 +165,14 @@ async def crear_producto(
 @router.put(
     "/{producto_id}",
     response_model=ProductoResponse,
-    summary="Actualizar un producto (Supervisor o Secretaria)",
+    summary="Actualizar un producto (Supervisor)",
     status_code=status.HTTP_200_OK,
 )
 async def actualizar_producto(
     producto_id: UUID,
     producto_in: ProductoUpdate,
     db: AsyncSession = Depends(get_db),
-    current_user: Usuario = Depends(require_supervisor_o_secretaria),
+    current_user: Usuario = Depends(require_supervisor),
 ):
     """Actualiza los datos de un producto existente."""
     producto = await crud_producto.get_producto(db=db, producto_id=producto_id)
@@ -206,14 +205,14 @@ async def actualizar_producto(
 @router.post(
     "/{producto_id}/reabastecer",
     response_model=ReabastecerStockResponse,
-    summary="Registrar entrada de almacén / reabastecer stock (Supervisor o Secretaria)",
+    summary="Registrar entrada de almacén / reabastecer stock (Supervisor)",
     status_code=status.HTTP_200_OK,
 )
 async def reabastecer_producto(
     producto_id: UUID,
     reabastecer_in: ReabastecerStockRequest,
     db: AsyncSession = Depends(get_db),
-    current_user: Usuario = Depends(require_supervisor_o_secretaria),
+    current_user: Usuario = Depends(require_supervisor),
 ):
     """Registra una entrada de inventario sumando existencias físicas a un producto."""
     producto = await crud_producto.get_producto(db=db, producto_id=producto_id)
@@ -246,7 +245,7 @@ async def reabastecer_producto(
 @router.delete(
     "/{producto_id}",
     status_code=status.HTTP_200_OK,
-    summary="Eliminar o desactivar un producto (Supervisor o Secretaria)",
+    summary="Eliminar o desactivar un producto (Supervisor)",
 )
 async def eliminar_producto(
     producto_id: UUID,
@@ -255,7 +254,7 @@ async def eliminar_producto(
         description="Si es True, realiza una desactivación lógica (estado_activo = false) en lugar de eliminación física",
     ),
     db: AsyncSession = Depends(get_db),
-    current_user: Usuario = Depends(require_supervisor_o_secretaria),
+    current_user: Usuario = Depends(require_supervisor),
 ):
     """Elimina físicamente un producto si no tiene créditos asociados; si ya tiene créditos, rechaza la eliminación con HTTP 400 protegiendo el historial financiero o permite su baja lógica."""
     producto = await crud_producto.get_producto(db=db, producto_id=producto_id)

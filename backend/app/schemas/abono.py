@@ -27,6 +27,18 @@ class AbonoBase(BaseModel):
         default="efectivo",
         description="Método de pago utilizado (efectivo, transferencia, etc.)",
     )
+    monto_efectivo: Optional[Decimal] = Field(
+        default=Decimal("0.00"),
+        description="Monto recaudado en efectivo",
+    )
+    monto_transferencia: Optional[Decimal] = Field(
+        default=Decimal("0.00"),
+        description="Monto recaudado por transferencia bancaria",
+    )
+    referencia_pago: Optional[str] = Field(
+        default=None,
+        description="Número de referencia o comprobante de la transferencia",
+    )
     notas: Optional[str] = Field(
         default=None,
         description="Notas u observaciones del recaudo",
@@ -63,6 +75,12 @@ class AbonoCreate(AbonoBase):
                         data["valor_abonado"] = data[k]
                         break
 
+            # Limpiar montos numéricos de texto vacío
+            for mk in ("monto_efectivo", "monto_transferencia"):
+                if mk in data:
+                    if data[mk] == "" or data[mk] is None:
+                        data[mk] = 0
+
             # Normalizar coordenadas_gps_cobro si vienen latitud y longitud planas
             if "coordenadas_gps_cobro" not in data or not data.get("coordenadas_gps_cobro"):
                 lat = data.get("latitud") if data.get("latitud") is not None else data.get("lat")
@@ -80,6 +98,34 @@ class AbonoCreate(AbonoBase):
                     except (ValueError, TypeError):
                         pass
         return data
+
+    @model_validator(mode="after")
+    def validate_metodos_pago(self) -> "AbonoCreate":
+        metodo = (self.metodo_pago or "efectivo").strip().lower()
+        v_abonado = Decimal(str(self.valor_abonado or 0))
+
+        if metodo == "efectivo":
+            if not self.monto_efectivo or self.monto_efectivo == Decimal("0.00"):
+                self.monto_efectivo = v_abonado
+            if self.monto_transferencia is None:
+                self.monto_transferencia = Decimal("0.00")
+        elif metodo == "transferencia":
+            if not self.monto_transferencia or self.monto_transferencia == Decimal("0.00"):
+                self.monto_transferencia = v_abonado
+            if self.monto_efectivo is None:
+                self.monto_efectivo = Decimal("0.00")
+        elif metodo == "mixto":
+            m_efectivo = Decimal(str(self.monto_efectivo or 0))
+            m_transferencia = Decimal(str(self.monto_transferencia or 0))
+            if (m_efectivo + m_transferencia) != v_abonado:
+                raise ValueError(
+                    f"En recaudo mixto, la suma de monto_efectivo (${m_efectivo}) y "
+                    f"monto_transferencia (${m_transferencia}) debe ser estrictamente igual al "
+                    f"valor_abonado (${v_abonado})."
+                )
+            self.monto_efectivo = m_efectivo
+            self.monto_transferencia = m_transferencia
+        return self
 
 
 class AbonoResponse(BaseModel):
@@ -102,6 +148,9 @@ class AbonoResponse(BaseModel):
     cliente_cedula: Optional[str] = None
     numero_contrato: Optional[str] = None
     metodo_pago: Optional[str] = "efectivo"
+    monto_efectivo: Optional[Decimal] = Decimal("0.00")
+    monto_transferencia: Optional[Decimal] = Decimal("0.00")
+    referencia_pago: Optional[str] = None
     es_abono_parcial: Optional[bool] = Field(
         default=False,
         description="Indica si este recaudo correspondió a un pago parcial de la cuota",
@@ -159,6 +208,9 @@ class ReciboOfflinePdfRequest(BaseModel):
     valor_cuota_siguiente: Optional[Decimal] = None
     valor_cuota_exigible: Optional[Decimal] = None
     metodo_pago: Optional[str] = "efectivo"
+    monto_efectivo: Optional[Decimal] = None
+    monto_transferencia: Optional[Decimal] = None
+    referencia_pago: Optional[str] = None
     fecha: Optional[str] = None
     fecha_completa: Optional[str] = None
     nombre_archivo_pdf: Optional[str] = None

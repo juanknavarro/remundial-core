@@ -9,7 +9,6 @@ import {
   ShieldCheck,
   Briefcase,
   Wallet,
-  FileCheck2,
   Edit2,
   Trash2,
   CheckCircle2,
@@ -26,7 +25,7 @@ import {
 import { cn } from '@/lib/utils';
 import { api } from '@/lib/api';
 
-export type RolUsuario = 'master' | 'supervisor' | 'secretaria' | 'vendedor' | 'cobrador';
+export type RolUsuario = 'master' | 'supervisor' | 'vendedor' | 'cobrador';
 
 export interface UsuarioItem {
   id: string;
@@ -286,7 +285,7 @@ export default function GestionUsuariosPage() {
   const totalActivos = usuarios.filter((u) => u.estado_activo).length;
   const totalVendedores = usuarios.filter((u) => u.rol === 'vendedor' && u.estado_activo).length;
   const totalCobradores = usuarios.filter((u) => u.rol === 'cobrador' && u.estado_activo).length;
-  const totalAdmin = usuarios.filter((u) => (u.rol === 'supervisor' || u.rol === 'secretaria') && u.estado_activo).length;
+  const totalAdmin = usuarios.filter((u) => u.rol === 'supervisor' && u.estado_activo).length;
 
   return (
     <div className="space-y-8 max-w-7xl mx-auto pb-16">
@@ -304,7 +303,7 @@ export default function GestionUsuariosPage() {
             Equipo & Colaboradores
           </h1>
           <p className="text-sm text-slate-600 mt-0.5">
-            Administre las cuentas de Supervisores, Secretarias, Vendedores y Cobradores de ruta.
+            Administre las cuentas de Supervisores, Vendedores y Cobradores de ruta.
           </p>
         </div>
 
@@ -426,7 +425,6 @@ export default function GestionUsuariosPage() {
             { id: 'todos', label: 'Todos' },
             { id: 'master', label: 'Master' },
             { id: 'supervisor', label: 'Supervisores' },
-            { id: 'secretaria', label: 'Secretarias' },
             { id: 'vendedor', label: 'Vendedores' },
             { id: 'cobrador', label: 'Cobradores' },
             { id: 'inactivos', label: 'Inactivos' },
@@ -487,8 +485,7 @@ export default function GestionUsuariosPage() {
                               u.rol === 'master' && 'bg-slate-900 text-amber-400 border-slate-900 shadow-2xs',
                               u.rol === 'supervisor' && 'bg-blue-50 text-blue-700 border-blue-200',
                               u.rol === 'cobrador' && 'bg-emerald-50 text-emerald-700 border-emerald-200',
-                              u.rol === 'vendedor' && 'bg-amber-50 text-amber-700 border-amber-200',
-                              u.rol === 'secretaria' && 'bg-purple-50 text-purple-700 border-purple-200'
+                              u.rol === 'vendedor' && 'bg-amber-50 text-amber-700 border-amber-200'
                             )}
                           >
                             {initials}
@@ -535,12 +532,6 @@ export default function GestionUsuariosPage() {
                           <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-semibold bg-amber-50 text-amber-700 border border-amber-200">
                             <Briefcase className="w-3 h-3" />
                             Vendedor en Terreno
-                          </span>
-                        )}
-                        {u.rol === 'secretaria' && (
-                          <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-semibold bg-purple-50 text-purple-700 border border-purple-200">
-                            <FileCheck2 className="w-3 h-3" />
-                            Secretaría
                           </span>
                         )}
                       </td>
@@ -689,8 +680,7 @@ export default function GestionUsuariosPage() {
                 >
                   <option value="vendedor">Vendedor (Originación de créditos y ventas)</option>
                   <option value="cobrador">Cobrador (Rutas, visitas y recaudos)</option>
-                  <option value="secretaria">Secretaría (Validación y archivo)</option>
-                  <option value="supervisor">Supervisor (Auditoría y aprobaciones)</option>
+                  <option value="supervisor">Supervisor (Auditoría y control)</option>
                   <option value="master">Master (Control total del sistema)</option>
                 </select>
               </div>

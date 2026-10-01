@@ -65,6 +65,11 @@ export default function LoginPage() {
   useEffect(() => {
     if (typeof window !== 'undefined') {
       const params = new URLSearchParams(window.location.search);
+      if (params.get('reason') === 'rol_invalido') {
+        clearAuthSession();
+        setErrorMessage('El rol de secretaría ha sido dado de baja en el sistema. Contacte al administrador.');
+        return;
+      }
       if (params.get('reason') === 'inactividad' || hasInactivityTimedOut()) {
         return;
       }
@@ -74,6 +79,11 @@ export default function LoginPage() {
     const user = getStoredUser();
     if (token && user) {
       const userRol = user.rol?.toLowerCase();
+      if (userRol === 'secretaria') {
+        clearAuthSession();
+        setErrorMessage('El rol de secretaría ha sido dado de baja en el sistema.');
+        return;
+      }
       if (userRol === 'vendedor') {
         router.replace('/dashboard/pos');
       } else if (userRol === 'cobrador') {
@@ -107,12 +117,18 @@ export default function LoginPage() {
       });
 
       const { access_token, usuario } = response.data;
+      const userRol = usuario?.rol?.toLowerCase();
+
+      if (userRol === 'secretaria') {
+        clearAuthSession();
+        setErrorMessage('Acceso denegado: El rol de secretaría ha sido revocado del sistema.');
+        return;
+      }
 
       // Almacenamiento seguro sincronizado en localStorage y cookie
       saveAuthSession(access_token, usuario);
 
       // Redirección limpia e inteligente por rol operativo
-      const userRol = usuario?.rol?.toLowerCase();
       if (userRol === 'vendedor') {
         router.push('/dashboard/pos');
       } else if (userRol === 'cobrador') {

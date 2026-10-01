@@ -9,7 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.core.database import get_db
-from app.core.deps import require_supervisor_o_secretaria
+from app.core.deps import require_supervisor
 from app.models.abono import Abono, EstadoAbono
 from app.models.cliente import Cliente
 from app.models.credito import Credito, CreditoDetalle, EstadoCredito
@@ -223,7 +223,7 @@ async def reporte_ventas_json(
     numero_contrato: Optional[str] = Query(None, description="Filtrar por número de contrato o folio"),
     search: Optional[str] = Query(None, description="Término de búsqueda por cliente o cédula"),
     db: AsyncSession = Depends(get_db),
-    current_user: Usuario = Depends(require_supervisor_o_secretaria),
+    current_user: Usuario = Depends(require_supervisor),
 ) -> Dict[str, Any]:
     """Retorna las métricas ejecutivas y el desglose de operaciones filtradas en formato JSON."""
     datos = await _obtener_datos_reporte(
@@ -253,7 +253,7 @@ async def reporte_ventas_pdf(
     numero_contrato: Optional[str] = Query(None, description="Filtrar por número de contrato o folio"),
     search: Optional[str] = Query(None, description="Término de búsqueda por cliente o cédula"),
     db: AsyncSession = Depends(get_db),
-    current_user: Usuario = Depends(require_supervisor_o_secretaria),
+    current_user: Usuario = Depends(require_supervisor),
 ) -> Response:
     """Genera y descarga un documento PDF ejecutivo corporativo listo para imprimir o archivar."""
     datos = await _obtener_datos_reporte(
@@ -301,7 +301,7 @@ async def exportar_excel_reporte_ventas(
     numero_contrato: Optional[str] = Query(None, description="Filtrar por número de contrato o folio"),
     search: Optional[str] = Query(None, description="Término de búsqueda por cliente o cédula"),
     db: AsyncSession = Depends(get_db),
-    current_user: Usuario = Depends(require_supervisor_o_secretaria),
+    current_user: Usuario = Depends(require_supervisor),
 ) -> Response:
     """Genera y descarga la auditoría financiera con nombre corporativo oficial."""
     datos = await _obtener_datos_reporte(
@@ -565,7 +565,7 @@ async def reporte_cartera_datos(
     numero_contrato: Optional[str] = Query(None, description="Filtrar por número de contrato o folio"),
     search: Optional[str] = Query(None, description="Búsqueda por cliente o cédula"),
     db: AsyncSession = Depends(get_db),
-    current_user: Usuario = Depends(require_supervisor_o_secretaria),
+    current_user: Usuario = Depends(require_supervisor),
 ) -> Dict[str, Any]:
     """Retorna los datos de cartera con el desglose de cuotas y marcas de recaudo para supervisión."""
     return await _obtener_datos_reporte_cartera(
@@ -594,7 +594,7 @@ async def reporte_cartera_pdf(
     numero_contrato: Optional[str] = Query(None, description="Filtrar por número de contrato o folio"),
     search: Optional[str] = Query(None, description="Búsqueda por cliente o cédula"),
     db: AsyncSession = Depends(get_db),
-    current_user: Usuario = Depends(require_supervisor_o_secretaria),
+    current_user: Usuario = Depends(require_supervisor),
 ) -> Response:
     """Genera y descarga un PDF ejecutivo con ReportLab detallando el plan de cuotas y marcas de recaudo (chulos)."""
     datos = await _obtener_datos_reporte_cartera(
@@ -640,7 +640,7 @@ async def reporte_calendario_mensual(
     numero_contrato: Optional[str] = Query(None, description="Filtrar por número de contrato o folio"),
     search: Optional[str] = Query(None, description="Búsqueda por cliente o contrato"),
     db: AsyncSession = Depends(get_db),
-    current_user: Usuario = Depends(require_supervisor_o_secretaria),
+    current_user: Usuario = Depends(require_supervisor),
 ) -> Dict[str, Any]:
     """Retorna la matriz del calendario mensual con todos los cobros programados agrupados por día."""
     hoy = date.today()
@@ -776,7 +776,7 @@ async def reporte_calendario_mensual(
 )
 async def resumen_gerencial(
     db: AsyncSession = Depends(get_db),
-    current_user: Usuario = Depends(require_supervisor_o_secretaria),
+    current_user: Usuario = Depends(require_supervisor),
 ) -> Dict[str, Any]:
     """Calcula y retorna en tiempo real las métricas financieras ejecutivas,
     incluyendo dinero total colocado, recaudos del día, cartera en mora por saldo insoluto
