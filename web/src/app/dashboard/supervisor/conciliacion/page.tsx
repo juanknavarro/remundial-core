@@ -4,6 +4,7 @@ import React, { useState, useEffect, useMemo, useCallback, Suspense } from 'reac
 import Link from 'next/link';
 import { useSearchParams } from 'next/navigation';
 import {
+  ArrowLeft,
   Wallet,
   CheckCircle2,
   AlertTriangle,
@@ -355,13 +356,13 @@ function ConciliacionRutasContent() {
       {/* CABECERA PRINCIPAL */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
-          <div className="flex items-center gap-2 text-xs font-semibold text-slate-500 uppercase tracking-wider mb-1">
-            <Link href="/dashboard/secretaria" className="hover:text-slate-800 transition-colors">
-              Módulo de Secretaría
-            </Link>
-            <ChevronRight className="w-3.5 h-3.5" />
-            <span className="text-slate-800">Conciliación & Cierre de Caja</span>
-          </div>
+          <Link
+            href="/dashboard/supervisor/rutas"
+            className="inline-flex items-center gap-2 text-sm text-slate-500 hover:text-blue-600 mb-2.5 transition-colors w-fit font-medium group"
+          >
+            <ArrowLeft className="w-4 h-4 transition-transform group-hover:-translate-x-0.5" />
+            <span>Volver al Control de Rutas</span>
+          </Link>
           <h1 className="text-2xl sm:text-3xl font-bold tracking-tight text-slate-900">
             Arqueo & Conciliación de Rutas en Terreno
           </h1>

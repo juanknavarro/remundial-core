@@ -150,6 +150,11 @@ CREATE TABLE IF NOT EXISTS creditos (
     saldo_pendiente NUMERIC(12, 2) NOT NULL CHECK (saldo_pendiente >= 0),
     numero_contrato VARCHAR(50),
     ciudad_venta VARCHAR(100),
+    departamento_venta VARCHAR(100),
+    metodo_pago_inicial VARCHAR(50),
+    referencia_pago_inicial VARCHAR(100),
+    monto_inicial_efectivo NUMERIC(12, 2) DEFAULT 0.00,
+    monto_inicial_transferencia NUMERIC(12, 2) DEFAULT 0.00,
     creado_en TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
     actualizado_en TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
 

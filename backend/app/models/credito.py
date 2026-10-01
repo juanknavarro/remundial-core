@@ -144,6 +144,18 @@ class Credito(Base):
         String(100),
         nullable=True,
     )
+    monto_inicial_efectivo: Mapped[Optional[Decimal]] = mapped_column(
+        Numeric(12, 2),
+        nullable=True,
+        default=Decimal("0.00"),
+        server_default="0.00",
+    )
+    monto_inicial_transferencia: Mapped[Optional[Decimal]] = mapped_column(
+        Numeric(12, 2),
+        nullable=True,
+        default=Decimal("0.00"),
+        server_default="0.00",
+    )
     creado_en: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         server_default=func.now(),

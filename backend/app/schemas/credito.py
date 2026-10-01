@@ -237,10 +237,16 @@ class CreditoBase(BaseModel):
         description="Valor pagado de contado al momento de la venta",
     )
     metodo_pago_inicial: Optional[str] = Field(
-        None, max_length=50, description="Método de pago de la cuota inicial (Efectivo / Transferencia)"
+        None, max_length=50, description="Método de pago de la cuota inicial (Efectivo / Transferencia / Mixto)"
     )
     referencia_pago_inicial: Optional[str] = Field(
         None, max_length=100, description="No. de comprobante o referencia de pago del anticipo"
+    )
+    monto_inicial_efectivo: Optional[Decimal] = Field(
+        default=Decimal("0.00"), description="Monto en efectivo recibido para la cuota inicial"
+    )
+    monto_inicial_transferencia: Optional[Decimal] = Field(
+        default=Decimal("0.00"), description="Monto en transferencia recibido para la cuota inicial"
     )
     monto_financiado: Decimal = Field(..., ge=0, description="Valor neto a financiar en cuotas (0 para venta de contado)")
     numero_cuotas: int = Field(..., gt=0, description="Cantidad total de cuotas pactadas")
@@ -358,6 +364,43 @@ class CreditoCreate(CreditoBase):
                     pass
         return data
 
+    @model_validator(mode="after")
+    def validar_distribucion_pago_inicial(self) -> "CreditoCreate":
+        """Valida y distribuye la cuota inicial según el método de pago seleccionado."""
+        c_inicial = Decimal(str(self.cuota_inicial or 0))
+        metodo = (self.metodo_pago_inicial or "").strip().lower()
+
+        # Si no hay cuota inicial pactada (0.00)
+        if c_inicial <= Decimal("0.00"):
+            self.monto_inicial_efectivo = Decimal("0.00")
+            self.monto_inicial_transferencia = Decimal("0.00")
+            return self
+
+        if metodo == "efectivo":
+            self.monto_inicial_efectivo = c_inicial
+            self.monto_inicial_transferencia = Decimal("0.00")
+        elif metodo == "transferencia":
+            if not self.referencia_pago_inicial or not self.referencia_pago_inicial.strip():
+                raise ValueError("Debe ingresar la referencia o comprobante de pago para la cuota inicial por transferencia.")
+            self.monto_inicial_transferencia = c_inicial
+            self.monto_inicial_efectivo = Decimal("0.00")
+        elif metodo == "mixto":
+            m_efectivo = Decimal(str(self.monto_inicial_efectivo or 0))
+            m_transferencia = Decimal(str(self.monto_inicial_transferencia or 0))
+            if (m_efectivo + m_transferencia) != c_inicial:
+                raise ValueError(
+                    f"En pago mixto, la suma de efectivo ({m_efectivo}) y transferencia ({m_transferencia}) debe ser exactamente igual a la cuota inicial ({c_inicial})."
+                )
+            if not self.referencia_pago_inicial or not self.referencia_pago_inicial.strip():
+                raise ValueError("Debe ingresar la referencia o comprobante de pago para la transferencia en pago mixto.")
+            self.monto_inicial_efectivo = m_efectivo
+            self.monto_inicial_transferencia = m_transferencia
+        elif not metodo:
+            self.monto_inicial_efectivo = c_inicial
+            self.monto_inicial_transferencia = Decimal("0.00")
+
+        return self
+
 
 class CreditoUpdate(BaseModel):
     """Esquema para actualizaciones administrativas de un crédito."""
@@ -370,6 +413,8 @@ class CreditoUpdate(BaseModel):
     saldo_pendiente: Optional[Decimal] = Field(None, ge=0)
     metodo_pago_inicial: Optional[str] = Field(None, max_length=50)
     referencia_pago_inicial: Optional[str] = Field(None, max_length=100)
+    monto_inicial_efectivo: Optional[Decimal] = None
+    monto_inicial_transferencia: Optional[Decimal] = None
     codeudor: Optional[CodeudorCreate] = None
     referencia: Optional[ReferenciaFamiliarCreate] = None
 

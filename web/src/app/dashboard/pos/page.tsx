@@ -219,7 +219,9 @@ export default function PosOriginacionCreditoPage() {
 
   const tipoPago = 'mensual';
   const [cuotaInicial, setCuotaInicial] = useState<number>(0);
-  const [metodoPagoInicial, setMetodoPagoInicial] = useState<'Efectivo' | 'Transferencia'>('Efectivo');
+  const [metodoPagoInicial, setMetodoPagoInicial] = useState<'Efectivo' | 'Transferencia' | 'Mixto'>('Efectivo');
+  const [montoEfectivo, setMontoEfectivo] = useState<number>(0);
+  const [montoTransferencia, setMontoTransferencia] = useState<number>(0);
   const [referenciaPagoInicial, setReferenciaPagoInicial] = useState('');
   const [numeroCuotas, setNumeroCuotas] = useState<number>(4);
   const [fechaPrimeraCuota, setFechaPrimeraCuota] = useState<string>(() => getFechaPrimerVencimientoFinMes());
@@ -471,6 +473,23 @@ export default function PosOriginacionCreditoPage() {
       return;
     }
 
+    if (cuotaInicialEfectiva > 0 && metodoPagoInicial === 'Mixto') {
+      const sumaMixta = Number((Number(montoEfectivo || 0) + Number(montoTransferencia || 0)).toFixed(2));
+      const inicialEsperada = Number(Number(cuotaInicialEfectiva).toFixed(2));
+      if (sumaMixta !== inicialEsperada) {
+        alert(
+          `En Pago Mixto, la suma de Efectivo (${formatCOP(montoEfectivo)}) y Transferencia (${formatCOP(montoTransferencia)}) debe ser exactamente igual a la cuota inicial (${formatCOP(cuotaInicialEfectiva)}).`
+        );
+        setIsSubmitting(false);
+        return;
+      }
+      if (!referenciaPagoInicial.trim()) {
+        alert('Debe ingresar el número de referencia o aprobación para la porción pagada por transferencia bancaria.');
+        setIsSubmitting(false);
+        return;
+      }
+    }
+
     const payload: any = {
       cliente_id: resolvedClienteId,
       vendedor_id: vendedorId,
@@ -480,7 +499,15 @@ export default function PosOriginacionCreditoPage() {
       tipo_pago: esContado ? 'mensual' : tipoPago,
       cuota_inicial: cuotaInicialEfectiva,
       metodo_pago_inicial: metodoPagoInicial,
-      referencia_pago_inicial: referenciaPagoInicial.trim() || null,
+      referencia_pago_inicial: (metodoPagoInicial === 'Transferencia' || metodoPagoInicial === 'Mixto')
+        ? (referenciaPagoInicial.trim() || null)
+        : null,
+      monto_inicial_efectivo: metodoPagoInicial === 'Mixto'
+        ? Number(montoEfectivo || 0)
+        : (metodoPagoInicial === 'Efectivo' ? cuotaInicialEfectiva : 0),
+      monto_inicial_transferencia: metodoPagoInicial === 'Mixto'
+        ? Number(montoTransferencia || 0)
+        : (metodoPagoInicial === 'Transferencia' ? cuotaInicialEfectiva : 0),
       monto_financiado: montoFinanciado,
       numero_cuotas: esContado ? 1 : numeroCuotas,
       valor_cuota: valorCuotaCalculado,
@@ -810,6 +837,10 @@ export default function PosOriginacionCreditoPage() {
                   setNumeroContrato('');
                   setContratoAutomatico(true);
                   setCuotaInicial(0);
+                  setMetodoPagoInicial('Efectivo');
+                  setMontoEfectivo(0);
+                  setMontoTransferencia(0);
+                  setReferenciaPagoInicial('');
                   setClienteEncontrado(null);
                   setClienteNoEncontrado(false);
                   setFirmaCliente(null);
@@ -1775,7 +1806,7 @@ export default function PosOriginacionCreditoPage() {
 
                 {/* BLOQUE CONDICIONAL: MÉTODO DE PAGO SI HAY CUOTA INICIAL */}
                 {Number(cuotaInicial) > 0 && (
-                  <div className="p-4 rounded-xl bg-slate-50 border border-slate-200 space-y-3">
+                  <div className="p-4 rounded-xl bg-slate-50 border border-slate-200 space-y-4">
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                       <div>
                         <label className="block text-xs font-semibold text-slate-700 mb-1">
@@ -1783,11 +1814,22 @@ export default function PosOriginacionCreditoPage() {
                         </label>
                         <select
                           value={metodoPagoInicial}
-                          onChange={(e) => setMetodoPagoInicial(e.target.value as 'Efectivo' | 'Transferencia')}
+                          onChange={(e) => {
+                            const val = e.target.value as 'Efectivo' | 'Transferencia' | 'Mixto';
+                            setMetodoPagoInicial(val);
+                            if (val === 'Efectivo') {
+                              setMontoEfectivo(cuotaInicial);
+                              setMontoTransferencia(0);
+                            } else if (val === 'Transferencia') {
+                              setMontoEfectivo(0);
+                              setMontoTransferencia(cuotaInicial);
+                            }
+                          }}
                           className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 text-xs font-semibold text-slate-900 bg-white focus:outline-hidden focus:ring-2 focus:ring-emerald-500"
                         >
                           <option value="Efectivo">Efectivo</option>
                           <option value="Transferencia">Transferencia</option>
+                          <option value="Mixto">Mixto (Efectivo + Transferencia)</option>
                         </select>
                       </div>
 
@@ -1805,14 +1847,93 @@ export default function PosOriginacionCreditoPage() {
                             className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 text-xs font-semibold text-slate-900 bg-white focus:outline-hidden focus:ring-2 focus:ring-blue-500"
                           />
                         </div>
-                      ) : (
+                      ) : metodoPagoInicial === 'Efectivo' ? (
                         <div className="flex items-end pb-1">
                           <span className="text-[11px] text-slate-500">
-                            Recepción de dinero en efectivo en el punto de atención o despacho.
+                            Recepción del 100% de la cuota inicial en efectivo en caja.
                           </span>
                         </div>
-                      )}
+                      ) : null}
                     </div>
+
+                    {/* CAMPOS ADICIONALES PARA PAGO MIXTO */}
+                    {metodoPagoInicial === 'Mixto' && (
+                      <div className="pt-3 border-t border-slate-200/80 space-y-3">
+                        <div className="flex items-center justify-between">
+                          <span className="text-xs font-bold text-slate-800">
+                            Desglose de Pago Simultáneo
+                          </span>
+                          <span
+                            className={cn(
+                              'text-[11px] font-mono font-semibold px-2 py-0.5 rounded-md border',
+                              Number(montoEfectivo || 0) + Number(montoTransferencia || 0) === Number(cuotaInicial)
+                                ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                                : 'bg-amber-50 text-amber-700 border-amber-200'
+                            )}
+                          >
+                            Ingresado: {formatCOP(Number(montoEfectivo || 0) + Number(montoTransferencia || 0))} / {formatCOP(cuotaInicial)}
+                          </span>
+                        </div>
+
+                        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                          <div>
+                            <label className="block text-xs font-semibold text-slate-700 mb-1">
+                              MONTO EN EFECTIVO (COP) *
+                            </label>
+                            <div className="relative">
+                              <span className="absolute left-3 top-2.5 text-xs text-slate-400 font-mono">$</span>
+                              <input
+                                type="number"
+                                min="0"
+                                max={cuotaInicial}
+                                placeholder="0"
+                                value={montoEfectivo || ''}
+                                onChange={(e) => setMontoEfectivo(parseFloat(e.target.value) || 0)}
+                                className="w-full pl-7 pr-3 py-2 rounded-xl border border-slate-200 text-xs font-mono font-semibold text-slate-900 bg-white focus:outline-hidden focus:ring-2 focus:ring-emerald-500"
+                              />
+                            </div>
+                          </div>
+
+                          <div>
+                            <label className="block text-xs font-semibold text-slate-700 mb-1">
+                              MONTO EN TRANSFERENCIA (COP) *
+                            </label>
+                            <div className="relative">
+                              <span className="absolute left-3 top-2.5 text-xs text-slate-400 font-mono">$</span>
+                              <input
+                                type="number"
+                                min="0"
+                                max={cuotaInicial}
+                                placeholder="0"
+                                value={montoTransferencia || ''}
+                                onChange={(e) => setMontoTransferencia(parseFloat(e.target.value) || 0)}
+                                className="w-full pl-7 pr-3 py-2 rounded-xl border border-slate-200 text-xs font-mono font-semibold text-slate-900 bg-white focus:outline-hidden focus:ring-2 focus:ring-blue-500"
+                              />
+                            </div>
+                          </div>
+
+                          <div>
+                            <label className="block text-xs font-semibold text-slate-700 mb-1">
+                              NO. REFERENCIA / COMPROBANTE *
+                            </label>
+                            <input
+                              type="text"
+                              required
+                              placeholder="Ej. Comprobante Nequi / Bancolombia"
+                              value={referenciaPagoInicial}
+                              onChange={(e) => setReferenciaPagoInicial(e.target.value)}
+                              className="w-full px-3 py-2 rounded-xl border border-slate-200 text-xs font-semibold text-slate-900 bg-white focus:outline-hidden focus:ring-2 focus:ring-blue-500"
+                            />
+                          </div>
+                        </div>
+
+                        {Number(montoEfectivo || 0) + Number(montoTransferencia || 0) !== Number(cuotaInicial) && (
+                          <p className="text-[11px] text-amber-600 font-medium">
+                            ⚠️ La suma de efectivo y transferencia debe coincidir con la cuota inicial ({formatCOP(cuotaInicial)}).
+                          </p>
+                        )}
+                      </div>
+                    )}
                   </div>
                 )}
 

@@ -631,7 +631,7 @@ export default function MasterDashboardPage() {
           <div className="mt-6 pt-4 border-t border-slate-100 flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-xs text-slate-500">
             <span>Sincronizado directamente con la base de datos PostgreSQL</span>
             <Link
-              href="/dashboard/secretaria/conciliacion"
+              href="/dashboard/supervisor/conciliacion"
               className="font-medium text-slate-700 hover:text-slate-900 underline"
             >
               Ir al Arqueo y Conciliación de Rutas →

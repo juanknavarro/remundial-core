@@ -8,8 +8,6 @@ import {
   PlusCircle,
   CreditCard,
   Package,
-  ShieldCheck,
-  Wallet,
   Settings,
   LogOut,
   Bell,
@@ -59,18 +57,8 @@ const allNavSections: NavSection[] = [
     items: [
       { name: 'Nueva Venta (POS)', href: '/dashboard/pos', icon: PlusCircle, badge: 'POS', badgeVariant: 'default', roles: ['master', 'supervisor', 'vendedor'] },
       { name: 'Cartera de Créditos', href: '/dashboard/creditos', icon: CreditCard, roles: ['master', 'supervisor', 'vendedor'] },
-      { name: 'Cobranzas & Rutas', href: '/dashboard/secretaria', icon: Wallet, roles: ['master', 'supervisor'] },
-      { name: 'Aprobaciones', href: '/dashboard/supervisor', icon: ShieldCheck, badge: 'Auditoría', roles: ['master', 'supervisor'] },
+      { name: 'Control de Rutas & Arqueo', href: '/dashboard/supervisor/rutas', icon: CheckCircle2, roles: ['master', 'supervisor'] },
       { name: 'Cartera Crítica & Retiros', href: '/dashboard/cartera-critica', icon: AlertTriangle, badge: 'Riesgo', badgeVariant: 'warning', roles: ['master', 'supervisor'] },
-    ],
-  },
-  {
-    section: 'GESTIÓN DE SECRETARÍA & CAJA',
-    roles: ['secretaria'],
-    items: [
-      { name: 'Validación y Arqueo de Caja', href: '/dashboard/secretaria/conciliacion', icon: Wallet, badge: 'Arqueo', badgeVariant: 'success' },
-      { name: 'Cierres de Caja Realizados', href: '/dashboard/secretaria', icon: CheckCircle2 },
-      { name: 'Reportes Mensuales de Recaudo', href: '/dashboard/reportes', icon: FileSpreadsheet, badge: 'Reportes' },
     ],
   },
   {
@@ -139,9 +127,7 @@ export default function DashboardLayout({
       const rol = user?.rol?.toLowerCase();
 
       // Redirección limpia e inteligente por rol para evitar pantallas de 403
-      if (rol === 'secretaria' && !pathname.startsWith('/dashboard/secretaria') && !pathname.startsWith('/dashboard/reportes')) {
-        router.replace('/dashboard/secretaria/conciliacion');
-      } else if (
+      if (
         rol === 'vendedor' &&
         (pathname === '/dashboard' ||
           pathname.startsWith('/dashboard/supervisor') ||
@@ -152,8 +138,10 @@ export default function DashboardLayout({
           pathname.startsWith('/dashboard/comprobantes'))
       ) {
         router.replace('/dashboard/pos');
-      } else if (rol === 'cobrador' && !pathname.startsWith('/dashboard/secretaria')) {
-        router.replace('/dashboard/secretaria');
+      } else if (rol === 'cobrador' && !pathname.startsWith('/dashboard/supervisor/rutas')) {
+        router.replace('/dashboard/supervisor/rutas');
+      } else if (pathname === '/dashboard/supervisor') {
+        router.replace('/dashboard/supervisor/rutas');
       }
     }
   }, [pathname, router]);
@@ -189,11 +177,6 @@ export default function DashboardLayout({
   const isRouteAllowed = () => {
     if (!currentUser) return false;
 
-    if (userRol === 'secretaria') {
-      // Secretaria enfocada estrictamente en arqueo/caja y reportes de recaudo
-      return pathname.startsWith('/dashboard/secretaria') || pathname.startsWith('/dashboard/reportes');
-    }
-
     if (userRol === 'vendedor') {
       // Vendedor no puede acceder a supervisor, cartera-critica, usuarios, configuración, productos, reportes
       const forbiddenForVendedor = [
@@ -219,12 +202,11 @@ export default function DashboardLayout({
     if (pathname.includes('/clientes')) return 'Directorio de Clientes';
     if (pathname.includes('/productos')) return 'Catálogo & Gestión de Inventario';
     if (pathname.includes('/cartera-critica')) return 'Cartera Crítica & Artículos Retirados';
-    if (pathname.includes('/supervisor')) return 'Módulo de Aprobación de Créditos';
+    if (pathname.includes('/supervisor/conciliacion')) return 'Validación y Arqueo de Caja';
+    if (pathname.includes('/supervisor/rutas')) return 'Cobranzas & Rutas Operativas';
     if (pathname.includes('/reportes')) return 'Reportes e Históricos de Ventas';
     if (pathname.includes('/calendario')) return 'Calendario de Cartera & Vencimientos';
     if (pathname.includes('/comprobantes')) return 'Comprobantes de Venta y Pago';
-    if (pathname.includes('/secretaria/conciliacion')) return 'Conciliación de Rutas & Arqueo';
-    if (pathname.includes('/secretaria')) return 'Cobranzas & Rutas Operativas';
     if (pathname.includes('/usuarios')) return 'Gestión de Personal & Accesos';
     if (pathname.includes('/configuracion')) return 'Configuración de Parámetros';
     return 'Panel de Control';
@@ -393,9 +375,8 @@ export default function DashboardLayout({
                 {section.items.map((item) => {
                   const Icon = item.icon;
                   const isActive =
-                    item.href === '/dashboard'
-                      ? pathname === '/dashboard'
-                      : pathname.startsWith(item.href);
+                    pathname === item.href ||
+                    (item.href !== '/dashboard' && pathname.startsWith(`${item.href}/`));
 
                   return (
                     <Link
@@ -554,25 +535,15 @@ export default function DashboardLayout({
             </div>
           </div>
 
-          {/* Acciones Rápidas adaptadas según rol */}
+          {/* Acciones Rápidas */}
           <div className="flex items-center gap-3">
-            {userRol === 'secretaria' ? (
-              <Link
-                href="/dashboard/secretaria/conciliacion"
-                className="inline-flex items-center gap-2 bg-emerald-700 hover:bg-emerald-800 active:scale-[0.99] text-white text-xs sm:text-sm font-semibold px-4 py-2 rounded-xl shadow-sm transition-all"
-              >
-                <Wallet className="w-4 h-4" />
-                <span>Conciliación de Caja</span>
-              </Link>
-            ) : (
-              <Link
-                href="/dashboard/pos"
-                className="inline-flex items-center gap-2 bg-slate-900 hover:bg-slate-800 active:scale-[0.99] text-white text-xs sm:text-sm font-semibold px-4 py-2 rounded-xl shadow-sm transition-all"
-              >
-                <PlusCircle className="w-4 h-4" />
-                <span>Nueva Venta (POS)</span>
-              </Link>
-            )}
+            <Link
+              href="/dashboard/pos"
+              className="inline-flex items-center gap-2 bg-slate-900 hover:bg-slate-800 active:scale-[0.99] text-white text-xs sm:text-sm font-semibold px-4 py-2 rounded-xl shadow-sm transition-all"
+            >
+              <PlusCircle className="w-4 h-4" />
+              <span>Nueva Venta (POS)</span>
+            </Link>
           </div>
         </header>
 

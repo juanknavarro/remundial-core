@@ -74,12 +74,10 @@ export default function LoginPage() {
     const user = getStoredUser();
     if (token && user) {
       const userRol = user.rol?.toLowerCase();
-      if (userRol === 'secretaria') {
-        router.replace('/dashboard/secretaria/conciliacion');
-      } else if (userRol === 'vendedor') {
+      if (userRol === 'vendedor') {
         router.replace('/dashboard/pos');
       } else if (userRol === 'cobrador') {
-        router.replace('/dashboard/secretaria');
+        router.replace('/dashboard/supervisor/rutas');
       } else {
         router.replace('/dashboard');
       }
@@ -115,12 +113,10 @@ export default function LoginPage() {
 
       // Redirección limpia e inteligente por rol operativo
       const userRol = usuario?.rol?.toLowerCase();
-      if (userRol === 'secretaria') {
-        router.push('/dashboard/secretaria/conciliacion');
-      } else if (userRol === 'vendedor') {
+      if (userRol === 'vendedor') {
         router.push('/dashboard/pos');
       } else if (userRol === 'cobrador') {
-        router.push('/dashboard/secretaria');
+        router.push('/dashboard/supervisor/rutas');
       } else {
         router.push('/dashboard');
       }

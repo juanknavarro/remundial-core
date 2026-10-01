@@ -183,7 +183,7 @@ export default function SecretariaDashboardPage() {
           </button>
 
           <Link
-            href="/dashboard/secretaria/conciliacion"
+            href="/dashboard/supervisor/conciliacion"
             className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl bg-slate-900 hover:bg-slate-800 text-white text-xs font-bold shadow-xs transition-all cursor-pointer"
           >
             <span>Mesa de Conciliación Detallada</span>
@@ -388,7 +388,7 @@ export default function SecretariaDashboardPage() {
                   {/* Acciones */}
                   <div className="flex items-center justify-end gap-3 pt-3 border-t border-slate-100">
                     <Link
-                      href={`/dashboard/secretaria/conciliacion?cobradorId=${ruta.id}`}
+                      href={`/dashboard/supervisor/conciliacion?cobradorId=${ruta.id}`}
                       className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl bg-slate-900 hover:bg-slate-800 text-white text-xs font-bold shadow-xs transition-all cursor-pointer"
                     >
                       <span>{isPendiente ? 'Ir a Conciliar y Cuadrar Ruta' : 'Ver Detalle de Abonos'}</span>
