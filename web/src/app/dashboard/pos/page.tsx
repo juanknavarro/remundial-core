@@ -225,6 +225,15 @@ export default function PosOriginacionCreditoPage() {
   const [referenciaPagoInicial, setReferenciaPagoInicial] = useState('');
   const [numeroCuotas, setNumeroCuotas] = useState<number>(4);
   const [fechaPrimeraCuota, setFechaPrimeraCuota] = useState<string>(() => getFechaPrimerVencimientoFinMes());
+  const [fechasManuales, setFechasManuales] = useState<boolean>(false);
+
+  const handleToggleFechasManuales = () => {
+    const nuevo = !fechasManuales;
+    setFechasManuales(nuevo);
+    if (!nuevo) {
+      setFechaPrimeraCuota(getFechaPrimerVencimientoFinMes());
+    }
+  };
 
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isDescargandoPdf, setIsDescargandoPdf] = useState(false);
@@ -1078,6 +1087,8 @@ export default function PosOriginacionCreditoPage() {
                   setReferenciaNombre('');
                   setReferenciaTelefono('');
                   setReferenciaParentesco('Familiar');
+                  setFechasManuales(false);
+                  setFechaPrimeraCuota(getFechaPrimerVencimientoFinMes());
                 }}
                 className="w-full sm:w-auto px-5 py-2.5 rounded-xl bg-slate-900 hover:bg-slate-800 text-white text-xs font-semibold shadow-xs transition-all cursor-pointer"
               >
@@ -2048,17 +2059,50 @@ export default function PosOriginacionCreditoPage() {
                   </div>
 
                   <div>
-                    <label className="block text-xs font-semibold text-slate-700 mb-1">
-                      FECHA PRIMER COBRO
-                    </label>
+                    <div className="flex items-center justify-between mb-1">
+                      <label className="block text-xs font-semibold text-slate-700">
+                        FECHA PRIMER COBRO
+                      </label>
+                      <div className="flex items-center gap-2">
+                        <button
+                          type="button"
+                          role="switch"
+                          aria-checked={fechasManuales}
+                          onClick={handleToggleFechasManuales}
+                          className={cn(
+                            'relative inline-flex h-4 w-7 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-hidden focus:ring-2 focus:ring-emerald-500',
+                            fechasManuales ? 'bg-emerald-600' : 'bg-slate-300'
+                          )}
+                        >
+                          <span className="sr-only">Modo Fecha Manual</span>
+                          <span
+                            aria-hidden="true"
+                            className={cn(
+                              'pointer-events-none inline-block h-3 w-3 transform rounded-full bg-white shadow-sm ring-0 transition duration-200 ease-in-out',
+                              fechasManuales ? 'translate-x-3' : 'translate-x-0'
+                            )}
+                          />
+                        </button>
+                        <span
+                          onClick={handleToggleFechasManuales}
+                          className={cn(
+                            'text-[10px] font-bold cursor-pointer select-none transition-colors',
+                            fechasManuales ? 'text-emerald-700' : 'text-slate-500'
+                          )}
+                        >
+                          Manual
+                        </span>
+                      </div>
+                    </div>
                     <input
                       type="date"
+                      disabled={!fechasManuales}
                       value={fechaPrimeraCuota}
                       onChange={(e) => setFechaPrimeraCuota(e.target.value)}
-                      className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 text-xs font-semibold text-slate-900 focus:outline-hidden focus:ring-2 focus:ring-emerald-500 bg-slate-50/50 focus:bg-white"
+                      className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 text-xs font-semibold text-slate-900 focus:outline-hidden focus:ring-2 focus:ring-emerald-500 bg-slate-50/50 focus:bg-white disabled:opacity-60 disabled:bg-slate-200 disabled:cursor-not-allowed transition-colors"
                     />
                     <span className="text-[11px] text-slate-500 mt-1 block">
-                      Primer vencimiento en ruta de cobro
+                      {fechasManuales ? 'Fecha de primer vencimiento personalizada' : 'Primer vencimiento automático en fin de mes'}
                     </span>
                   </div>
                 </div>

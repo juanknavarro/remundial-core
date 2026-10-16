@@ -7,6 +7,7 @@ import {
   StyleSheet,
   SafeAreaView,
   ScrollView,
+  FlatList,
   ActivityIndicator,
   Alert,
   KeyboardAvoidingView,
@@ -22,6 +23,7 @@ import { useSync } from '../context/SyncContext';
 import InFrameModal from '../components/InFrameModal';
 import SignatureCanvas from '../components/SignatureCanvas';
 import CitySelectorModal, { inferirDepartamento } from '../components/CitySelectorModal';
+import ProductCard from '../components/ProductCard';
 import {
   guardarBorradorVenta,
   obtenerBorradorVenta,
@@ -55,39 +57,76 @@ const formatDateISO = (d) => {
   return `${year}-${month}-${day}`;
 };
 
-// Fijación y cálculo automático de fecha del primer cobro: último día del mes siguiente a la compra
-const getFechaPrimerCobroSugerida = (baseDate = new Date()) => {
+// Fijación y cálculo de fecha del primer cobro:
+// Si esManual === false: último día del mes siguiente a la compra (ej. 31 de Octubre de 2026)
+// Si esManual === true: fecha actual + 1 mes calendario consecutivo (mismo día de hoy)
+const getFechaPrimerCobroSugerida = (baseDate = new Date(), esManual = false) => {
   const d = baseDate instanceof Date ? baseDate : new Date();
-  // El último día del mes siguiente: new Date(year, monthIndex + 2, 0)
-  // Ej: 10 de Septiembre (month=8) -> new Date(2026, 10, 0) = 31 de Octubre de 2026
+  if (esManual) {
+    const targetDay = d.getDate();
+    const targetYear = d.getFullYear() + Math.floor((d.getMonth() + 1) / 12);
+    const targetMonthIndex = (d.getMonth() + 1) % 12;
+    const maxDiasEnMes = new Date(targetYear, targetMonthIndex + 1, 0).getDate();
+    const diaReal = Math.min(targetDay, maxDiasEnMes);
+    return formatDateISO(new Date(targetYear, targetMonthIndex, diaReal));
+  }
   const finMesSiguiente = new Date(d.getFullYear(), d.getMonth() + 2, 0);
   return formatDateISO(finMesSiguiente);
 };
 
-// Generador del cronograma escalonado de amortización de cuotas sucesivas a fin de mes
-const calcularCronogramaCuotas = (fechaInicialStr, numCuotas, frecuencia = 'mensual', valorPorCuota = 0) => {
+// Generador del cronograma escalonado de amortización de cuotas sucesivas
+const calcularCronogramaCuotas = (fechaInicialStr, numCuotas, frecuencia = 'mensual', valorPorCuota = 0, esManual = false) => {
   if (!fechaInicialStr || numCuotas <= 0) return [];
   const cuotas = [];
-  const cleanStr = formatDateISO(fechaInicialStr) || getFechaPrimerCobroSugerida();
-  const [yStr, mStr] = cleanStr.split('-');
-  const y = parseInt(yStr, 10);
-  const m = parseInt(mStr, 10); // Mes 1-indexed de la primera cuota (ej. 10 para Octubre)
+  const cleanStr = formatDateISO(fechaInicialStr) || getFechaPrimerCobroSugerida(new Date(), esManual);
 
-  for (let i = 0; i < numCuotas; i++) {
-    let fechaCuotaStr;
-    if (i === 0) {
-      fechaCuotaStr = cleanStr;
-    } else {
-      // Fin de mes consecutivo para cada cuota sucesiva:
-      // new Date(y, m + i, 0) calcula el último día del mes sucesivo
-      const fechaCuota = new Date(y, m + i, 0);
-      fechaCuotaStr = formatDateISO(fechaCuota);
+  if (esManual) {
+    // Si fechasManuales es true:
+    // La primera cuota debe ser exactamente la fechaPrimeraCuotaManual (cleanStr).
+    // Las cuotas subsiguientes deben sumarle un mes calendario consecutivo a esa misma fecha exacta.
+    const partes = cleanStr.split('-');
+    const y = parseInt(partes[0], 10) || new Date().getFullYear();
+    const m = parseInt(partes[1], 10) || (new Date().getMonth() + 1); // 1-12
+    const targetDay = parseInt(partes[2], 10) || new Date().getDate();
+
+    for (let i = 0; i < numCuotas; i++) {
+      let fechaCuotaStr;
+      if (i === 0) {
+        fechaCuotaStr = cleanStr;
+      } else {
+        const targetYear = y + Math.floor((m - 1 + i) / 12);
+        const targetMonthIndex = (m - 1 + i) % 12;
+        const maxDiasEnMes = new Date(targetYear, targetMonthIndex + 1, 0).getDate();
+        const diaReal = Math.min(targetDay, maxDiasEnMes);
+        const fechaCuota = new Date(targetYear, targetMonthIndex, diaReal);
+        fechaCuotaStr = formatDateISO(fechaCuota);
+      }
+      cuotas.push({
+        numero: i + 1,
+        fecha: fechaCuotaStr,
+        valor: valorPorCuota,
+      });
     }
-    cuotas.push({
-      numero: i + 1,
-      fecha: fechaCuotaStr,
-      valor: valorPorCuota,
-    });
+  } else {
+    // Si fechasManuales es false: cálculo automático al último día del mes siguiente
+    const [yStr, mStr] = cleanStr.split('-');
+    const y = parseInt(yStr, 10);
+    const m = parseInt(mStr, 10);
+
+    for (let i = 0; i < numCuotas; i++) {
+      let fechaCuotaStr;
+      if (i === 0) {
+        fechaCuotaStr = cleanStr;
+      } else {
+        const fechaCuota = new Date(y, m + i, 0);
+        fechaCuotaStr = formatDateISO(fechaCuota);
+      }
+      cuotas.push({
+        numero: i + 1,
+        fecha: fechaCuotaStr,
+        valor: valorPorCuota,
+      });
+    }
   }
   return cuotas;
 };
@@ -134,6 +173,11 @@ export default function NuevaVentaScreen({ route, navigation }) {
   const [tipoPago, setTipoPago] = useState('mensual'); // Unificado a mensual
   const [cuotaInicialInput, setCuotaInicialInput] = useState('0');
   const [numeroCuotas, setNumeroCuotas] = useState(4);
+  // Estados para Personalización de Fecha de Primer Cobro
+  const [fechasManuales, setFechasManuales] = useState(false);
+  const [fechaPrimeraCuotaManual, setFechaPrimeraCuotaManual] = useState(() =>
+    getFechaPrimerCobroSugerida(new Date(), true)
+  );
   const [fechaPrimeraCuota, setFechaPrimeraCuota] = useState(() => getFechaPrimerCobroSugerida());
 
   // Pagos Mixtos en Cuota Inicial
@@ -228,6 +272,8 @@ export default function NuevaVentaScreen({ route, navigation }) {
     setMontoTransferenciaInput('');
     setReferenciaPagoInicial('');
     setNumeroCuotas(4);
+    setFechasManuales(false);
+    setFechaPrimeraCuotaManual(getFechaPrimerCobroSugerida(new Date(), true));
     setFechaPrimeraCuota(getFechaPrimerCobroSugerida());
     setCodeudorNombre('');
     setCodeudorCedula('');
@@ -433,6 +479,8 @@ export default function NuevaVentaScreen({ route, navigation }) {
         if (draft.montoTransferenciaInput) setMontoTransferenciaInput(draft.montoTransferenciaInput);
         if (draft.referenciaPagoInicial) setReferenciaPagoInicial(draft.referenciaPagoInicial);
         if (draft.numeroCuotas) setNumeroCuotas(draft.numeroCuotas);
+        if (typeof draft.fechasManuales === 'boolean') setFechasManuales(draft.fechasManuales);
+        if (draft.fechaPrimeraCuotaManual) setFechaPrimeraCuotaManual(draft.fechaPrimeraCuotaManual);
         if (draft.fechaPrimeraCuota) setFechaPrimeraCuota(draft.fechaPrimeraCuota);
         if (draft.codeudorNombre) setCodeudorNombre(draft.codeudorNombre);
         if (draft.codeudorCedula) setCodeudorCedula(draft.codeudorCedula);
@@ -469,6 +517,8 @@ export default function NuevaVentaScreen({ route, navigation }) {
             montoTransferenciaInput,
             referenciaPagoInicial,
             numeroCuotas,
+            fechasManuales,
+            fechaPrimeraCuotaManual,
             fechaPrimeraCuota,
             codeudorNombre,
             codeudorCedula,
@@ -501,6 +551,8 @@ export default function NuevaVentaScreen({ route, navigation }) {
         montoTransferenciaInput,
         referenciaPagoInicial,
         numeroCuotas,
+        fechasManuales,
+        fechaPrimeraCuotaManual,
         fechaPrimeraCuota,
         codeudorNombre,
         codeudorCedula,
@@ -532,6 +584,8 @@ export default function NuevaVentaScreen({ route, navigation }) {
     montoTransferenciaInput,
     referenciaPagoInicial,
     numeroCuotas,
+    fechasManuales,
+    fechaPrimeraCuotaManual,
     fechaPrimeraCuota,
     codeudorNombre,
     codeudorCedula,
@@ -569,13 +623,27 @@ export default function NuevaVentaScreen({ route, navigation }) {
     return Math.round(montoFinanciado / numeroCuotas);
   }, [modalidad, montoFinanciado, numeroCuotas]);
 
+  // Sincronización reactiva de fechaPrimeraCuota según la modalidad manual o automática
+  useEffect(() => {
+    if (fechasManuales) {
+      const fManual = formatDateISO(fechaPrimeraCuotaManual) || getFechaPrimerCobroSugerida(new Date(), true);
+      setFechaPrimeraCuota(fManual);
+    } else {
+      setFechaPrimeraCuota(getFechaPrimerCobroSugerida());
+    }
+  }, [fechasManuales, fechaPrimeraCuotaManual]);
+
   // Cronograma de amortización proyectado en tiempo real
   const cronogramaProyectado = useMemo(() => {
     if (modalidad === 'contado' || montoFinanciado <= 0 || numeroCuotas <= 0) {
       return [];
     }
-    return calcularCronogramaCuotas(fechaPrimeraCuota, numeroCuotas, tipoPago, valorCuota);
-  }, [modalidad, montoFinanciado, numeroCuotas, tipoPago, valorCuota, fechaPrimeraCuota]);
+    const fInicio = fechasManuales
+      ? (formatDateISO(fechaPrimeraCuotaManual) || getFechaPrimerCobroSugerida(new Date(), true))
+      : (fechaPrimeraCuota || getFechaPrimerCobroSugerida());
+
+    return calcularCronogramaCuotas(fInicio, numeroCuotas, tipoPago, valorCuota, fechasManuales);
+  }, [modalidad, montoFinanciado, numeroCuotas, tipoPago, valorCuota, fechaPrimeraCuota, fechasManuales, fechaPrimeraCuotaManual]);
 
   // Manejo de productos en la orden con validación preventiva de existencias y excepción de cuadros
   const agregarProductoAOrden = (p) => {
@@ -760,10 +828,16 @@ export default function NuevaVentaScreen({ route, navigation }) {
     try {
       setIsSubmitting(true);
 
-      // Fecha de primera cuota validada (o sugerida de respaldo)
-      const fPrimera = fechaPrimeraCuota && /^\d{4}-\d{2}-\d{2}$/.test(fechaPrimeraCuota.trim())
-        ? fechaPrimeraCuota.trim()
-        : getFechaPrimerCobroSugerida(tipoPago);
+      // Fecha de primera cuota según configuración manual o cálculo automático a fin de mes
+      let fPrimera;
+      if (fechasManuales) {
+        const fManualStr = formatDateISO(fechaPrimeraCuotaManual);
+        fPrimera = (fManualStr && /^\d{4}-\d{2}-\d{2}$/.test(fManualStr))
+          ? fManualStr
+          : getFechaPrimerCobroSugerida(new Date(), true);
+      } else {
+        fPrimera = getFechaPrimerCobroSugerida();
+      }
 
       // Distribución granular de pago según método de pago (Contado o Crédito)
       const montoBase = modalidad === 'contado' ? totalArticulos : cuotaInicial;
@@ -1615,34 +1689,92 @@ export default function NuevaVentaScreen({ route, navigation }) {
                 </View>
               </View>
 
-              {/* Fila: Cuota Inicial y Fecha Primer Cobro */}
-              <View style={styles.formRowTwoCols}>
-                <View style={{ flex: 1 }}>
-                  <Text style={styles.fieldLabel}>CUOTA INICIAL ($ COP)</Text>
-                  <TextInput
-                    style={styles.fieldInput}
-                    keyboardType="numeric"
-                    value={cuotaInicialInput}
-                    onChangeText={setCuotaInicialInput}
-                    placeholder="0"
+              {/* Cuota Inicial */}
+              <View>
+                <Text style={styles.fieldLabel}>CUOTA INICIAL ($ COP)</Text>
+                <TextInput
+                  style={styles.fieldInput}
+                  keyboardType="numeric"
+                  value={cuotaInicialInput}
+                  onChangeText={setCuotaInicialInput}
+                  placeholder="0"
+                />
+                <Text style={styles.fieldHelpText}>
+                  {cuotaInicial > 0 ? `Anticipo: ${formatCOP(cuotaInicial)}` : 'Sin anticipo (100% financiado)'}
+                </Text>
+              </View>
+
+              {/* Personalización de Fecha de Primer Cobro (Switch y Selector) */}
+              <View style={styles.fechaManualContainer}>
+                <View style={styles.fechaManualSwitchRow}>
+                  <View style={{ flex: 1, marginRight: 8 }}>
+                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                      <Text style={styles.fechaManualSwitchTitle}>Personalizar fecha de primer pago</Text>
+                      <View style={[styles.badgePill, fechasManuales ? styles.badgePillManual : styles.badgePillAuto]}>
+                        <Text style={[styles.badgePillText, fechasManuales ? styles.badgePillTextManual : styles.badgePillTextAuto]}>
+                          {fechasManuales ? 'MANUAL' : 'AUTO'}
+                        </Text>
+                      </View>
+                    </View>
+                    <Text style={styles.fechaManualSwitchSub}>
+                      {fechasManuales
+                        ? 'El sistema proyectará las demás cuotas a partir de este día.'
+                        : `Vencimiento fijado a fin de mes (${getFechaPrimerCobroSugerida()})`}
+                    </Text>
+                  </View>
+                  <Switch
+                    value={fechasManuales}
+                    onValueChange={(val) => {
+                      setFechasManuales(val);
+                      if (val && !fechaPrimeraCuotaManual) {
+                        setFechaPrimeraCuotaManual(getFechaPrimerCobroSugerida(new Date(), true));
+                      }
+                    }}
+                    trackColor={{ false: '#CBD5E1', true: '#4F46E5' }}
+                    thumbColor="#FFFFFF"
+                    ios_backgroundColor="#CBD5E1"
                   />
-                  <Text style={styles.fieldHelpText}>
-                    {cuotaInicial > 0 ? `Anticipo: ${formatCOP(cuotaInicial)}` : 'Sin anticipo (100% financiado)'}
-                  </Text>
                 </View>
 
-                <View style={{ flex: 1 }}>
-                  <Text style={styles.fieldLabel}>FECHA PRIMER COBRO *</Text>
-                  <TextInput
-                    style={styles.fieldInput}
-                    value={fechaPrimeraCuota}
-                    onChangeText={setFechaPrimeraCuota}
-                    placeholder="YYYY-MM-DD"
-                  />
-                  <Text style={styles.fieldHelpText}>
-                    Fijada automáticamente a fin del mes siguiente
-                  </Text>
-                </View>
+                {/* Renderizado Condicional: Si fechasManuales es true, muestra el selector de fecha */}
+                {fechasManuales && (
+                  <View style={styles.fechaManualInputBox}>
+                    <Text style={styles.fieldLabel}>FECHA DE PRIMER PAGO SELECCIONADA *</Text>
+                    {Platform.OS === 'web' ? (
+                      React.createElement('input', {
+                        type: 'date',
+                        value: fechaPrimeraCuotaManual,
+                        onChange: (e) => setFechaPrimeraCuotaManual(e.target.value),
+                        style: {
+                          height: 44,
+                          borderRadius: 10,
+                          border: '1.5px solid #6366F1',
+                          padding: '0 12px',
+                          fontSize: 14,
+                          fontWeight: '600',
+                          fontFamily: 'inherit',
+                          backgroundColor: '#EEF2FF',
+                          color: '#1E1B4B',
+                          outline: 'none',
+                          width: '100%',
+                          boxSizing: 'border-box',
+                          marginTop: 6,
+                          cursor: 'pointer',
+                        },
+                      })
+                    ) : (
+                      <TextInput
+                        style={[styles.fieldInput, styles.fieldInputManualFecha]}
+                        value={fechaPrimeraCuotaManual}
+                        onChangeText={setFechaPrimeraCuotaManual}
+                        placeholder="YYYY-MM-DD"
+                      />
+                    )}
+                    <Text style={styles.fieldHelpText}>
+                      El sistema proyectará las demás cuotas a partir de este día.
+                    </Text>
+                  </View>
+                )}
               </View>
 
               {renderSelectorMetodoPago()}
@@ -2145,7 +2277,7 @@ export default function NuevaVentaScreen({ route, navigation }) {
         onRequestClose={() => setModalAgregarProducto(false)}
       >
         <View style={styles.modalBackdrop}>
-          <View style={styles.modalContent}>
+          <View style={[styles.modalContent, { height: '80%', maxHeight: '85%' }]}>
             <View style={styles.modalHeader}>
               <Text style={styles.modalTitle}>Catálogo de Artículos</Text>
               <TouchableOpacity
@@ -2165,66 +2297,39 @@ export default function NuevaVentaScreen({ route, navigation }) {
                 value={filtroProducto}
                 onChangeText={setFiltroProducto}
               />
+              {filtroProducto ? (
+                <TouchableOpacity onPress={() => setFiltroProducto('')}>
+                  <Text style={{ fontSize: 12, color: '#94A3B8', paddingHorizontal: 4 }}>✕</Text>
+                </TouchableOpacity>
+              ) : null}
             </View>
 
-            <ScrollView style={{ maxHeight: 350, marginTop: 10 }}>
-              {productosFiltrados.map((p) => {
-                const manejaStock = p.maneja_stock !== false;
-                const stockDisp = p.stock != null ? Number(p.stock) : 0;
-                const estaAgotado = manejaStock && stockDisp <= 0;
-                const bajoStock = manejaStock && stockDisp > 0 && stockDisp <= 5;
-                const enOrden = itemsVenta.find((it) => it.producto_id === p.id);
-                const cantEnOrden = enOrden ? enOrden.cantidad : 0;
-
-                return (
-                  <TouchableOpacity
-                    key={p.id}
-                    style={[styles.productPickerItem, estaAgotado && styles.productPickerItemDisabled]}
-                    onPress={() => agregarProductoAOrden(p)}
-                  >
-                    <View style={{ flex: 1 }}>
-                      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
-                        <Text style={styles.productPickerSku}>{p.sku}</Text>
-                        {p.es_precio_variable ? (
-                          <Text style={styles.productPickerVarTag}>🎨 Variable</Text>
-                        ) : null}
-                        {!manejaStock ? (
-                          <View style={styles.encargoBadgeModal}>
-                            <Text style={styles.encargoBadgeTextModal}>🎨 Por Encargo</Text>
-                          </View>
-                        ) : estaAgotado ? (
-                          <View style={styles.agotadoBadgeModal}>
-                            <Text style={styles.agotadoBadgeTextModal}>⚠️ Agotado (0 disp.)</Text>
-                          </View>
-                        ) : bajoStock ? (
-                          <View style={styles.bajoStockBadgeModal}>
-                            <Text style={styles.bajoStockBadgeTextModal}>⚠️ Quedan {stockDisp}</Text>
-                          </View>
-                        ) : (
-                          <View style={styles.disponibleBadgeModal}>
-                            <Text style={styles.disponibleBadgeTextModal}>✓ {stockDisp} disp.</Text>
-                          </View>
-                        )}
-                        {cantEnOrden > 0 ? (
-                          <View style={styles.cantEnOrdenBadge}>
-                            <Text style={styles.cantEnOrdenText}>({cantEnOrden} en orden)</Text>
-                          </View>
-                        ) : null}
-                      </View>
-                      <Text style={[styles.productPickerName, estaAgotado && { color: '#94A3B8' }]}>
-                        {p.nombre}
-                      </Text>
-                      <Text style={styles.productPickerPrice}>{formatCOP(p.precio_base)}</Text>
-                    </View>
-                    <View style={[styles.productPickerAddPill, estaAgotado && styles.productPickerAddPillDisabled]}>
-                      <Text style={[styles.productPickerAddText, estaAgotado && styles.productPickerAddTextDisabled]}>
-                        {estaAgotado ? 'Agotado' : '＋ Agregar'}
-                      </Text>
-                    </View>
-                  </TouchableOpacity>
-                );
-              })}
-            </ScrollView>
+            <FlatList
+              data={productosFiltrados}
+              keyExtractor={(item) => String(item.id || item.sku)}
+              renderItem={({ item }) => (
+                <ProductCard
+                  item={item}
+                  actionLabel="+ Agregar"
+                  onActionPress={() => agregarProductoAOrden(item)}
+                />
+              )}
+              numColumns={2}
+              columnWrapperStyle={{ justifyContent: 'space-between', paddingHorizontal: 2 }}
+              contentContainerStyle={{ paddingTop: 8, paddingBottom: 24 }}
+              showsVerticalScrollIndicator={false}
+              ListEmptyComponent={
+                <View style={{ paddingVertical: 40, alignItems: 'center' }}>
+                  <Text style={{ fontSize: 32, marginBottom: 8 }}>📦</Text>
+                  <Text style={{ fontSize: 14, fontWeight: '700', color: '#0F172A' }}>
+                    Sin artículos encontrados
+                  </Text>
+                  <Text style={{ fontSize: 12, color: '#64748B', textAlign: 'center', marginTop: 4 }}>
+                    No hay productos que coincidan con los términos de búsqueda.
+                  </Text>
+                </View>
+              }
+            />
           </View>
         </View>
       </InFrameModal>
@@ -3959,6 +4064,41 @@ const styles = StyleSheet.create({
   },
   badgePillTextManual: {
     color: '#B45309',
+  },
+  fechaManualContainer: {
+    backgroundColor: '#F8FAFC',
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    borderRadius: 12,
+    padding: 12,
+  },
+  fechaManualSwitchRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  fechaManualSwitchTitle: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#0F172A',
+  },
+  fechaManualSwitchSub: {
+    fontSize: 11,
+    color: '#64748B',
+    marginTop: 2,
+  },
+  fechaManualInputBox: {
+    marginTop: 10,
+    paddingTop: 10,
+    borderTopWidth: 1,
+    borderTopColor: '#E2E8F0',
+  },
+  fieldInputManualFecha: {
+    borderWidth: 1.5,
+    borderColor: '#6366F1',
+    backgroundColor: '#EEF2FF',
+    color: '#1E1B4B',
+    fontWeight: '700',
   },
   fieldInputDisabled: {
     backgroundColor: '#F1F5F9',

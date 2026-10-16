@@ -709,6 +709,21 @@ export default function CobradorDashboard({ navigation }) {
   const [creditos, setCreditos] = useState([]);
   const [isLoadingCreditos, setIsLoadingCreditos] = useState(false);
   const [filtroBusquedaRuta, setFiltroBusquedaRuta] = useState('');
+  const [filtroEstadoRuta, setFiltroEstadoRuta] = useState('todos'); // 'todos' | 'critica' | 'hoy'
+  const [filtroCiudadRuta, setFiltroCiudadRuta] = useState(null); // string | null
+  const [filtroBarrioRuta, setFiltroBarrioRuta] = useState(null); // string | null
+  const [modalZonaVisible, setModalZonaVisible] = useState(false);
+  const [tempCiudad, setTempCiudad] = useState(null);
+  const [tempBarrio, setTempBarrio] = useState(null);
+  const [clientesExpandidos, setClientesExpandidos] = useState({});
+
+  // Manejador para colapsar y expandir tarjetas de cliente individualmente
+  const toggleClienteExpandido = useCallback((key) => {
+    setClientesExpandidos((prev) => ({
+      ...prev,
+      [key]: !prev[key],
+    }));
+  }, []);
 
   // Estados de Historial de Recaudos
   const [recaudos, setRecaudos] = useState([]);
@@ -722,6 +737,15 @@ export default function CobradorDashboard({ navigation }) {
   const [isLoadingProyeccion, setIsLoadingProyeccion] = useState(false);
   const [filtroPeriodoProyeccion, setFiltroPeriodoProyeccion] = useState('todos'); // 'manana' | 'semana' | 'mes' | 'todos'
   const [busquedaProyeccion, setBusquedaProyeccion] = useState('');
+  const [proyeccionesExpandidas, setProyeccionesExpandidas] = useState({});
+
+  // Manejador para colapsar y expandir tarjetas de proyección individualmente
+  const toggleProyeccionExpandida = useCallback((id) => {
+    setProyeccionesExpandidas((prev) => ({
+      ...prev,
+      [id]: !prev[id],
+    }));
+  }, []);
 
   // Estados del Modal de Abono
   const [modalAbonoVisible, setModalAbonoVisible] = useState(false);
@@ -1133,7 +1157,7 @@ export default function CobradorDashboard({ navigation }) {
   // ==========================================
   // AGRUPACIÓN CENTRADA EN EL CLIENTE (MULTICONTRATO UNIFICADO)
   // ==========================================
-  const clientesAgrupados = useMemo(() => {
+  const todosLosClientesAgrupados = useMemo(() => {
     const map = new Map();
 
     creditosFiltrados.forEach((item) => {
@@ -1166,6 +1190,7 @@ export default function CobradorDashboard({ navigation }) {
       if (!grupo.cliente.telefono && cliente.telefono) grupo.cliente.telefono = cliente.telefono;
       if (!grupo.cliente.direccion && cliente.direccion) grupo.cliente.direccion = cliente.direccion;
       if (!grupo.cliente.barrio && cliente.barrio) grupo.cliente.barrio = cliente.barrio;
+      if (!grupo.cliente.ciudad && cliente.ciudad) grupo.cliente.ciudad = cliente.ciudad;
       if (!grupo.cliente.cedula && cliente.cedula) grupo.cliente.cedula = cliente.cedula;
       if (!grupo.cliente.nombres && cliente.nombres) grupo.cliente.nombres = cliente.nombres;
 
@@ -1175,6 +1200,158 @@ export default function CobradorDashboard({ navigation }) {
 
     return Array.from(map.values());
   }, [creditosFiltrados]);
+
+  // Extracción jerárquica de zonas (Ciudad -> Barrios) a partir de los datos de la ruta
+  const catalogoZonasRuta = useMemo(() => {
+    const mapa = {};
+
+    todosLosClientesAgrupados.forEach((grupo) => {
+      const cliente = grupo.cliente || {};
+      const ciudadRaw = (cliente.ciudad || '').trim();
+      const barrioRaw = (cliente.barrio || '').trim();
+
+      const ciudad = ciudadRaw || 'Otras Ciudades';
+
+      if (!mapa[ciudad]) {
+        mapa[ciudad] = new Set();
+      }
+
+      if (barrioRaw) {
+        mapa[ciudad].add(barrioRaw);
+      }
+    });
+
+    const resultado = {};
+    Object.keys(mapa)
+      .sort((a, b) => a.localeCompare(b, 'es', { sensitivity: 'base' }))
+      .forEach((ciudad) => {
+        resultado[ciudad] = Array.from(mapa[ciudad]).sort((a, b) =>
+          a.localeCompare(b, 'es', { sensitivity: 'base' })
+        );
+      });
+
+    return resultado;
+  }, [todosLosClientesAgrupados]);
+
+  // Clientes filtrados por zona geográfica (Ciudad y/o Barrio) para los conteos de estado
+  const clientesParaConteos = useMemo(() => {
+    let filtrados = todosLosClientesAgrupados;
+
+    if (filtroCiudadRuta) {
+      const cTarget = filtroCiudadRuta.toLowerCase().trim();
+      filtrados = filtrados.filter((grupo) => {
+        const c = (grupo.cliente?.ciudad || '').toLowerCase().trim();
+        return c === cTarget;
+      });
+    }
+
+    if (filtroBarrioRuta && filtroBarrioRuta !== 'todos') {
+      const bTarget = filtroBarrioRuta.toLowerCase().trim();
+      filtrados = filtrados.filter((grupo) => {
+        const b = (grupo.cliente?.barrio || '').toLowerCase().trim();
+        return b === bTarget;
+      });
+    }
+
+    return filtrados;
+  }, [todosLosClientesAgrupados, filtroCiudadRuta, filtroBarrioRuta]);
+
+  // Conteos dinámicos para las píldoras de filtro rápido (Filter Chips)
+  const conteosChipsRuta = useMemo(() => {
+    let countTotal = clientesParaConteos.length;
+    let countCritica = 0;
+    let countHoy = 0;
+
+    clientesParaConteos.forEach((grupo) => {
+      const tieneCritica = (grupo.contratos || []).some((c) => {
+        const fVenc = calcularVencimientoCuota(c);
+        const esVencido = Boolean(fVenc && todayStr && fVenc < todayStr);
+        return esCreditoCarteraCritica(c) || contarCuotasVencidas(c) > 0 || esVencido;
+      });
+      if (tieneCritica) countCritica++;
+
+      const tieneHoy = (grupo.contratos || []).some((c) => {
+        const fVenc = calcularVencimientoCuota(c);
+        return Boolean(fVenc && todayStr && fVenc === todayStr);
+      });
+      if (tieneHoy) countHoy++;
+    });
+
+    return {
+      todos: countTotal,
+      critica: countCritica,
+      hoy: countHoy,
+    };
+  }, [clientesParaConteos, todayStr]);
+
+  // Clientes finales aplicando la píldora de filtro rápido ('todos' | 'critica' | 'hoy') y filtro geográfico
+  const clientesAgrupados = useMemo(() => {
+    let filtrados = todosLosClientesAgrupados;
+
+    // 1. Filtro Geográfico por Ciudad
+    if (filtroCiudadRuta) {
+      const cTarget = filtroCiudadRuta.toLowerCase().trim();
+      filtrados = filtrados.filter((grupo) => {
+        const c = (grupo.cliente?.ciudad || '').toLowerCase().trim();
+        return c === cTarget;
+      });
+    }
+
+    // 2. Filtro Geográfico por Barrio
+    if (filtroBarrioRuta && filtroBarrioRuta !== 'todos') {
+      const bTarget = filtroBarrioRuta.toLowerCase().trim();
+      filtrados = filtrados.filter((grupo) => {
+        const b = (grupo.cliente?.barrio || '').toLowerCase().trim();
+        return b === bTarget;
+      });
+    }
+
+    // 3. Filtro por Estado (Mora Crítica / Vence Hoy)
+    if (filtroEstadoRuta === 'critica') {
+      filtrados = filtrados.filter((grupo) =>
+        (grupo.contratos || []).some((c) => {
+          const fVenc = calcularVencimientoCuota(c);
+          const esVencido = Boolean(fVenc && todayStr && fVenc < todayStr);
+          return esCreditoCarteraCritica(c) || contarCuotasVencidas(c) > 0 || esVencido;
+        })
+      );
+    } else if (filtroEstadoRuta === 'hoy') {
+      filtrados = filtrados.filter((grupo) =>
+        (grupo.contratos || []).some((c) => {
+          const fVenc = calcularVencimientoCuota(c);
+          return Boolean(fVenc && todayStr && fVenc === todayStr);
+        })
+      );
+    }
+
+    return filtrados;
+  }, [todosLosClientesAgrupados, filtroEstadoRuta, filtroCiudadRuta, filtroBarrioRuta, todayStr]);
+
+  // Total acumulado de contratos visibles
+  const totalContratosVisibles = useMemo(() => {
+    return clientesAgrupados.reduce((acc, g) => acc + (g.contratos?.length || 0), 0);
+  }, [clientesAgrupados]);
+
+  // Etiqueta y estado activo para el botón principal de zona
+  const hayFiltroZonaActivo = Boolean(
+    filtroCiudadRuta || (filtroBarrioRuta && filtroBarrioRuta !== 'todos')
+  );
+
+  const etiquetaBotonZona = useMemo(() => {
+    if (!filtroCiudadRuta && !filtroBarrioRuta) {
+      return '📍 Filtrar por Zona';
+    }
+    if (filtroCiudadRuta && (!filtroBarrioRuta || filtroBarrioRuta === 'todos')) {
+      return `📍 ${filtroCiudadRuta} (Todos)`;
+    }
+    if (filtroCiudadRuta && filtroBarrioRuta && filtroBarrioRuta !== 'todos') {
+      return `📍 ${filtroCiudadRuta} - ${filtroBarrioRuta}`;
+    }
+    if (!filtroCiudadRuta && filtroBarrioRuta && filtroBarrioRuta !== 'todos') {
+      return `📍 Barrio: ${filtroBarrioRuta}`;
+    }
+    return '📍 Filtrar por Zona';
+  }, [filtroCiudadRuta, filtroBarrioRuta]);
 
   // ==========================================
   // PROYECCIÓN DE CARTERA Y PRÓXIMOS VENCIMIENTOS
@@ -2756,12 +2933,12 @@ export default function CobradorDashboard({ navigation }) {
               </View>
             </View>
 
-            {/* BARRA DE BÚSQUEDA EN HOJA DE RUTA */}
+            {/* BARRA DE BÚSQUEDA Y PÍLDORAS DE FILTRO RÁPIDO EN HOJA DE RUTA */}
             <View style={styles.searchSection}>
               <View style={styles.sectionHeaderRow}>
                 <Text style={styles.sectionTitle}>HOJA DE RUTA DEL DÍA</Text>
                 <Text style={styles.sectionCountBadge}>
-                  {clientesAgrupados.length} {clientesAgrupados.length === 1 ? 'cliente' : 'clientes'} • {creditosFiltrados.length} {creditosFiltrados.length === 1 ? 'crédito' : 'créditos'}
+                  {clientesAgrupados.length} {clientesAgrupados.length === 1 ? 'cliente' : 'clientes'} • {totalContratosVisibles} {totalContratosVisibles === 1 ? 'crédito' : 'créditos'}
                 </Text>
               </View>
               <View style={styles.searchBar}>
@@ -2774,6 +2951,111 @@ export default function CobradorDashboard({ navigation }) {
                   onChangeText={setFiltroBusquedaRuta}
                 />
               </View>
+
+              {/* Píldoras de Filtro Rápido (Filter Chips) */}
+              <ScrollView
+                horizontal
+                showsHorizontalScrollIndicator={false}
+                contentContainerStyle={styles.rutaFilterRow}
+                style={styles.rutaFilterScroll}
+              >
+                <TouchableOpacity
+                  style={[
+                    styles.rutaFilterPill,
+                    filtroEstadoRuta === 'todos' && styles.rutaFilterPillActive,
+                  ]}
+                  onPress={() => setFiltroEstadoRuta('todos')}
+                  activeOpacity={0.7}
+                >
+                  <Text
+                    style={[
+                      styles.rutaFilterPillText,
+                      filtroEstadoRuta === 'todos' && styles.rutaFilterPillTextActive,
+                    ]}
+                  >
+                    📋 Todos ({conteosChipsRuta.todos})
+                  </Text>
+                </TouchableOpacity>
+
+                <TouchableOpacity
+                  style={[
+                    styles.rutaFilterPill,
+                    filtroEstadoRuta === 'critica' && styles.rutaFilterPillActiveCritica,
+                  ]}
+                  onPress={() => setFiltroEstadoRuta('critica')}
+                  activeOpacity={0.7}
+                >
+                  <Text
+                    style={[
+                      styles.rutaFilterPillText,
+                      filtroEstadoRuta === 'critica' && styles.rutaFilterPillTextActiveCritica,
+                    ]}
+                  >
+                    🚨 Mora Crítica ({conteosChipsRuta.critica})
+                  </Text>
+                </TouchableOpacity>
+
+                <TouchableOpacity
+                  style={[
+                    styles.rutaFilterPill,
+                    filtroEstadoRuta === 'hoy' && styles.rutaFilterPillActiveHoy,
+                  ]}
+                  onPress={() => setFiltroEstadoRuta('hoy')}
+                  activeOpacity={0.7}
+                >
+                  <Text
+                    style={[
+                      styles.rutaFilterPillText,
+                      filtroEstadoRuta === 'hoy' && styles.rutaFilterPillTextActiveHoy,
+                    ]}
+                  >
+                    🗓️ Vence Hoy ({conteosChipsRuta.hoy})
+                  </Text>
+                </TouchableOpacity>
+              </ScrollView>
+
+              {/* Botón Principal de Filtro Geográfico por Zona (Ciudad ➔ Barrio) */}
+              <View style={styles.zonaFilterBarRow}>
+                <TouchableOpacity
+                  style={[
+                    styles.zonaFilterBtn,
+                    hayFiltroZonaActivo && styles.zonaFilterBtnActive,
+                  ]}
+                  onPress={() => {
+                    setTempCiudad(filtroCiudadRuta || null);
+                    setTempBarrio(filtroBarrioRuta || null);
+                    setModalZonaVisible(true);
+                  }}
+                  activeOpacity={0.7}
+                >
+                  <Text
+                    style={[
+                      styles.zonaFilterBtnText,
+                      hayFiltroZonaActivo && styles.zonaFilterBtnTextActive,
+                    ]}
+                    numberOfLines={1}
+                  >
+                    {etiquetaBotonZona}
+                  </Text>
+                  <Text style={[styles.zonaFilterChevron, hayFiltroZonaActivo && styles.zonaFilterChevronActive]}>
+                    ▾
+                  </Text>
+                </TouchableOpacity>
+
+                {hayFiltroZonaActivo && (
+                  <TouchableOpacity
+                    style={styles.zonaFilterClearMiniBtn}
+                    onPress={() => {
+                      setFiltroCiudadRuta(null);
+                      setFiltroBarrioRuta(null);
+                    }}
+                    activeOpacity={0.7}
+                    accessibilityLabel="Limpiar filtro de zona"
+                  >
+                    <Text style={styles.zonaFilterClearMiniText}>✕ Limpiar</Text>
+                  </TouchableOpacity>
+                )}
+              </View>
             </View>
 
             {/* LISTADO DE CRÉDITOS Y COBROS EN TERRENO */}
@@ -2782,15 +3064,29 @@ export default function CobradorDashboard({ navigation }) {
                 <ActivityIndicator size="small" color="#059669" />
                 <Text style={styles.loadingText}>Cargando cartera de la ruta...</Text>
               </View>
-            ) : creditosFiltrados.length === 0 ? (
+            ) : clientesAgrupados.length === 0 ? (
               <View style={styles.emptyCard}>
                 <Text style={styles.emptyTitle}>
-                  {filtroBusquedaRuta.trim() ? 'Sin Resultados de Búsqueda' : '¡Ruta al Día!'}
+                  {filtroBusquedaRuta.trim()
+                    ? 'Sin Resultados de Búsqueda'
+                    : (filtroCiudadRuta || filtroBarrioRuta)
+                      ? `Sin Clientes en ${[filtroBarrioRuta, filtroCiudadRuta].filter(Boolean).join(', ')}`
+                      : filtroEstadoRuta === 'critica'
+                        ? 'Sin Cartera en Mora'
+                        : filtroEstadoRuta === 'hoy'
+                          ? 'Sin Cuotas que Venzan Hoy'
+                          : '¡Ruta al Día!'}
                 </Text>
                 <Text style={styles.emptySubtitle}>
                   {filtroBusquedaRuta.trim()
                     ? 'No se encontraron contratos en la ruta con los términos buscados.'
-                    : 'Todos los contratos asignados a tu ruta ya tienen abono registrado hoy o se encuentran totalmente cancelados ($0 saldo).'}
+                    : (filtroCiudadRuta || filtroBarrioRuta)
+                      ? `No hay clientes que coincidan con la zona geográfica seleccionada (${[filtroBarrioRuta, filtroCiudadRuta].filter(Boolean).join(', ')}).`
+                      : filtroEstadoRuta === 'critica'
+                        ? 'No tienes clientes con cuotas vencidas o en mora crítica en esta ruta.'
+                        : filtroEstadoRuta === 'hoy'
+                          ? 'No hay clientes con cuotas exigibles exactamente el día de hoy.'
+                          : 'Todos los contratos asignados a tu ruta ya tienen abono registrado hoy o se encuentran totalmente cancelados ($0 saldo).'}
                 </Text>
                 <TouchableOpacity style={styles.reloadButton} onPress={cargarCreditosRuta}>
                   <Text style={styles.reloadButtonText}>Recargar Hoja de Ruta</Text>
@@ -2803,14 +3099,31 @@ export default function CobradorDashboard({ navigation }) {
                   const contratos = grupo.contratos || [];
                   const primerCredito = grupo.primerCredito || contratos[0] || {};
                   const tieneMultiples = contratos.length > 1;
+                  const isExpandido = Boolean(clientesExpandidos[grupo.clienteKey]);
+
+                  // Evaluar si algún contrato del cliente tiene mora o cuotas vencidas
+                  const tieneMoraCliente = contratos.some((c) => {
+                    const fVenc = calcularVencimientoCuota(c);
+                    const esVencido = Boolean(fVenc && todayStr && fVenc < todayStr);
+                    return esCreditoCarteraCritica(c) || contarCuotasVencidas(c) > 0 || esVencido;
+                  });
 
                   return (
                     <View key={grupo.clienteKey || gIndex} style={styles.clientUnifiedCard}>
                       
-                      {/* 1. CABECERA UNIFICADA DE IDENTIFICACIÓN DEL CLIENTE */}
-                      <View style={styles.clientCardHeader}>
-                        <View style={styles.clientAvatarContainer}>
-                          <Text style={styles.clientAvatarText}>
+                      {/* 1. CABECERA UNIFICADA DE IDENTIFICACIÓN DEL CLIENTE (INTERACTIVA / ACORDEÓN) */}
+                      <TouchableOpacity
+                        style={[
+                          styles.clientCardHeaderTouchable,
+                          isExpandido && styles.clientCardHeaderTouchableExpanded,
+                        ]}
+                        onPress={() => toggleClienteExpandido(grupo.clienteKey)}
+                        activeOpacity={0.7}
+                        accessibilityRole="button"
+                        accessibilityLabel={`Cliente ${cliente.nombres || ''}, ${isExpandido ? 'tocar para colapsar' : 'tocar para expandir'}`}
+                      >
+                        <View style={[styles.clientAvatarContainer, tieneMoraCliente && styles.clientAvatarContainerMora]}>
+                          <Text style={[styles.clientAvatarText, tieneMoraCliente && styles.clientAvatarTextMora]}>
                             {(cliente.nombres || 'C').charAt(0).toUpperCase()}
                           </Text>
                         </View>
@@ -2820,223 +3133,260 @@ export default function CobradorDashboard({ navigation }) {
                             <Text style={styles.clientTitleName} numberOfLines={1}>
                               {cliente.nombres || 'Cliente Titular'}
                             </Text>
+                            {tieneMoraCliente && (
+                              <View style={styles.clientMoraBadge}>
+                                <Text style={styles.clientMoraBadgeText}>🚨 Mora</Text>
+                              </View>
+                            )}
                             {tieneMultiples && (
                               <View style={styles.clientMultiBadge}>
                                 <Text style={styles.clientMultiBadgeText}>
-                                  ⚡ {contratos.length} Contratos
+                                  ⚡ {contratos.length} CTR
                                 </Text>
                               </View>
                             )}
                           </View>
-                          <Text style={styles.clientDocText}>
-                            C.C. {cliente.cedula || 'Sin documento'}
-                          </Text>
-                        </View>
-                      </View>
-
-                      {/* 2. DIRECCIÓN, BARRIO Y ACCIONES DE CONTACTO Y GARANTÍAS */}
-                      <View style={styles.clientDetailsBar}>
-                        <View style={styles.clientAddressRow}>
-                          <Text style={styles.addressIcon}>📍</Text>
-                          <Text style={styles.clientAddressText} numberOfLines={1}>
-                            {cliente.direccion || 'Sin dirección'}{cliente.barrio ? `, ${cliente.barrio}` : ''}
-                          </Text>
+                          <View style={styles.clientMetaRow}>
+                            <Text style={styles.clientDocText}>
+                              C.C. {cliente.cedula || 'Sin documento'}
+                            </Text>
+                            {(cliente.barrio || cliente.ciudad) ? (
+                              <Text style={styles.clientBarrioText} numberOfLines={1}>
+                                {' '}• 📍 {[cliente.barrio, cliente.ciudad].filter(Boolean).join(', ')}
+                              </Text>
+                            ) : null}
+                          </View>
                         </View>
 
-                        <View style={styles.clientActionsBar}>
-                          {cliente.telefono ? (
-                            <>
-                              <TouchableOpacity
-                                style={styles.clientContactBtn}
-                                onPress={() => hacerLlamada(cliente.telefono)}
-                                accessibilityRole="button"
-                                activeOpacity={0.7}
-                              >
-                                <Text style={styles.clientContactBtnText}>📞 Llamar</Text>
-                              </TouchableOpacity>
-
-                              <TouchableOpacity
-                                style={styles.clientWhatsappBtn}
-                                onPress={() => abrirWhatsApp(cliente.telefono, cliente.nombres, 'Titular')}
-                                accessibilityRole="button"
-                                activeOpacity={0.7}
-                              >
-                                <Text style={styles.clientWhatsappBtnText}>💬 WhatsApp</Text>
-                              </TouchableOpacity>
-                            </>
-                          ) : null}
-
-                          <TouchableOpacity
-                            style={styles.clientGarantiasBtn}
-                            onPress={() => abrirModalGarantias(primerCredito)}
-                            accessibilityRole="button"
-                            activeOpacity={0.7}
-                          >
-                            <Text style={styles.clientGarantiasBtnText}>🛡️ Garantías</Text>
-                          </TouchableOpacity>
-                        </View>
-                      </View>
-
-                      {/* 3. TÍTULO DE SECCIÓN DE CONTRATOS */}
-                      <View style={styles.contractsSectionHeader}>
-                        <Text style={styles.contractsSectionTitle}>
-                          {tieneMultiples ? `CONTRATOS ACTIVOS (${contratos.length})` : 'CONTRATO ASIGNADO'}
-                        </Text>
-                        {tieneMultiples && (
-                          <Text style={styles.contractsTotalSaldoText}>
-                            Total Cartera: {formatCOP(grupo.totalSaldo)}
-                          </Text>
-                        )}
-                      </View>
-
-                      {/* 4. SUB-BLOQUES INDEPENDIENTES POR CONTRATO */}
-                      <View style={styles.contractsSubList}>
-                        {contratos.map((item, cIndex) => {
-                          const saldo = Number(item.saldo_pendiente || 0);
-                          const cuota = Number(item.valor_cuota || 0);
-                          const yaCobrado = Boolean(
-                            item.cobradoHoy ||
-                            (item.id_contrato && creditosCobradosHoySet.has(String(item.id_contrato).toLowerCase())) ||
-                            (item.id && creditosCobradosHoySet.has(String(item.id).toLowerCase())) ||
-                            (item.numero_contrato && creditosCobradosHoySet.has(String(item.numero_contrato).toLowerCase()))
-                          );
-
-                          const targetId = item.id_contrato || item.id;
-                          const numContrato = item.numero_contrato || (targetId ? `CTR-${String(targetId).slice(0, 8).toUpperCase()}` : 'CTR-RUTA');
-                          const totalFinanciado = Number(item.monto_financiado || item.valorTotal || item.valor_total || 0);
-                          const totalCuotas = Number(item.numero_cuotas || item.cuotas || (cuota > 0 ? Math.round(totalFinanciado / cuota) : 1)) || 1;
-                          const amortizado = Math.max(0, totalFinanciado - saldo);
-                          const cuotasPagadas = cuota > 0 ? Math.floor(amortizado / cuota) : 0;
-                          const cuotaActual = Math.min(totalCuotas, Math.max(1, cuotasPagadas + 1));
-
-                          // Vencimiento y exigibilidad de la cuota
-                          const fechaVenc = calcularVencimientoCuota(item);
-                          const esVenceHoy = Boolean(fechaVenc && fechaVenc === todayStr);
-                          const esVencido = Boolean(fechaVenc && fechaVenc < todayStr);
-                          const fechaVencCorta = fechaVenc ? fechaVenc.slice(5) : '';
-
-                          // Cartera crítica (>= 3 cuotas vencidas y plazo > 2)
-                          const esCritica = esCreditoCarteraCritica(item);
-                          const cuotasVencidas = contarCuotasVencidas(item);
-
-                          // Contexto del crédito: artículos y modalidad
-                          let contextoArticulos = '';
-                          if (Array.isArray(item.detalles) && item.detalles.length > 0) {
-                            contextoArticulos = item.detalles
-                              .map((d) => `${d.cantidad > 1 ? `${d.cantidad}x ` : ''}${d.producto?.nombre || d.descripcion || 'Artículo'}`)
-                              .join(', ');
-                          } else if (item.descripcion_articulos) {
-                            contextoArticulos = item.descripcion_articulos;
-                          } else if (item.articulos) {
-                            contextoArticulos = item.articulos;
-                          }
-                          const modalidadTexto = item.tipo_pago ? String(item.tipo_pago).toUpperCase() : 'CUOTAS';
-
-                          return (
-                            <View
-                              key={item.id_contrato || item.id || cIndex}
+                        <View style={styles.clientHeaderRight}>
+                          <View style={styles.clientHeaderSaldoBox}>
+                            <Text style={styles.clientHeaderSaldoLabel}>SALDO TOTAL</Text>
+                            <Text
                               style={[
-                                styles.contractSubCard,
-                                yaCobrado && styles.contractSubCardDone,
-                                esCritica && styles.contractSubCardCritica,
+                                styles.clientHeaderSaldoVal,
+                                tieneMoraCliente && styles.clientHeaderSaldoValMora,
                               ]}
+                              numberOfLines={1}
                             >
-                              {/* Encabezado del Sub-bloque: Número de Contrato y Cuota */}
-                              <View style={styles.contractSubHeader}>
-                                <View style={styles.contractSubNumberBlock}>
-                                  <Text style={styles.contractSubNumberText}>{numContrato}</Text>
-                                </View>
+                              {formatCOP(grupo.totalSaldo)}
+                            </Text>
+                          </View>
+                          <View style={[styles.accordionChevronBox, isExpandido && styles.accordionChevronBoxExpanded]}>
+                            <Text style={styles.accordionChevronText}>
+                              {isExpandido ? '▲' : '▼'}
+                            </Text>
+                          </View>
+                        </View>
+                      </TouchableOpacity>
 
-                                <View style={styles.contractSubBadgesRow}>
-                                  <View style={styles.contractSubCuotaBadge}>
-                                    <Text style={styles.contractSubCuotaBadgeText}>
-                                      Cuota {cuotaActual}/{totalCuotas}
+                      {/* CONTENIDO DESPLEGABLE EN ESTADO EXPANDIDO */}
+                      {isExpandido && (
+                        <View style={styles.clientExpandedContent}>
+                          {/* 2. DIRECCIÓN, BARRIO Y ACCIONES DE CONTACTO Y GARANTÍAS */}
+                          <View style={styles.clientDetailsBar}>
+                            <View style={styles.clientAddressRow}>
+                              <Text style={styles.addressIcon}>📍</Text>
+                              <Text style={styles.clientAddressText} numberOfLines={1}>
+                                {cliente.direccion || 'Sin dirección'}{[cliente.barrio, cliente.ciudad].filter(Boolean).length > 0 ? `, ${[cliente.barrio, cliente.ciudad].filter(Boolean).join(', ')}` : ''}
+                              </Text>
+                            </View>
+
+                            <View style={styles.clientActionsBar}>
+                              {cliente.telefono ? (
+                                <>
+                                  <TouchableOpacity
+                                    style={styles.clientContactBtn}
+                                    onPress={() => hacerLlamada(cliente.telefono)}
+                                    accessibilityRole="button"
+                                    activeOpacity={0.7}
+                                  >
+                                    <Text style={styles.clientContactBtnText}>📞 Llamar</Text>
+                                  </TouchableOpacity>
+
+                                  <TouchableOpacity
+                                    style={styles.clientWhatsappBtn}
+                                    onPress={() => abrirWhatsApp(cliente.telefono, cliente.nombres, 'Titular')}
+                                    accessibilityRole="button"
+                                    activeOpacity={0.7}
+                                  >
+                                    <Text style={styles.clientWhatsappBtnText}>💬 WhatsApp</Text>
+                                  </TouchableOpacity>
+                                </>
+                              ) : null}
+
+                              <TouchableOpacity
+                                style={styles.clientGarantiasBtn}
+                                onPress={() => abrirModalGarantias(primerCredito)}
+                                accessibilityRole="button"
+                                activeOpacity={0.7}
+                              >
+                                <Text style={styles.clientGarantiasBtnText}>🛡️ Garantías</Text>
+                              </TouchableOpacity>
+                            </View>
+                          </View>
+
+                          {/* 3. TÍTULO DE SECCIÓN DE CONTRATOS */}
+                          <View style={styles.contractsSectionHeader}>
+                            <Text style={styles.contractsSectionTitle}>
+                              {tieneMultiples ? `CONTRATOS ACTIVOS (${contratos.length})` : 'CONTRATO ASIGNADO'}
+                            </Text>
+                            {tieneMultiples && (
+                              <Text style={styles.contractsTotalSaldoText}>
+                                Total Cartera: {formatCOP(grupo.totalSaldo)}
+                              </Text>
+                            )}
+                          </View>
+
+                          {/* 4. SUB-BLOQUES INDEPENDIENTES POR CONTRATO */}
+                          <View style={styles.contractsSubList}>
+                            {contratos.map((item, cIndex) => {
+                              const saldo = Number(item.saldo_pendiente || 0);
+                              const cuota = Number(item.valor_cuota || 0);
+                              const yaCobrado = Boolean(
+                                item.cobradoHoy ||
+                                (item.id_contrato && creditosCobradosHoySet.has(String(item.id_contrato).toLowerCase())) ||
+                                (item.id && creditosCobradosHoySet.has(String(item.id).toLowerCase())) ||
+                                (item.numero_contrato && creditosCobradosHoySet.has(String(item.numero_contrato).toLowerCase()))
+                              );
+
+                              const targetId = item.id_contrato || item.id;
+                              const numContrato = item.numero_contrato || (targetId ? `CTR-${String(targetId).slice(0, 8).toUpperCase()}` : 'CTR-RUTA');
+                              const totalFinanciado = Number(item.monto_financiado || item.valorTotal || item.valor_total || 0);
+                              const totalCuotas = Number(item.numero_cuotas || item.cuotas || (cuota > 0 ? Math.round(totalFinanciado / cuota) : 1)) || 1;
+                              const amortizado = Math.max(0, totalFinanciado - saldo);
+                              const cuotasPagadas = cuota > 0 ? Math.floor(amortizado / cuota) : 0;
+                              const cuotaActual = Math.min(totalCuotas, Math.max(1, cuotasPagadas + 1));
+
+                              // Vencimiento y exigibilidad de la cuota
+                              const fechaVenc = calcularVencimientoCuota(item);
+                              const esVenceHoy = Boolean(fechaVenc && fechaVenc === todayStr);
+                              const esVencido = Boolean(fechaVenc && fechaVenc < todayStr);
+                              const fechaVencCorta = fechaVenc ? fechaVenc.slice(5) : '';
+
+                              // Cartera crítica (>= 3 cuotas vencidas y plazo > 2)
+                              const esCritica = esCreditoCarteraCritica(item);
+                              const cuotasVencidas = contarCuotasVencidas(item);
+
+                              // Contexto del crédito: artículos y modalidad
+                              let contextoArticulos = '';
+                              if (Array.isArray(item.detalles) && item.detalles.length > 0) {
+                                contextoArticulos = item.detalles
+                                  .map((d) => `${d.cantidad > 1 ? `${d.cantidad}x ` : ''}${d.producto?.nombre || d.descripcion || 'Artículo'}`)
+                                  .join(', ');
+                              } else if (item.descripcion_articulos) {
+                                contextoArticulos = item.descripcion_articulos;
+                              } else if (item.articulos) {
+                                contextoArticulos = item.articulos;
+                              }
+                              const modalidadTexto = item.tipo_pago ? String(item.tipo_pago).toUpperCase() : 'CUOTAS';
+
+                              return (
+                                <View
+                                  key={item.id_contrato || item.id || cIndex}
+                                  style={[
+                                    styles.contractSubCard,
+                                    yaCobrado && styles.contractSubCardDone,
+                                    esCritica && styles.contractSubCardCritica,
+                                  ]}
+                                >
+                                  {/* Encabezado del Sub-bloque: Número de Contrato y Cuota */}
+                                  <View style={styles.contractSubHeader}>
+                                    <View style={styles.contractSubNumberBlock}>
+                                      <Text style={styles.contractSubNumberText}>{numContrato}</Text>
+                                    </View>
+
+                                    <View style={styles.contractSubBadgesRow}>
+                                      <View style={styles.contractSubCuotaBadge}>
+                                        <Text style={styles.contractSubCuotaBadgeText}>
+                                          Cuota {cuotaActual}/{totalCuotas}
+                                        </Text>
+                                      </View>
+
+                                      {/* Badge de Alerta de Cartera Crítica */}
+                                      {esCritica && (
+                                        <View style={styles.badgeCarteraCritica}>
+                                          <Text style={styles.badgeCarteraCriticaText}>
+                                            🚨 {cuotasVencidas} VENCIDAS
+                                          </Text>
+                                        </View>
+                                      )}
+
+                                      {/* Badge de Vencimiento de Cuota */}
+                                      {esVencido && !esCritica ? (
+                                        <View style={styles.badgeVencido}>
+                                          <Text style={styles.badgeVencidoText}>⚠️ Vence {fechaVencCorta}</Text>
+                                        </View>
+                                      ) : esVenceHoy ? (
+                                        <View style={styles.badgeVenceHoy}>
+                                          <Text style={styles.badgeVenceHoyText}>🗓️ Vence Hoy</Text>
+                                        </View>
+                                      ) : null}
+
+                                      <View style={yaCobrado ? styles.badgeCobrado : styles.badgePendiente}>
+                                        <Text style={yaCobrado ? styles.badgeCobradoText : styles.badgePendienteText}>
+                                          {yaCobrado ? '✓ COBRADO' : 'PENDIENTE'}
+                                        </Text>
+                                      </View>
+                                    </View>
+                                  </View>
+
+                                  {/* Artículos Asociados y Modalidad */}
+                                  <View style={styles.contractSubContextRow}>
+                                    <Text style={styles.contextBadgeIcon}>📦</Text>
+                                    <Text style={styles.contractSubContextText} numberOfLines={1}>
+                                      {contextoArticulos ? contextoArticulos : 'Operación a Crédito'} • {modalidadTexto}
                                     </Text>
                                   </View>
 
-                                  {/* Badge de Alerta de Cartera Crítica */}
-                                  {esCritica && (
-                                    <View style={styles.badgeCarteraCritica}>
-                                      <Text style={styles.badgeCarteraCriticaText}>
-                                        🚨 {cuotasVencidas} VENCIDAS
+                                  {/* Fila Financiera del Contrato */}
+                                  <View style={styles.contractSubFinanceRow}>
+                                    <View style={styles.contractSubFinanceCol}>
+                                      <Text style={styles.contractSubFinanceLabel}>SALDO RESTANTE</Text>
+                                      <Text style={[styles.contractSubFinanceSaldo, esCritica && { color: '#DC2626' }]}>
+                                        {formatCOP(saldo)}
                                       </Text>
                                     </View>
+                                    <View style={styles.contractSubFinanceColRight}>
+                                      <Text style={styles.contractSubFinanceLabel}>VALOR CUOTA</Text>
+                                      <Text style={styles.contractSubFinanceCuota}>{formatCOP(cuota)}</Text>
+                                    </View>
+                                  </View>
+
+                                  {/* Botón de Pago Individual Aislado para este Contrato */}
+                                  {yaCobrado ? (
+                                    <View style={styles.contractSubDoneBanner}>
+                                      <Text style={styles.contractSubDoneBannerText}>✓ Cobrado hoy</Text>
+                                    </View>
+                                  ) : (
+                                    <TouchableOpacity
+                                      style={styles.contractSubActionBtn}
+                                      onPress={() => abrirModalAbono(item)}
+                                      accessibilityRole="button"
+                                      activeOpacity={0.8}
+                                    >
+                                      <Text style={styles.contractSubActionBtnText}>💵 Registrar Abono de este Contrato</Text>
+                                    </TouchableOpacity>
                                   )}
 
-                                  {/* Badge de Vencimiento de Cuota */}
-                                  {esVencido && !esCritica ? (
-                                    <View style={styles.badgeVencido}>
-                                      <Text style={styles.badgeVencidoText}>⚠️ Vence {fechaVencCorta}</Text>
-                                    </View>
-                                  ) : esVenceHoy ? (
-                                    <View style={styles.badgeVenceHoy}>
-                                      <Text style={styles.badgeVenceHoyText}>🗓️ Vence Hoy</Text>
-                                    </View>
-                                  ) : null}
-
-                                  <View style={yaCobrado ? styles.badgeCobrado : styles.badgePendiente}>
-                                    <Text style={yaCobrado ? styles.badgeCobradoText : styles.badgePendienteText}>
-                                      {yaCobrado ? '✓ COBRADO' : 'PENDIENTE'}
-                                    </Text>
-                                  </View>
+                                  {/* Botón de Orden de Retiro por Mora Crítica */}
+                                  {esCritica && (
+                                    <TouchableOpacity
+                                      style={styles.contractSubRetiroBtn}
+                                      onPress={() => abrirModalRetiro(item)}
+                                      accessibilityRole="button"
+                                      activeOpacity={0.8}
+                                    >
+                                      <Text style={styles.contractSubRetiroBtnText}>
+                                        🚨 Registrar Orden de Retiro por Mora
+                                      </Text>
+                                    </TouchableOpacity>
+                                  )}
                                 </View>
-                              </View>
-
-                              {/* Artículos Asociados y Modalidad */}
-                              <View style={styles.contractSubContextRow}>
-                                <Text style={styles.contextBadgeIcon}>📦</Text>
-                                <Text style={styles.contractSubContextText} numberOfLines={1}>
-                                  {contextoArticulos ? contextoArticulos : 'Operación a Crédito'} • {modalidadTexto}
-                                </Text>
-                              </View>
-
-                              {/* Fila Financiera del Contrato */}
-                              <View style={styles.contractSubFinanceRow}>
-                                <View style={styles.contractSubFinanceCol}>
-                                  <Text style={styles.contractSubFinanceLabel}>SALDO RESTANTE</Text>
-                                  <Text style={[styles.contractSubFinanceSaldo, esCritica && { color: '#DC2626' }]}>
-                                    {formatCOP(saldo)}
-                                  </Text>
-                                </View>
-                                <View style={styles.contractSubFinanceColRight}>
-                                  <Text style={styles.contractSubFinanceLabel}>VALOR CUOTA</Text>
-                                  <Text style={styles.contractSubFinanceCuota}>{formatCOP(cuota)}</Text>
-                                </View>
-                              </View>
-
-                              {/* Botón de Pago Individual Aislado para este Contrato */}
-                              {yaCobrado ? (
-                                <View style={styles.contractSubDoneBanner}>
-                                  <Text style={styles.contractSubDoneBannerText}>✓ Cobrado hoy</Text>
-                                </View>
-                              ) : (
-                                <TouchableOpacity
-                                  style={styles.contractSubActionBtn}
-                                  onPress={() => abrirModalAbono(item)}
-                                  accessibilityRole="button"
-                                  activeOpacity={0.8}
-                                >
-                                  <Text style={styles.contractSubActionBtnText}>💵 Registrar Abono de este Contrato</Text>
-                                </TouchableOpacity>
-                              )}
-
-                              {/* Botón de Orden de Retiro por Mora Crítica */}
-                              {esCritica && (
-                                <TouchableOpacity
-                                  style={styles.contractSubRetiroBtn}
-                                  onPress={() => abrirModalRetiro(item)}
-                                  accessibilityRole="button"
-                                  activeOpacity={0.8}
-                                >
-                                  <Text style={styles.contractSubRetiroBtnText}>
-                                    🚨 Registrar Orden de Retiro por Mora
-                                  </Text>
-                                </TouchableOpacity>
-                              )}
-                            </View>
-                          );
-                        })}
-                      </View>
+                              );
+                            })}
+                          </View>
+                        </View>
+                      )}
 
                     </View>
                   );
@@ -3172,6 +3522,8 @@ export default function CobradorDashboard({ navigation }) {
                   const cuota = Number(item.valor_cuota || item.proximaCuota?.monto || 0);
                   const fVenc = item.fechaVencimientoCalculada;
                   const dias = item.diasParaVencer;
+                  const targetId = item.id_contrato || item.id || `proy-${idx}`;
+                  const isExpandido = Boolean(proyeccionesExpandidas[targetId]);
 
                   // Estado del vencimiento
                   let badgeColorStyle = styles.badgeFuture;
@@ -3204,15 +3556,22 @@ export default function CobradorDashboard({ navigation }) {
                   const cuotasPagadasTotal = cuotas.filter(q => q.pagada).length;
 
                   return (
-                    <View key={item.id_contrato || item.id || idx} style={styles.proyeccionCard}>
-                      {/* CABECERA: CLIENTE Y CONTRATO */}
+                    <TouchableOpacity
+                      key={targetId}
+                      style={[styles.proyeccionCard, isExpandido && styles.proyeccionCardExpanded]}
+                      onPress={() => toggleProyeccionExpandida(targetId)}
+                      activeOpacity={0.8}
+                      accessibilityRole="button"
+                      accessibilityLabel={`Contrato ${item.numero_contrato || ''}, ${cliente.nombres || ''}, ${isExpandido ? 'tocar para colapsar' : 'tocar para expandir'}`}
+                    >
+                      {/* CABECERA: CLIENTE, CONTRATO Y CHEVRON */}
                       <View style={styles.proyeccionCardHeader}>
                         <View style={styles.proyeccionClientCol}>
                           <Text style={styles.proyeccionClientName} numberOfLines={1}>
                             {cliente.nombres || 'Cliente Titular'}
                           </Text>
                           <Text style={styles.proyeccionClientDoc}>
-                            C.C. {cliente.cedula || 'S/N'} {cliente.barrio ? `• ${cliente.barrio}` : ''}
+                            C.C. {cliente.cedula || 'S/N'}{(cliente.barrio || cliente.ciudad) ? ` • 📍 ${[cliente.barrio, cliente.ciudad].filter(Boolean).join(', ')}` : ''}
                           </Text>
                           {cliente.direccion ? (
                             <Text style={styles.proyeccionClientDir} numberOfLines={1}>
@@ -3225,6 +3584,9 @@ export default function CobradorDashboard({ navigation }) {
                             <Text style={styles.proyeccionContractBadgeText}>
                               {item.numero_contrato || 'CTR'}
                             </Text>
+                          </View>
+                          <View style={[styles.accordionChevronBoxProy, isExpandido && styles.accordionChevronBoxProyExpanded]}>
+                            <Text style={styles.accordionChevronText}>{isExpandido ? '▲' : '▼'}</Text>
                           </View>
                         </View>
                       </View>
@@ -3245,146 +3607,166 @@ export default function CobradorDashboard({ navigation }) {
                         </Text>
                       </View>
 
-                      {/* RESUMEN FINANCIERO */}
-                      <View style={styles.proyeccionFinanceRow}>
-                        <View style={styles.proyeccionFinanceBlock}>
-                          <Text style={styles.proyeccionFinanceLabel}>PRÓXIMA CUOTA</Text>
-                          <Text style={styles.proyeccionCuotaAmount}>{formatCOP(cuota)}</Text>
-                          <Text style={styles.proyeccionFinanceFreq}>
-                            Frecuencia {item.tipo_pago || 'Mensual'}
-                          </Text>
+                      {/* CONTENIDO DESPLEGABLE EN ESTADO EXPANDIDO */}
+                      {isExpandido && (
+                        <View style={styles.proyeccionExpandedContent}>
+                          {/* RESUMEN FINANCIERO */}
+                          <View style={styles.proyeccionFinanceRow}>
+                            <View style={styles.proyeccionFinanceBlock}>
+                              <Text style={styles.proyeccionFinanceLabel}>PRÓXIMA CUOTA</Text>
+                              <Text style={styles.proyeccionCuotaAmount}>{formatCOP(cuota)}</Text>
+                              <Text style={styles.proyeccionFinanceFreq}>
+                                Frecuencia {item.tipo_pago || 'Mensual'}
+                              </Text>
+                            </View>
+                            <View style={[styles.proyeccionFinanceBlock, styles.proyeccionFinanceBlockRight]}>
+                              <Text style={styles.proyeccionFinanceLabel}>SALDO RESTANTE</Text>
+                              <Text style={[styles.proyeccionSaldoAmount, esCreditoCarteraCritica(item) && { color: '#DC2626' }]}>
+                                {formatCOP(saldo)}
+                              </Text>
+                              <Text style={styles.proyeccionFinanceTotal}>
+                                Total: {formatCOP(item.monto_financiado || item.valor_total || 0)}
+                              </Text>
+                            </View>
+                          </View>
+
+                          {/* DESGLOSE DE CUOTAS CON CHULOS DE VERIFICACIÓN */}
+                          <View style={styles.cuotasTimelineWrapper}>
+                            <Text style={styles.cuotasTimelineHeading}>
+                              CRONOGRAMA DE CUOTAS ({cuotasPagadasTotal}/{cuotas.length} PAGADAS):
+                            </Text>
+                            <ScrollView
+                              horizontal={true}
+                              showsHorizontalScrollIndicator={true}
+                              nestedScrollEnabled={true}
+                              keyboardShouldPersistTaps="handled"
+                              style={[
+                                styles.cuotasChipsScroll,
+                                Platform.OS === 'web' ? { overflowX: 'auto', WebkitOverflowScrolling: 'touch' } : {}
+                              ]}
+                              contentContainerStyle={[styles.cuotasChipsRow, { paddingRight: 20 }]}
+                            >
+                              {cuotas.map((q) => {
+                                const isPagada = Boolean(q.pagada);
+                                const isParcial = Boolean(q.es_parcial);
+                                const hasArrastre = !isPagada && Number(q.monto_arrastrado || 0) > 0;
+
+                                let chipStyle = styles.cuotaChipPendiente;
+                                let textStyle = styles.cuotaChipTextPendiente;
+                                let dateStyle = styles.cuotaChipDatePendiente;
+
+                                if (isPagada) {
+                                  chipStyle = styles.cuotaChipPagada;
+                                  textStyle = styles.cuotaChipTextPagada;
+                                  dateStyle = styles.cuotaChipDatePagada;
+                                } else if (isParcial) {
+                                  chipStyle = styles.cuotaChipParcial;
+                                  textStyle = styles.cuotaChipTextParcial;
+                                  dateStyle = styles.cuotaChipDateParcial;
+                                } else if (hasArrastre) {
+                                  chipStyle = styles.cuotaChipArrastre;
+                                  textStyle = styles.cuotaChipTextArrastre;
+                                  dateStyle = styles.cuotaChipDateArrastre;
+                                }
+
+                                let tituloTexto = `⏳ C${q.numero}: ${formatCOP(q.monto)}`;
+                                if (isPagada) {
+                                  tituloTexto = `✓ C${q.numero} Pagada`;
+                                } else if (isParcial) {
+                                  tituloTexto = `🟡 C${q.numero} Parcial: ${formatCOP(q.valor_pagado || 0)}`;
+                                } else if (hasArrastre) {
+                                  tituloTexto = `⚠️ C${q.numero}: ${formatCOP(q.valor_exigible || q.monto)}`;
+                                }
+
+                                let subTexto = q.fecha;
+                                if (isParcial) {
+                                  subTexto = `Faltan: ${formatCOP(q.saldo_cuota || 0)}`;
+                                } else if (hasArrastre) {
+                                  subTexto = `(+${formatCOP(q.monto_arrastrado)} arrastre)`;
+                                }
+
+                                return (
+                                  <View key={q.numero} style={[styles.cuotaChip, chipStyle]}>
+                                    <Text style={[styles.cuotaChipText, textStyle]} numberOfLines={1}>
+                                      {tituloTexto}
+                                    </Text>
+                                    {subTexto ? (
+                                      <Text style={[styles.cuotaChipDate, dateStyle]} numberOfLines={1}>
+                                        {subTexto}
+                                      </Text>
+                                    ) : null}
+                                  </View>
+                                );
+                              })}
+                            </ScrollView>
+                          </View>
+
+                          {/* ACCIONES DEL COBRADOR */}
+                          <View style={styles.proyeccionActionsRow}>
+                            {cliente.telefono ? (
+                              <TouchableOpacity
+                                style={styles.actionBtnCall}
+                                onPress={(e) => {
+                                  e?.stopPropagation?.();
+                                  hacerLlamada(cliente.telefono);
+                                }}
+                                accessibilityRole="button"
+                              >
+                                <Text style={styles.actionBtnCallText}>📞 Llamar</Text>
+                              </TouchableOpacity>
+                            ) : null}
+
+                            {cliente.telefono ? (
+                              <TouchableOpacity
+                                style={styles.actionBtnWa}
+                                onPress={(e) => {
+                                  e?.stopPropagation?.();
+                                  abrirWhatsApp(cliente.telefono, cliente.nombres, 'Titular');
+                                }}
+                                accessibilityRole="button"
+                              >
+                                <Text style={styles.actionBtnWaText}>💬 WhatsApp</Text>
+                              </TouchableOpacity>
+                            ) : null}
+
+                            <TouchableOpacity
+                              style={styles.actionBtnGarantias}
+                              onPress={(e) => {
+                                e?.stopPropagation?.();
+                                abrirModalGarantias(item);
+                              }}
+                              accessibilityRole="button"
+                            >
+                              <Text style={styles.actionBtnGarantiasText}>🛡️ Respaldo</Text>
+                            </TouchableOpacity>
+
+                            {esCreditoCarteraCritica(item) && (
+                              <TouchableOpacity
+                                style={styles.actionBtnRetiro}
+                                onPress={(e) => {
+                                  e?.stopPropagation?.();
+                                  abrirModalRetiro(item);
+                                }}
+                                accessibilityRole="button"
+                              >
+                                <Text style={styles.actionBtnRetiroText}>🚨 Retiro</Text>
+                              </TouchableOpacity>
+                            )}
+
+                            <TouchableOpacity
+                              style={styles.actionBtnCobrar}
+                              onPress={(e) => {
+                                e?.stopPropagation?.();
+                                abrirModalAbono(item);
+                              }}
+                              accessibilityRole="button"
+                            >
+                              <Text style={styles.actionBtnCobrarText}>💵 Cobrar</Text>
+                            </TouchableOpacity>
+                          </View>
                         </View>
-                        <View style={[styles.proyeccionFinanceBlock, styles.proyeccionFinanceBlockRight]}>
-                          <Text style={styles.proyeccionFinanceLabel}>SALDO RESTANTE</Text>
-                          <Text style={[styles.proyeccionSaldoAmount, esCreditoCarteraCritica(item) && { color: '#DC2626' }]}>
-                            {formatCOP(saldo)}
-                          </Text>
-                          <Text style={styles.proyeccionFinanceTotal}>
-                            Total: {formatCOP(item.monto_financiado || item.valor_total || 0)}
-                          </Text>
-                        </View>
-                      </View>
-
-                      {/* DESGLOSE DE CUOTAS CON CHULOS DE VERIFICACIÓN */}
-                      <View style={styles.cuotasTimelineWrapper}>
-                        <Text style={styles.cuotasTimelineHeading}>
-                          CRONOGRAMA DE CUOTAS ({cuotasPagadasTotal}/{cuotas.length} PAGADAS):
-                        </Text>
-                        <ScrollView
-                          horizontal={true}
-                          showsHorizontalScrollIndicator={true}
-                          nestedScrollEnabled={true}
-                          keyboardShouldPersistTaps="handled"
-                          style={[
-                            styles.cuotasChipsScroll,
-                            Platform.OS === 'web' ? { overflowX: 'auto', WebkitOverflowScrolling: 'touch' } : {}
-                          ]}
-                          contentContainerStyle={[styles.cuotasChipsRow, { paddingRight: 20 }]}
-                        >
-                          {cuotas.map((q) => {
-                            const isPagada = Boolean(q.pagada);
-                            const isParcial = Boolean(q.es_parcial);
-                            const hasArrastre = !isPagada && Number(q.monto_arrastrado || 0) > 0;
-
-                            let chipStyle = styles.cuotaChipPendiente;
-                            let textStyle = styles.cuotaChipTextPendiente;
-                            let dateStyle = styles.cuotaChipDatePendiente;
-
-                            if (isPagada) {
-                              chipStyle = styles.cuotaChipPagada;
-                              textStyle = styles.cuotaChipTextPagada;
-                              dateStyle = styles.cuotaChipDatePagada;
-                            } else if (isParcial) {
-                              chipStyle = styles.cuotaChipParcial;
-                              textStyle = styles.cuotaChipTextParcial;
-                              dateStyle = styles.cuotaChipDateParcial;
-                            } else if (hasArrastre) {
-                              chipStyle = styles.cuotaChipArrastre;
-                              textStyle = styles.cuotaChipTextArrastre;
-                              dateStyle = styles.cuotaChipDateArrastre;
-                            }
-
-                            let tituloTexto = `⏳ C${q.numero}: ${formatCOP(q.monto)}`;
-                            if (isPagada) {
-                              tituloTexto = `✓ C${q.numero} Pagada`;
-                            } else if (isParcial) {
-                              tituloTexto = `🟡 C${q.numero} Parcial: ${formatCOP(q.valor_pagado || 0)}`;
-                            } else if (hasArrastre) {
-                              tituloTexto = `⚠️ C${q.numero}: ${formatCOP(q.valor_exigible || q.monto)}`;
-                            }
-
-                            let subTexto = q.fecha;
-                            if (isParcial) {
-                              subTexto = `Faltan: ${formatCOP(q.saldo_cuota || 0)}`;
-                            } else if (hasArrastre) {
-                              subTexto = `(+${formatCOP(q.monto_arrastrado)} arrastre)`;
-                            }
-
-                            return (
-                              <View key={q.numero} style={[styles.cuotaChip, chipStyle]}>
-                                <Text style={[styles.cuotaChipText, textStyle]} numberOfLines={1}>
-                                  {tituloTexto}
-                                </Text>
-                                {subTexto ? (
-                                  <Text style={[styles.cuotaChipDate, dateStyle]} numberOfLines={1}>
-                                    {subTexto}
-                                  </Text>
-                                ) : null}
-                              </View>
-                            );
-                          })}
-                        </ScrollView>
-                      </View>
-
-                      {/* ACCIONES DEL COBRADOR */}
-                      <View style={styles.proyeccionActionsRow}>
-                        {cliente.telefono ? (
-                          <TouchableOpacity
-                            style={styles.actionBtnCall}
-                            onPress={() => hacerLlamada(cliente.telefono)}
-                            accessibilityRole="button"
-                          >
-                            <Text style={styles.actionBtnCallText}>📞 Llamar</Text>
-                          </TouchableOpacity>
-                        ) : null}
-
-                        {cliente.telefono ? (
-                          <TouchableOpacity
-                            style={styles.actionBtnWa}
-                            onPress={() => abrirWhatsApp(cliente.telefono, cliente.nombres, 'Titular')}
-                            accessibilityRole="button"
-                          >
-                            <Text style={styles.actionBtnWaText}>💬 WhatsApp</Text>
-                          </TouchableOpacity>
-                        ) : null}
-
-                        <TouchableOpacity
-                          style={styles.actionBtnGarantias}
-                          onPress={() => abrirModalGarantias(item)}
-                          accessibilityRole="button"
-                        >
-                          <Text style={styles.actionBtnGarantiasText}>🛡️ Respaldo</Text>
-                        </TouchableOpacity>
-
-                        {esCreditoCarteraCritica(item) && (
-                          <TouchableOpacity
-                            style={styles.actionBtnRetiro}
-                            onPress={() => abrirModalRetiro(item)}
-                            accessibilityRole="button"
-                          >
-                            <Text style={styles.actionBtnRetiroText}>🚨 Retiro</Text>
-                          </TouchableOpacity>
-                        )}
-
-                        <TouchableOpacity
-                          style={styles.actionBtnCobrar}
-                          onPress={() => abrirModalAbono(item)}
-                          accessibilityRole="button"
-                        >
-                          <Text style={styles.actionBtnCobrarText}>💵 Cobrar</Text>
-                        </TouchableOpacity>
-                      </View>
-                    </View>
+                      )}
+                    </TouchableOpacity>
                   );
                 })}
               </View>
@@ -3394,6 +3776,180 @@ export default function CobradorDashboard({ navigation }) {
         )}
 
       </ScrollView>
+
+      {/* ========================================================================= */}
+      {/* MODAL DE FILTRO GEOGRÁFICO JERÁRQUICO (CIUDAD ➔ BARRIO)                   */}
+      {/* ========================================================================= */}
+      <InFrameModal
+        visible={modalZonaVisible}
+        transparent={true}
+        animationType="slide"
+        onRequestClose={() => setModalZonaVisible(false)}
+      >
+        <View style={styles.modalBackdrop}>
+          <View style={styles.modalContent}>
+            {/* Cabecera del Modal */}
+            <View style={styles.modalHeader}>
+              <View>
+                <Text style={styles.modalHeading}>📍 Filtrar por Zona</Text>
+                <Text style={styles.modalSubheading}>
+                  Selecciona ciudad y barrio para acotar tu hoja de ruta
+                </Text>
+              </View>
+              <TouchableOpacity
+                style={styles.closeBtn}
+                onPress={() => setModalZonaVisible(false)}
+              >
+                <Text style={styles.closeBtnText}>✕</Text>
+              </TouchableOpacity>
+            </View>
+
+            <ScrollView
+              style={styles.modalScrollBody}
+              contentContainerStyle={styles.modalZonaScrollContent}
+              showsVerticalScrollIndicator={false}
+              keyboardShouldPersistTaps="handled"
+            >
+              {/* PASO 1: SELECCIONAR CIUDAD */}
+              <View style={styles.modalZonaSection}>
+                <Text style={styles.modalZonaSectionTitle}>1. SELECCIONA LA CIUDAD</Text>
+                <View style={styles.modalZonaChipsGrid}>
+                  {Object.keys(catalogoZonasRuta).map((ciudad) => {
+                    const isSelected = tempCiudad === ciudad;
+                    const countCiudad = todosLosClientesAgrupados.filter(
+                      (g) => (g.cliente?.ciudad || '').trim().toLowerCase() === ciudad.trim().toLowerCase()
+                    ).length;
+
+                    return (
+                      <TouchableOpacity
+                        key={ciudad}
+                        style={[
+                          styles.modalZonaChip,
+                          isSelected && styles.modalZonaChipSelected,
+                        ]}
+                        onPress={() => {
+                          if (tempCiudad === ciudad) {
+                            setTempCiudad(null);
+                            setTempBarrio(null);
+                          } else {
+                            setTempCiudad(ciudad);
+                            setTempBarrio(null);
+                          }
+                        }}
+                        activeOpacity={0.7}
+                      >
+                        <Text
+                          style={[
+                            styles.modalZonaChipText,
+                            isSelected && styles.modalZonaChipTextSelected,
+                          ]}
+                        >
+                          🏙️ {ciudad} ({countCiudad})
+                        </Text>
+                      </TouchableOpacity>
+                    );
+                  })}
+                </View>
+              </View>
+
+              {/* PASO 2: SELECCIONAR BARRIO (SI HAY CIUDAD SELECCIONADA) */}
+              {tempCiudad && (
+                <View style={styles.modalZonaSection}>
+                  <View style={styles.modalZonaSectionHeaderRow}>
+                    <Text style={styles.modalZonaSectionTitle}>
+                      2. BARRIOS EN {tempCiudad.toUpperCase()}
+                    </Text>
+                    {tempBarrio && tempBarrio !== 'todos' && (
+                      <TouchableOpacity onPress={() => setTempBarrio(null)}>
+                        <Text style={styles.modalZonaResetSubAction}>Ver Todos</Text>
+                      </TouchableOpacity>
+                    )}
+                  </View>
+
+                  <View style={styles.modalZonaChipsGrid}>
+                    <TouchableOpacity
+                      style={[
+                        styles.modalZonaChip,
+                        (!tempBarrio || tempBarrio === 'todos') && styles.modalZonaChipSelected,
+                      ]}
+                      onPress={() => setTempBarrio(null)}
+                      activeOpacity={0.7}
+                    >
+                      <Text
+                        style={[
+                          styles.modalZonaChipText,
+                          (!tempBarrio || tempBarrio === 'todos') && styles.modalZonaChipTextSelected,
+                        ]}
+                      >
+                        ✓ Todos los Barrios ({catalogoZonasRuta[tempCiudad]?.length || 0})
+                      </Text>
+                    </TouchableOpacity>
+
+                    {(catalogoZonasRuta[tempCiudad] || []).map((barrio) => {
+                      const isSelected = tempBarrio === barrio;
+                      const countBarrio = todosLosClientesAgrupados.filter((g) => {
+                        const c = (g.cliente?.ciudad || '').trim().toLowerCase();
+                        const b = (g.cliente?.barrio || '').trim().toLowerCase();
+                        return c === tempCiudad.trim().toLowerCase() && b === barrio.trim().toLowerCase();
+                      }).length;
+
+                      return (
+                        <TouchableOpacity
+                          key={barrio}
+                          style={[
+                            styles.modalZonaChip,
+                            isSelected && styles.modalZonaChipSelected,
+                          ]}
+                          onPress={() => setTempBarrio(isSelected ? null : barrio)}
+                          activeOpacity={0.7}
+                        >
+                          <Text
+                            style={[
+                              styles.modalZonaChipText,
+                              isSelected && styles.modalZonaChipTextSelected,
+                            ]}
+                          >
+                            📍 {barrio} ({countBarrio})
+                          </Text>
+                        </TouchableOpacity>
+                      );
+                    })}
+                  </View>
+                </View>
+              )}
+            </ScrollView>
+
+            {/* BOTONES INFERIORES: LIMPIAR Y APLICAR */}
+            <View style={styles.modalZonaFooter}>
+              <TouchableOpacity
+                style={styles.modalZonaBtnLimpiar}
+                onPress={() => {
+                  setTempCiudad(null);
+                  setTempBarrio(null);
+                  setFiltroCiudadRuta(null);
+                  setFiltroBarrioRuta(null);
+                  setModalZonaVisible(false);
+                }}
+                activeOpacity={0.7}
+              >
+                <Text style={styles.modalZonaBtnLimpiarText}>Limpiar Filtros</Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={styles.modalZonaBtnAplicar}
+                onPress={() => {
+                  setFiltroCiudadRuta(tempCiudad);
+                  setFiltroBarrioRuta(tempBarrio);
+                  setModalZonaVisible(false);
+                }}
+                activeOpacity={0.8}
+              >
+                <Text style={styles.modalZonaBtnAplicarText}>Aplicar Filtro</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </InFrameModal>
 
       {/* ========================================================================= */}
       {/* MODAL DE REGISTRO DE ABONO                                                */}
@@ -5746,6 +6302,285 @@ const styles = StyleSheet.create({
     fontWeight: '800',
   },
 
+  // ESTILOS DE FILTRO RÁPIDO (FILTER CHIPS EN RUTA)
+  rutaFilterScroll: {
+    marginTop: 10,
+  },
+  rutaFilterRow: {
+    flexDirection: 'row',
+    gap: 8,
+    paddingVertical: 2,
+  },
+  rutaFilterPill: {
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 20,
+    backgroundColor: '#F1F5F9',
+    borderWidth: 1,
+    borderColor: '#CBD5E1',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  rutaFilterPillText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#475569',
+  },
+  rutaFilterPillActive: {
+    backgroundColor: '#0F172A',
+    borderColor: '#0F172A',
+  },
+  rutaFilterPillTextActive: {
+    color: '#FFFFFF',
+  },
+  rutaFilterPillActiveCritica: {
+    backgroundColor: '#FEF2F2',
+    borderColor: '#EF4444',
+  },
+  rutaFilterPillTextActiveCritica: {
+    color: '#DC2626',
+    fontWeight: '800',
+  },
+  rutaFilterPillActiveHoy: {
+    backgroundColor: '#EFF6FF',
+    borderColor: '#3B82F6',
+  },
+  rutaFilterPillTextActiveHoy: {
+    color: '#1D4ED8',
+    fontWeight: '800',
+  },
+
+  // ESTILOS DE FILTRO GEOGRÁFICO POR ZONA (CIUDAD ➔ BARRIO)
+  zonaFilterBarRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginTop: 8,
+  },
+  zonaFilterBtn: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    backgroundColor: '#F8FAFC',
+    borderWidth: 1,
+    borderColor: '#CBD5E1',
+    borderRadius: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+  },
+  zonaFilterBtnActive: {
+    backgroundColor: '#EEF2FF',
+    borderColor: '#6366F1',
+  },
+  zonaFilterBtnText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#475569',
+    flex: 1,
+  },
+  zonaFilterBtnTextActive: {
+    color: '#4338CA',
+    fontWeight: '800',
+  },
+  zonaFilterChevron: {
+    fontSize: 12,
+    color: '#64748B',
+    marginLeft: 6,
+  },
+  zonaFilterChevronActive: {
+    color: '#4338CA',
+    fontWeight: '800',
+  },
+  zonaFilterClearMiniBtn: {
+    backgroundColor: '#FEE2E2',
+    borderWidth: 1,
+    borderColor: '#FECACA',
+    borderRadius: 8,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  zonaFilterClearMiniText: {
+    fontSize: 11,
+    fontWeight: '800',
+    color: '#DC2626',
+  },
+  modalZonaScrollContent: {
+    paddingVertical: 12,
+    gap: 16,
+  },
+  modalZonaSection: {
+    gap: 8,
+  },
+  modalZonaSectionHeaderRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  modalZonaSectionTitle: {
+    fontSize: 11,
+    fontWeight: '800',
+    color: '#64748B',
+    letterSpacing: 0.5,
+  },
+  modalZonaResetSubAction: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#4F46E5',
+  },
+  modalZonaChipsGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+  },
+  modalZonaChip: {
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+    borderRadius: 16,
+    backgroundColor: '#F1F5F9',
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+  },
+  modalZonaChipSelected: {
+    backgroundColor: '#4338CA',
+    borderColor: '#4338CA',
+  },
+  modalZonaChipText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#475569',
+  },
+  modalZonaChipTextSelected: {
+    color: '#FFFFFF',
+    fontWeight: '800',
+  },
+  modalZonaFooter: {
+    flexDirection: 'row',
+    gap: 10,
+    borderTopWidth: 1,
+    borderTopColor: '#F1F5F9',
+    paddingTop: 14,
+    marginTop: 6,
+  },
+  modalZonaBtnLimpiar: {
+    flex: 1,
+    height: 42,
+    borderRadius: 10,
+    backgroundColor: '#F1F5F9',
+    borderWidth: 1,
+    borderColor: '#CBD5E1',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  modalZonaBtnLimpiarText: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#64748B',
+  },
+  modalZonaBtnAplicar: {
+    flex: 1.5,
+    height: 42,
+    borderRadius: 10,
+    backgroundColor: '#4338CA',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  modalZonaBtnAplicarText: {
+    fontSize: 13,
+    fontWeight: '800',
+    color: '#FFFFFF',
+  },
+
+  // ESTILOS DE CABECERA ACORDEÓN DE CLIENTE
+  clientCardHeaderTouchable: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 2,
+  },
+  clientCardHeaderTouchableExpanded: {
+    paddingBottom: 10,
+    borderBottomWidth: 1,
+    borderBottomColor: '#F1F5F9',
+  },
+  clientAvatarContainerMora: {
+    backgroundColor: '#FEF2F2',
+    borderColor: '#FECACA',
+  },
+  clientAvatarTextMora: {
+    color: '#DC2626',
+  },
+  clientMoraBadge: {
+    backgroundColor: '#FEE2E2',
+    borderWidth: 1,
+    borderColor: '#FCA5A5',
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 6,
+  },
+  clientMoraBadgeText: {
+    fontSize: 10,
+    fontWeight: '800',
+    color: '#DC2626',
+  },
+  clientMetaRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginTop: 2,
+    flexWrap: 'wrap',
+  },
+  clientBarrioText: {
+    fontSize: 11,
+    fontWeight: '500',
+    color: '#64748B',
+  },
+  clientHeaderRight: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginLeft: 8,
+  },
+  clientHeaderSaldoBox: {
+    alignItems: 'flex-end',
+  },
+  clientHeaderSaldoLabel: {
+    fontSize: 9,
+    fontWeight: '700',
+    color: '#94A3B8',
+    letterSpacing: 0.5,
+  },
+  clientHeaderSaldoVal: {
+    fontSize: 13,
+    fontWeight: '800',
+    color: '#0F172A',
+  },
+  clientHeaderSaldoValMora: {
+    color: '#DC2626',
+  },
+  accordionChevronBox: {
+    width: 26,
+    height: 26,
+    borderRadius: 13,
+    backgroundColor: '#F1F5F9',
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: '#CBD5E1',
+  },
+  accordionChevronBoxExpanded: {
+    backgroundColor: '#EEF2FF',
+    borderColor: '#C7D2FE',
+  },
+  accordionChevronText: {
+    fontSize: 10,
+    fontWeight: '800',
+    color: '#475569',
+  },
+  clientExpandedContent: {
+    paddingTop: 8,
+  },
+
   // ESTILOS DE MODAL DE ORDEN DE RETIRO
   modalHeaderRetiro: {
     backgroundColor: '#FEF2F2',
@@ -6760,7 +7595,9 @@ const styles = StyleSheet.create({
     fontWeight: '600',
   },
   proyeccionContractCol: {
-    alignItems: 'flex-end',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
   },
   proyeccionContractBadge: {
     backgroundColor: '#F8FAFC',
@@ -6775,6 +7612,27 @@ const styles = StyleSheet.create({
     fontWeight: '800',
     color: '#334155',
     letterSpacing: 0.5,
+  },
+  proyeccionCardExpanded: {
+    borderColor: '#CBD5E1',
+    shadowOpacity: 0.08,
+  },
+  accordionChevronBoxProy: {
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    backgroundColor: '#F1F5F9',
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: '#CBD5E1',
+  },
+  accordionChevronBoxProyExpanded: {
+    backgroundColor: '#EEF2FF',
+    borderColor: '#C7D2FE',
+  },
+  proyeccionExpandedContent: {
+    marginTop: 2,
   },
   vencimientoBadge: {
     paddingHorizontal: 10,
