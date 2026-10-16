@@ -31,6 +31,7 @@ import {
   guardarEnCache,
   obtenerDeCache,
   STORAGE_KEYS,
+  CACHE_CONFIG,
 } from '../storage/database';
 
 const formatCOP = (val) => {
@@ -131,13 +132,6 @@ const calcularCronogramaCuotas = (fechaInicialStr, numCuotas, frecuencia = 'mens
   return cuotas;
 };
 
-const OPCIONES_CUOTAS = [
-  { id: 9, label: '9 cuotas', sub: '9 periodos', badge: null },
-  { id: 6, label: '6 cuotas', sub: '6 periodos', badge: null },
-  { id: 4, label: '4 cuotas', sub: 'Inicial + 3 periodos', badge: 'Inicial + 3' },
-  { id: 2, label: '2 cuotas', sub: '2 periodos', badge: null },
-];
-
 export default function NuevaVentaScreen({ route, navigation }) {
   const { user, token: authToken } = useAuth();
   const { encolarVenta, isOnline } = useSync();
@@ -173,6 +167,7 @@ export default function NuevaVentaScreen({ route, navigation }) {
   const [tipoPago, setTipoPago] = useState('mensual'); // Unificado a mensual
   const [cuotaInicialInput, setCuotaInicialInput] = useState('0');
   const [numeroCuotas, setNumeroCuotas] = useState(4);
+  const [plazosPermitidos, setPlazosPermitidos] = useState([2, 4, 6, 9]);
   // Estados para Personalización de Fecha de Primer Cobro
   const [fechasManuales, setFechasManuales] = useState(false);
   const [fechaPrimeraCuotaManual, setFechaPrimeraCuotaManual] = useState(() =>
@@ -417,6 +412,45 @@ export default function NuevaVentaScreen({ route, navigation }) {
           // Fallback a caché local
           const cachedProds = await obtenerDeCache(STORAGE_KEYS.CACHE_PRODUCTOS);
           if (cachedProds) setProductos(cachedProds);
+        }
+
+        // 3. Cargar opciones de cuotas permitidas dinámicamente (Offline-First)
+        try {
+          const cachedConfigRaw = await AsyncStorage.getItem(CACHE_CONFIG);
+          if (cachedConfigRaw) {
+            const parsedConfig = JSON.parse(cachedConfigRaw);
+            const plazos = parsedConfig?.reglas_credito?.plazos_permitidos;
+            if (Array.isArray(plazos) && plazos.length > 0) {
+              const clean = plazos
+                .map((p) => parseInt(p, 10))
+                .filter((p) => !isNaN(p) && p > 0);
+              if (clean.length > 0) {
+                setPlazosPermitidos(clean);
+                setNumeroCuotas((prev) => (clean.includes(prev) ? prev : clean[0]));
+              }
+            }
+          }
+
+          // Refresco silencioso si hay red disponible
+          apiClient.get('/configuracion/parametros')
+            .then(async (resConf) => {
+              if (resConf?.data) {
+                await AsyncStorage.setItem(CACHE_CONFIG, JSON.stringify(resConf.data));
+                const plazos = resConf.data?.reglas_credito?.plazos_permitidos;
+                if (Array.isArray(plazos) && plazos.length > 0) {
+                  const clean = plazos
+                    .map((p) => parseInt(p, 10))
+                    .filter((p) => !isNaN(p) && p > 0);
+                  if (clean.length > 0) {
+                    setPlazosPermitidos(clean);
+                    setNumeroCuotas((prev) => (clean.includes(prev) ? prev : clean[0]));
+                  }
+                }
+              }
+            })
+            .catch(() => {});
+        } catch (configErr) {
+          console.warn('[NuevaVentaScreen] Error leyendo CACHE_CONFIG:', configErr);
         }
 
         // Si vino un producto preseleccionado en ruta, agregarlo con validación preventiva
@@ -1779,35 +1813,41 @@ export default function NuevaVentaScreen({ route, navigation }) {
 
               {renderSelectorMetodoPago()}
 
-              {/* Plazo / Número de Cuotas (4 Opciones Estrictas) */}
+              {/* Plazo / Número de Cuotas (Opciones Dinámicas) */}
               <View>
                 <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
                   <Text style={styles.fieldLabel}>PLAZO DE CUOTAS PERMITIDO *</Text>
-                  <Text style={{ fontSize: 9, fontWeight: '800', color: '#047857' }}>4 OPCIONES AUTORIZADAS</Text>
+                  <Text style={{ fontSize: 9, fontWeight: '800', color: '#047857' }}>
+                    {plazosPermitidos.length} {plazosPermitidos.length === 1 ? 'OPCIÓN AUTORIZADA' : 'OPCIONES AUTORIZADAS'}
+                  </Text>
                 </View>
                 <View style={styles.cuotasGrid}>
-                  {OPCIONES_CUOTAS.map((opc) => {
-                    const isSelected = numeroCuotas === opc.id;
-                    const cuotaEst = montoFinanciado > 0 ? Math.round(montoFinanciado / opc.id) : 0;
+                  {plazosPermitidos.map((plazo) => {
+                    const isSelected = numeroCuotas === plazo;
+                    const cuotaEst = montoFinanciado > 0 ? Math.round(montoFinanciado / plazo) : 0;
+                    const badge = plazo === 4 ? 'Inicial + 3' : null;
+                    const label = `${plazo} cuotas`;
+                    const sub = plazo === 4 ? 'Inicial + 3 periodos' : `${plazo} periodos`;
+
                     return (
                       <TouchableOpacity
-                        key={opc.id}
+                        key={plazo}
                         style={[styles.cuotaCard, isSelected && styles.cuotaCardActive]}
-                        onPress={() => setNumeroCuotas(opc.id)}
+                        onPress={() => setNumeroCuotas(plazo)}
                         accessibilityRole="button"
                       >
-                        {opc.badge && (
+                        {badge && (
                           <View style={[styles.cuotaBadge, isSelected ? styles.cuotaBadgeActive : null]}>
                             <Text style={[styles.cuotaBadgeText, isSelected ? styles.cuotaBadgeTextActive : null]}>
-                              {opc.badge}
+                              {badge}
                             </Text>
                           </View>
                         )}
                         <Text style={[styles.cuotaCardTitle, isSelected && styles.cuotaCardTitleActive]}>
-                          {opc.label}
+                          {label}
                         </Text>
                         <Text style={[styles.cuotaCardSub, isSelected && styles.cuotaCardSubActive]}>
-                          {opc.sub}
+                          {sub}
                         </Text>
                         {montoFinanciado > 0 && (
                           <Text style={[styles.cuotaCardEst, isSelected && styles.cuotaCardEstActive]}>

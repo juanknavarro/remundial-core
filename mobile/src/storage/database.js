@@ -15,7 +15,10 @@ export const STORAGE_KEYS = {
   CACHE_CREDITOS: '@remundial_cache_creditos',
   CACHE_ABONOS: '@remundial_cache_abonos',
   CACHE_CIUDADES: '@remundial_cache_ciudades',
+  CACHE_CONFIG: '@remundial_cache_config',
 };
+
+export const CACHE_CONFIG = '@remundial_cache_config';
 
 // ============================================================================
 // COLA DE SINCRONIZACIÓN (TRANSACCIONES OFFLINE)

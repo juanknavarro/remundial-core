@@ -502,6 +502,7 @@ async def _obtener_datos_reporte_cartera(
             "codigo_contrato": ctr_label,
             "numero_contrato": c.numero_contrato,
             "ciudad_venta": c.ciudad_venta or "Montería",
+            "cliente_ciudad": c.cliente.ciudad if c.cliente and c.cliente.ciudad else (c.ciudad_venta or "Montería"),
             "fecha_inicio": c.creado_en.isoformat() if c.creado_en else None,
             "cliente_nombre": c.cliente.nombres if c.cliente else "Cliente Titular",
             "cliente_cedula": c.cliente.cedula if c.cliente else "",
@@ -673,6 +674,7 @@ async def reporte_calendario_mensual(
         c_cliente = c.get("cliente_nombre") or "Cliente"
         c_cedula = c.get("cliente_cedula") or ""
         c_tel = c.get("cliente_telefono") or ""
+        c_ciudad = c.get("ciudad_venta") or c.get("cliente_ciudad") or "Montería"
         c_contrato = c.get("codigo_contrato") or f"CTR-{c.get('id_contrato', '')[:8].upper()}"
         n_cuotas = c.get("numero_cuotas") or 1
 
@@ -730,6 +732,7 @@ async def reporte_calendario_mensual(
                 "cliente_cedula": c_cedula,
                 "cliente_telefono": c_tel,
                 "cobrador_nombre": c_cobrador,
+                "ciudad": c_ciudad,
                 "numero_cuota": q.get("numero"),
                 "total_cuotas": n_cuotas,
                 "cuota_texto": f"Cuota {q.get('numero')}/{n_cuotas}",

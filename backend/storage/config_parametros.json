@@ -16,10 +16,10 @@
   },
   "reglas_credito": {
     "plazos_permitidos": [
-      2,
-      4,
+      9,
       6,
-      9
+      4,
+      2
     ],
     "unidad_plazo": "meses",
     "tipo_pago_defecto": "mensual",

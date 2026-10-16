@@ -4,3 +4,4 @@ export { default as CobradorDashboard } from './CobradorDashboard';
 export { default as ClientesScreen } from './ClientesScreen';
 export { default as NuevaVentaScreen } from './NuevaVentaScreen';
 export { default as CatalogoScreen } from './CatalogoScreen';
+export { default as AcercaDeScreen } from './AcercaDeScreen';

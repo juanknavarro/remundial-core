@@ -37,12 +37,28 @@ CONFIG_FILE_PATH = os.path.join(STORAGE_DIR, "config_parametros.json")
 LOGO_FILE_PATH = os.path.join(STORAGE_DIR, "logo_institucional.png")
 
 
+class ReglasCreditoUpdateRequest(BaseModel):
+    plazos_permitidos: Optional[List[int]] = Field(None, description="Lista de plazos en cuotas autorizados (ej: [2, 4, 6, 9, 12])")
+    unidad_plazo: Optional[str] = Field(None, max_length=50)
+    tipo_pago_defecto: Optional[str] = Field(None, max_length=50)
+    dia_vencimiento: Optional[str] = Field(None, max_length=50)
+    umbral_mora_critica: Optional[int] = Field(None, ge=1)
+    cuota_inicial_minima: Optional[float] = Field(None, ge=0)
+    tasa_interes_incluida: Optional[bool] = None
+
+
 class ActualizarEmpresaRequest(BaseModel):
     razon_social: Optional[str] = Field(None, max_length=150)
     nit: Optional[str] = Field(None, max_length=50)
     ciudad_principal: Optional[str] = Field(None, max_length=100)
     telefono_soporte: Optional[str] = Field(None, max_length=50)
     lema: Optional[str] = Field(None, max_length=255)
+    eslogan_mobile: Optional[str] = Field(None, max_length=255)
+    version: Optional[str] = Field(None, max_length=50)
+    empresa: Optional[Dict[str, Any]] = None
+    sistema: Optional[Dict[str, Any]] = None
+    reglas_credito: Optional[Any] = None
+    identidad_visual: Optional[Any] = None
 
 
 class MembretePdfRequest(BaseModel):
@@ -291,6 +307,42 @@ def _guardar_parametros_locales(nuevos_datos: Dict[str, Any]) -> Dict[str, Any]:
             if field in nuevos_datos and nuevos_datos[field] is not None:
                 current["empresa"][field] = nuevos_datos[field]
 
+    if "reglas_credito" in nuevos_datos and isinstance(nuevos_datos["reglas_credito"], dict):
+        if "reglas_credito" not in current or not isinstance(current["reglas_credito"], dict):
+            current["reglas_credito"] = {}
+        reglas_in = nuevos_datos["reglas_credito"]
+        if "plazos_permitidos" in reglas_in and isinstance(reglas_in["plazos_permitidos"], list):
+            try:
+                clean_plazos = sorted(
+                    list({int(p) for p in reglas_in["plazos_permitidos"] if int(p) > 0}),
+                    reverse=True,
+                )
+                if clean_plazos:
+                    current["reglas_credito"]["plazos_permitidos"] = clean_plazos
+            except (ValueError, TypeError):
+                pass
+        for k, v in reglas_in.items():
+            if k != "plazos_permitidos" and v is not None:
+                current["reglas_credito"][k] = v
+
+    if "sistema" in nuevos_datos and isinstance(nuevos_datos["sistema"], dict):
+        if "sistema" not in current or not isinstance(current["sistema"], dict):
+            current["sistema"] = {}
+        current["sistema"].update({k: v for k, v in nuevos_datos["sistema"].items() if v is not None})
+    elif "version" in nuevos_datos and nuevos_datos["version"] is not None:
+        if "sistema" not in current or not isinstance(current["sistema"], dict):
+            current["sistema"] = {}
+        current["sistema"]["version"] = str(nuevos_datos["version"]).strip()
+
+    if "identidad_visual" in nuevos_datos and isinstance(nuevos_datos["identidad_visual"], dict):
+        if "identidad_visual" not in current or not isinstance(current["identidad_visual"], dict):
+            current["identidad_visual"] = {}
+        current["identidad_visual"].update({k: v for k, v in nuevos_datos["identidad_visual"].items() if v is not None})
+    elif "eslogan_mobile" in nuevos_datos and nuevos_datos["eslogan_mobile"] is not None:
+        if "identidad_visual" not in current or not isinstance(current["identidad_visual"], dict):
+            current["identidad_visual"] = {}
+        current["identidad_visual"]["eslogan_mobile"] = str(nuevos_datos["eslogan_mobile"]).strip()
+
     os.makedirs(os.path.dirname(CONFIG_FILE_PATH), exist_ok=True)
     with open(CONFIG_FILE_PATH, "w", encoding="utf-8") as f:
         json.dump(current, f, ensure_ascii=False, indent=2)
@@ -359,8 +411,27 @@ async def actualizar_parametros(
     resultado = _guardar_parametros_locales(nuevos)
     return {
         "success": True,
-        "mensaje": "Identidad de la compañía actualizada correctamente.",
+        "mensaje": "Identidad y parámetros institucionales actualizados correctamente.",
         "parametros": resultado,
+    }
+
+
+@router.put(
+    "/reglas-credito",
+    summary="Actualizar reglas de crédito y plazos permitidos",
+    status_code=status.HTTP_200_OK,
+)
+async def actualizar_reglas_credito(
+    datos: ReglasCreditoUpdateRequest,
+    current_user: Usuario = Depends(require_supervisor),
+) -> Dict[str, Any]:
+    """Permite al supervisor o administrador modificar los plazos de cuotas permitidos y políticas financieras."""
+    nuevos = {"reglas_credito": {k: v for k, v in datos.model_dump().items() if v is not None}}
+    resultado = _guardar_parametros_locales(nuevos)
+    return {
+        "success": True,
+        "mensaje": "Reglas de crédito y plazos permitidos actualizados correctamente.",
+        "reglas_credito": resultado.get("reglas_credito", {}),
     }
 
 

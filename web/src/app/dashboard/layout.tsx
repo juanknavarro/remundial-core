@@ -30,10 +30,13 @@ import {
   AlertTriangle,
   Wifi,
   WifiOff,
+  Info,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { api } from '@/lib/api';
 import { getStoredToken, getStoredUser, isTokenValid, clearAuthSession, hasInactivityTimedOut } from '@/lib/auth';
 import { useSessionResilience } from '@/lib/useSessionResilience';
+import pkg from '../../../package.json';
 
 interface NavItem {
   name: string;
@@ -72,6 +75,7 @@ const allNavSections: NavSection[] = [
       { name: 'Comprobantes de Venta y Pago', href: '/dashboard/comprobantes', icon: FolderArchive, badge: 'PDF', badgeVariant: 'default', roles: ['master', 'supervisor'] },
       { name: 'Gestión de Personal', href: '/dashboard/usuarios', icon: Users, roles: ['master', 'supervisor'] },
       { name: 'Configuración & Reglas', href: '/dashboard/configuracion', icon: Settings, roles: ['master', 'supervisor'] },
+      { name: 'Acerca de', href: '/dashboard/acerca-de', icon: Info, roles: ['master', 'supervisor', 'vendedor'] },
     ],
   },
 ];
@@ -93,9 +97,21 @@ export default function DashboardLayout({
     rol: string;
     telefono?: string;
   } | null>(null);
+  const [sistemaVersion, setSistemaVersion] = useState<string>(pkg.version || '1.2.0');
 
   // Hook global de resiliencia ante suspensión, reconexión de red y control de inactividad
   const { resilienceToast, dismissToast } = useSessionResilience();
+
+  React.useEffect(() => {
+    // Cargar versión dinámica configurada en el sistema
+    api.get('/configuracion/parametros')
+      .then((res) => {
+        if (res.data?.sistema?.version) {
+          setSistemaVersion(res.data.sistema.version);
+        }
+      })
+      .catch(() => {});
+  }, []);
 
   React.useEffect(() => {
     if (typeof window !== 'undefined') {
@@ -301,7 +317,7 @@ export default function DashboardLayout({
           {isCollapsed ? (
             <div
               className="mx-3 my-3 p-2 rounded-xl bg-emerald-50/70 border border-emerald-100 flex items-center justify-center cursor-help"
-              title="Servidor FastAPI Activo (v1.2.0)"
+              title={`Servidor FastAPI Activo (v${sistemaVersion})`}
             >
               <span className="relative flex h-2.5 w-2.5">
                 <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
@@ -317,7 +333,7 @@ export default function DashboardLayout({
                 </span>
                 <span className="text-xs font-medium text-emerald-800">Servidor FastAPI Activo</span>
               </div>
-              <span className="text-[11px] font-mono text-emerald-600">v1.2.0</span>
+              <span className="text-[11px] font-mono text-emerald-600">v{sistemaVersion}</span>
             </div>
           )}
 
@@ -476,6 +492,17 @@ export default function DashboardLayout({
                     </div>
                   </div>
                 </div>
+              </div>
+
+              <div className="flex items-center justify-between px-3 py-1.5 mb-1 text-[11px] text-slate-500 border-t border-slate-100/80">
+                <Link
+                  href="/dashboard/acerca-de"
+                  className="hover:text-emerald-700 transition-colors flex items-center gap-1.5 font-semibold text-slate-600"
+                >
+                  <Info className="w-3.5 h-3.5 text-emerald-600" />
+                  <span>Acerca de</span>
+                </Link>
+                <span className="font-mono text-slate-400 font-medium">v{sistemaVersion}</span>
               </div>
 
               <button

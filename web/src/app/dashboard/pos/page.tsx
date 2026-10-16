@@ -200,12 +200,7 @@ export default function PosOriginacionCreditoPage() {
   // ==========================================
   // SECCIÓN 3: CONDICIONES FINANCIERAS
   // ==========================================
-  const PLAZOS_CUOTAS_PERMITIDOS = [
-    { cuotas: 9, label: '9 cuotas', descripcion: '9 periodos', badge: null },
-    { cuotas: 6, label: '6 cuotas', descripcion: '6 periodos', badge: null },
-    { cuotas: 4, label: '4 cuotas', descripcion: 'Cuota Inicial + 3 periodos', badge: 'Inicial + 3' },
-    { cuotas: 2, label: '2 cuotas', descripcion: '2 periodos', badge: null },
-  ] as const;
+  const [plazosPermitidos, setPlazosPermitidos] = useState<number[]>([9, 6, 4, 2]);
 
   const getFechaPrimerVencimientoFinMes = (baseDate: Date = new Date()): string => {
     // Mes siguiente a la fecha de compra fijado al último día del mes
@@ -336,8 +331,26 @@ export default function PosOriginacionCreditoPage() {
       }
     };
 
+    const fetchParametros = async () => {
+      try {
+        const res = await api.get('/configuracion/parametros');
+        if (res.data?.reglas_credito?.plazos_permitidos && Array.isArray(res.data.reglas_credito.plazos_permitidos)) {
+          const plazos = res.data.reglas_credito.plazos_permitidos
+            .map((p: any) => parseInt(p, 10))
+            .filter((p: number) => !isNaN(p) && p > 0);
+          if (plazos.length > 0) {
+            setPlazosPermitidos(plazos);
+            setNumeroCuotas((prev) => (plazos.includes(prev) ? prev : plazos[0]));
+          }
+        }
+      } catch (err) {
+        console.warn('[POS] Error cargando reglas de crédito, usando plazos por defecto:', err);
+      }
+    };
+
     fetchProductos();
     fetchCiudades();
+    fetchParametros();
   }, []);
 
   // Actualizar precio de entrada al cambiar de producto seleccionado
@@ -2117,19 +2130,23 @@ export default function PosOriginacionCreditoPage() {
                       PLAZO DE CUOTAS PERMITIDO *
                     </label>
                     <span className="text-[11px] text-emerald-700 font-semibold bg-emerald-50 px-2 py-0.5 rounded-md border border-emerald-200">
-                      4 Opciones Autorizadas
+                      {plazosPermitidos.length} {plazosPermitidos.length === 1 ? 'Opción Autorizada' : 'Opciones Autorizadas'}
                     </span>
                   </div>
 
                   <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
-                    {PLAZOS_CUOTAS_PERMITIDOS.map((opcion) => {
-                      const isSelected = numeroCuotas === opcion.cuotas;
-                      const cuotaEst = montoFinanciado > 0 ? Math.round(montoFinanciado / opcion.cuotas) : 0;
+                    {plazosPermitidos.map((cuotasNum) => {
+                      const isSelected = numeroCuotas === cuotasNum;
+                      const cuotaEst = montoFinanciado > 0 ? Math.round(montoFinanciado / cuotasNum) : 0;
+                      const badge = cuotasNum === 4 ? 'Inicial + 3' : null;
+                      const label = `${cuotasNum} cuotas`;
+                      const descripcion = cuotasNum === 4 ? 'Cuota Inicial + 3 periodos' : `${cuotasNum} periodos`;
+
                       return (
                         <button
-                          key={opcion.cuotas}
+                          key={cuotasNum}
                           type="button"
-                          onClick={() => setNumeroCuotas(opcion.cuotas)}
+                          onClick={() => setNumeroCuotas(cuotasNum)}
                           className={cn(
                             'p-3 rounded-xl border text-left transition-all cursor-pointer relative flex flex-col justify-between min-h-[90px]',
                             isSelected
@@ -2137,7 +2154,7 @@ export default function PosOriginacionCreditoPage() {
                               : 'bg-white text-slate-700 border-slate-200 hover:border-slate-300 hover:bg-slate-50/80'
                           )}
                         >
-                          {opcion.badge && (
+                          {badge && (
                             <span
                               className={cn(
                                 'absolute -top-2 right-2 text-[9px] font-bold px-2 py-0.5 rounded-full border shadow-2xs',
@@ -2146,15 +2163,15 @@ export default function PosOriginacionCreditoPage() {
                                   : 'bg-emerald-50 text-emerald-700 border-emerald-200'
                               )}
                             >
-                              {opcion.badge}
+                              {badge}
                             </span>
                           )}
                           <div>
                             <span className={cn('text-sm font-bold block', isSelected ? 'text-white' : 'text-slate-900')}>
-                              {opcion.label}
+                              {label}
                             </span>
                             <span className={cn('text-[10px] mt-0.5 block leading-tight', isSelected ? 'text-slate-300' : 'text-slate-500')}>
-                              {opcion.descripcion}
+                              {descripcion}
                             </span>
                           </div>
                           {montoFinanciado > 0 && (

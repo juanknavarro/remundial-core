@@ -34,6 +34,7 @@ interface ItemCuotaCalendario {
   cliente_cedula: string;
   cliente_telefono: string;
   cobrador_nombre: string;
+  ciudad?: string;
   numero_cuota: number;
   total_cuotas: number;
   cuota_texto: string;
@@ -744,10 +745,18 @@ export default function CalendarioCarteraPage() {
                     <p className="text-xs font-bold text-white truncate">
                       {item.cliente_nombre}
                     </p>
-                    <div className="flex items-center gap-2 text-[10px] text-slate-400 font-mono mt-0.5">
-                      <span className="text-slate-300 font-bold">{item.codigo_contrato}</span>
-                      <span>•</span>
-                      <span className="text-blue-300 font-bold">{item.cuota_texto}</span>
+                    <div className="flex items-center gap-1.5 text-[10px] text-slate-400 font-mono mt-0.5 truncate">
+                      <span className="text-slate-300 font-bold shrink-0">{item.codigo_contrato}</span>
+                      {item.ciudad && (
+                        <>
+                          <span className="text-slate-600">•</span>
+                          <span className="text-slate-400 font-sans truncate max-w-[110px]" title={item.ciudad}>
+                            📍 {item.ciudad}
+                          </span>
+                        </>
+                      )}
+                      <span className="text-slate-600">•</span>
+                      <span className="text-blue-300 font-bold shrink-0">{item.cuota_texto}</span>
                     </div>
                   </div>
 
@@ -860,6 +869,12 @@ export default function CalendarioCarteraPage() {
                         <span className="font-bold text-blue-700 bg-blue-50 px-2 py-0.5 rounded border border-blue-200/60">
                           {it.codigo_contrato}
                         </span>
+                        {it.ciudad && (
+                          <>
+                            <span>•</span>
+                            <span className="text-slate-600 font-sans font-medium">📍 {it.ciudad}</span>
+                          </>
+                        )}
                         <span>•</span>
                         <span className="font-bold text-slate-700">{it.cuota_texto}</span>
                         <span>•</span>

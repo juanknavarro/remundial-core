@@ -15,6 +15,7 @@ from app.routers.creditos import router as creditos_router
 from app.routers.health import router as health_router
 from app.routers.productos import router as productos_router
 from app.routers.reportes import router as reportes_router
+from app.routers.respaldos import router as respaldos_router
 from app.routers.usuarios import router as usuarios_router
 
 
@@ -182,6 +183,7 @@ app.include_router(abonos_router)
 app.include_router(reportes_router)
 app.include_router(configuracion_router)
 app.include_router(config_alias_router)
+app.include_router(respaldos_router)
 
 # Registro también bajo prefijo versionado /api/v1
 app.include_router(health_router, prefix=settings.API_V1_STR)
@@ -194,6 +196,7 @@ app.include_router(abonos_router, prefix=settings.API_V1_STR)
 app.include_router(reportes_router, prefix=settings.API_V1_STR)
 app.include_router(configuracion_router, prefix=settings.API_V1_STR)
 app.include_router(config_alias_router, prefix=settings.API_V1_STR)
+app.include_router(respaldos_router, prefix=settings.API_V1_STR)
 
 
 

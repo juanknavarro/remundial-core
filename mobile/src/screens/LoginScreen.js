@@ -14,6 +14,9 @@ import {
 } from 'react-native';
 import { useAuth } from '../context/AuthContext';
 import apiClient, { DEFAULT_API_URL } from '../api/client';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import { version as appVersion } from '../../package.json';
+import { CACHE_CONFIG } from '../storage/database';
 
 export default function LoginScreen() {
   const { login, authError, setAuthError } = useAuth();
@@ -25,36 +28,84 @@ export default function LoginScreen() {
   const [isPasswordFocused, setIsPasswordFocused] = useState(false);
 
   const [brandInfo, setBrandInfo] = useState({
-    brandTitle: 'Remundial Core',
+    brandTitle: 'Plataforma Core',
     brandSubtitle: 'Plataforma Central de Campo & Cobranza',
-    footerText: 'Remundial Core v1.2.0 • Operaciones de Campo',
+    footerText: `v${appVersion} • Operaciones de Campo`,
     hasLogo: false,
     logoUrl: null,
   });
 
   React.useEffect(() => {
     let isMounted = true;
+
+    const aplicarConfiguracion = (data) => {
+      if (!data || !isMounted) return;
+
+      const emp = data.empresa || {};
+      const iv = data.identidad_visual || {};
+
+      const razonSocial = emp.razon_social || data.razon_social || '';
+      const brandTitle = razonSocial || 'Plataforma Core';
+      const brandSubtitle =
+        iv.eslogan_mobile ||
+        data.eslogan_mobile ||
+        emp.lema ||
+        data.lema ||
+        'Plataforma Central de Campo & Cobranza';
+
+      // Construcción dinámica del footer uniendo empresa y versión del package.json
+      const rawPie = iv.pie_mobile || data.pie_mobile;
+      let footerText = '';
+      if (rawPie && !rawPie.includes('v1.2.0')) {
+        footerText = rawPie;
+      } else {
+        footerText = razonSocial
+          ? `${razonSocial} v${appVersion} • Operaciones de Campo`
+          : `v${appVersion} • Operaciones de Campo`;
+      }
+
+      const rawUrl = iv.logo_url !== undefined ? iv.logo_url : data.logo_url;
+      const fullLogoUrl = rawUrl
+        ? rawUrl.startsWith('http')
+          ? rawUrl
+          : `${apiClient.defaults.baseURL || DEFAULT_API_URL}${rawUrl}`
+        : null;
+
+      const tieneLogo = Boolean(
+        (iv.tiene_logo !== undefined ? iv.tiene_logo : data.tiene_logo) && fullLogoUrl
+      );
+
+      setBrandInfo({
+        brandTitle,
+        brandSubtitle,
+        footerText,
+        hasLogo: tieneLogo,
+        logoUrl: fullLogoUrl,
+      });
+    };
+
     const cargarIdentidad = async () => {
+      // 1. Carga inmediata desde almacenamiento local en caché (Offline-First)
+      try {
+        const cached = await AsyncStorage.getItem(CACHE_CONFIG);
+        if (cached && isMounted) {
+          aplicarConfiguracion(JSON.parse(cached));
+        }
+      } catch (errCache) {}
+
+      // 2. Consulta y actualización en segundo plano con el backend
       try {
         const response = await apiClient.get('/configuracion/identidad-publica');
-        if (response.data && isMounted) {
-          const rawUrl = response.data.logo_url;
-          const fullLogoUrl = rawUrl
-            ? (rawUrl.startsWith('http') ? rawUrl : `${apiClient.defaults.baseURL || DEFAULT_API_URL}${rawUrl}`)
-            : null;
-          setBrandInfo({
-            brandTitle: response.data.razon_social || 'Remundial Core',
-            brandSubtitle: response.data.eslogan_mobile || 'Plataforma Central de Campo & Cobranza',
-            footerText: response.data.pie_mobile || 'Remundial Core v1.2.0 • Operaciones de Campo',
-            hasLogo: Boolean(response.data.tiene_logo && fullLogoUrl),
-            logoUrl: fullLogoUrl,
-          });
+        if (response?.data && isMounted) {
+          aplicarConfiguracion(response.data);
         }
-      } catch (err) {
-        // En caso de error o sin conexión, mantiene fallbacks nativos
+      } catch (errApi) {
+        // En ausencia de red se conservan los datos de caché
       }
     };
+
     cargarIdentidad();
+
     return () => {
       isMounted = false;
     };

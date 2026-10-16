@@ -35,6 +35,7 @@ import {
   Eye,
   X,
   Search,
+  Plus,
 } from 'lucide-react';
 import { api } from '@/lib/api';
 import { cn } from '@/lib/utils';
@@ -113,20 +114,55 @@ interface ErrorFila {
   motivo: string;
 }
 
+interface RespaldoTablaInfo {
+  tabla: string;
+  columnas: number;
+  registros: number;
+}
+
+interface RespaldoResumenData {
+  total_tablas: number;
+  total_registros: number;
+  tablas: RespaldoTablaInfo[];
+  fecha: string;
+}
+
 export default function ConfiguracionPage() {
   const [activeTab, setActiveTab] = useState<'parametros' | 'plantillas' | 'migracion' | 'respaldos'>('parametros');
   const [parametros, setParametros] = useState<ParametrosData | null>(null);
   const [isLoadingParams, setIsLoadingParams] = useState(true);
 
-  // Estados Formulario Identidad de la Compañía
+  // Estados Formulario Identidad Institucional (Marca Blanca)
   const [formEmpresa, setFormEmpresa] = useState({
     razon_social: '',
     nit: '',
     ciudad_principal: '',
     telefono_soporte: '',
+    lema: '',
+    version: '1.2.0',
   });
   const [isSavingEmpresa, setIsSavingEmpresa] = useState(false);
   const [empresaFeedback, setEmpresaFeedback] = useState<{
+    type: 'success' | 'error';
+    message: string;
+  } | null>(null);
+
+  // Estados Formulario Reglas Financieras y Plazos de Crédito Dinámicos
+  const [plazosPermitidos, setPlazosPermitidos] = useState<number[]>([9, 6, 4, 2]);
+  const [nuevoPlazoInput, setNuevoPlazoInput] = useState<string>('');
+  const [isSavingReglas, setIsSavingReglas] = useState<boolean>(false);
+  const [reglasFeedback, setReglasFeedback] = useState<{
+    type: 'success' | 'error';
+    message: string;
+  } | null>(null);
+
+  // Estados para Módulo de Backups & Copias de Seguridad
+  const [resumenBackup, setResumenBackup] = useState<RespaldoResumenData | null>(null);
+  const [isLoadingResumenBackup, setIsLoadingResumenBackup] = useState<boolean>(false);
+  const [isDownloadingBackup, setIsDownloadingBackup] = useState<boolean>(false);
+  const [isRestoringBackup, setIsRestoringBackup] = useState<boolean>(false);
+  const fileInputBackupRef = React.useRef<HTMLInputElement | null>(null);
+  const [backupFeedback, setBackupFeedback] = useState<{
     type: 'success' | 'error';
     message: string;
   } | null>(null);
@@ -231,6 +267,14 @@ export default function ConfiguracionPage() {
     try {
       const res = await api.get('/configuracion/parametros');
       setParametros(res.data);
+      if (res.data?.reglas_credito?.plazos_permitidos && Array.isArray(res.data.reglas_credito.plazos_permitidos)) {
+        const cleanPlazos = res.data.reglas_credito.plazos_permitidos
+          .map((p: any) => parseInt(p, 10))
+          .filter((p: number) => !isNaN(p) && p > 0);
+        if (cleanPlazos.length > 0) {
+          setPlazosPermitidos(cleanPlazos);
+        }
+      }
       // Cargar catálogo de ciudades estructurado (Córdoba y Sucre)
       try {
         const cRes = await api.get('/config/ciudades');
@@ -257,6 +301,8 @@ export default function ConfiguracionPage() {
           nit: res.data.empresa.nit || '',
           ciudad_principal: res.data.empresa.ciudad_principal || '',
           telefono_soporte: res.data.empresa.telefono_soporte || '',
+          lema: res.data.empresa.lema || res.data.identidad_visual?.eslogan_mobile || '',
+          version: res.data.sistema?.version || '1.2.0',
         });
       }
       if (res.data?.plantillas_pdf) {
@@ -307,20 +353,184 @@ export default function ConfiguracionPage() {
     }
   };
 
+  // Cargar métricas y resumen de tablas de la base de datos
+  const cargarResumenBackup = async () => {
+    setIsLoadingResumenBackup(true);
+    try {
+      const res = await api.get('/respaldos/resumen');
+      setResumenBackup(res.data);
+    } catch (err: any) {
+      console.warn('Error al cargar métricas de respaldos:', err);
+    } finally {
+      setIsLoadingResumenBackup(false);
+    }
+  };
+
+  // Descargar volcado dinámico completo de la base de datos en formato JSON
+  const handleDescargarBackup = async () => {
+    setIsDownloadingBackup(true);
+    setBackupFeedback(null);
+    try {
+      const response = await api.get('/respaldos/exportar', {
+        responseType: 'blob',
+      });
+
+      // Extraer nombre de archivo desde Content-Disposition si existe
+      let filename = `backup_remundial_${new Date().toISOString().slice(0, 10).replace(/-/g, '')}.json`;
+      const contentDisposition = response.headers?.['content-disposition'];
+      if (contentDisposition) {
+        const match = contentDisposition.match(/filename=["']?([^"';]+)["']?/);
+        if (match && match[1]) {
+          filename = match[1];
+        }
+      }
+
+      const blob = new Blob([response.data], { type: 'application/json' });
+      const url = window.URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.setAttribute('download', filename);
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      window.URL.revokeObjectURL(url);
+
+      setBackupFeedback({
+        type: 'success',
+        message: `Copia de seguridad "${filename}" descargada exitosamente.`,
+      });
+      dispararToast(
+        'Copia de Seguridad Generada',
+        `Se exportaron ${resumenBackup?.total_tablas ?? 8} tablas con ${resumenBackup?.total_registros ?? ''} registros.`
+      );
+    } catch (err: any) {
+      console.error('Error al descargar copia de seguridad:', err);
+      setBackupFeedback({
+        type: 'error',
+        message: err.response?.data?.detail || 'Ocurrió un error al generar la copia de seguridad.',
+      });
+    } finally {
+      setIsDownloadingBackup(false);
+    }
+  };
+
+  // Disparar diálogo del selector de archivos para restaurar respaldo
+  const handleTriggerFileSelect = () => {
+    fileInputBackupRef.current?.click();
+  };
+
+  // Procesar archivo seleccionado y ejecutar restauración con confirmación de seguridad
+  const handleRestaurarBackup = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    // Resetear valor para que vuelva a disparar si se selecciona el mismo archivo
+    e.target.value = '';
+
+    const advertencia =
+      '¡Peligro! Esto sobrescribirá toda la base de datos actual con los datos del archivo. Esta acción no se puede deshacer.';
+    const confirmado = window.confirm(advertencia);
+    if (!confirmado) {
+      return;
+    }
+
+    setIsRestoringBackup(true);
+    setBackupFeedback(null);
+
+    try {
+      const formData = new FormData();
+      formData.append('file', file);
+
+      const res = await api.post('/respaldos/restaurar', formData, {
+        headers: {
+          'Content-Type': 'multipart/form-data',
+        },
+      });
+
+      const msg =
+        res.data?.mensaje ||
+        `Base de datos restaurada exitosamente (${res.data?.total_registros ?? 0} registros en ${res.data?.total_tablas ?? 8} tablas).`;
+
+      setBackupFeedback({
+        type: 'success',
+        message: msg,
+      });
+
+      dispararToast(
+        'Base de Datos Restaurada',
+        `Se importaron satisfactoriamente ${res.data?.total_registros ?? 0} registros.`
+      );
+
+      // Sincronizar nuevamente la interfaz con el estado recién restaurado
+      await cargarResumenBackup();
+      await cargarParametros();
+    } catch (err: any) {
+      console.error('Error al restaurar respaldo:', err);
+      const errorMsg =
+        err.response?.data?.detail ||
+        err.message ||
+        'Ocurrió un error crítico durante la restauración de la base de datos.';
+      setBackupFeedback({
+        type: 'error',
+        message: errorMsg,
+      });
+      dispararToast('Error en Restauración', errorMsg);
+    } finally {
+      setIsRestoringBackup(false);
+    }
+  };
+
   useEffect(() => {
     cargarParametros();
+    cargarResumenBackup();
   }, []);
 
-  // Guardar cambios institucionales (Identidad de la Compañía)
+  // Guardar cambios institucionales (Identidad Institucional / Marca Blanca)
   const handleGuardarEmpresa = async (e: React.FormEvent) => {
     e.preventDefault();
     setIsSavingEmpresa(true);
     setEmpresaFeedback(null);
     try {
-      const res = await api.put('/configuracion/parametros', formEmpresa);
+      const payload = {
+        razon_social: formEmpresa.razon_social,
+        nit: formEmpresa.nit,
+        ciudad_principal: formEmpresa.ciudad_principal,
+        telefono_soporte: formEmpresa.telefono_soporte,
+        lema: formEmpresa.lema,
+        eslogan_mobile: formEmpresa.lema,
+        version: formEmpresa.version,
+        empresa: {
+          razon_social: formEmpresa.razon_social,
+          nit: formEmpresa.nit,
+          ciudad_principal: formEmpresa.ciudad_principal,
+          telefono_soporte: formEmpresa.telefono_soporte,
+          lema: formEmpresa.lema,
+        },
+        sistema: {
+          version: formEmpresa.version,
+        },
+      };
+
+      const res = await api.put('/configuracion/parametros', payload);
       if (res.data && res.data.success) {
         setParametros((prev) =>
-          prev ? { ...prev, empresa: { ...prev.empresa, ...formEmpresa } } : null
+          prev
+            ? {
+                ...prev,
+                empresa: {
+                  ...prev.empresa,
+                  razon_social: formEmpresa.razon_social,
+                  nit: formEmpresa.nit,
+                  ciudad_principal: formEmpresa.ciudad_principal,
+                  telefono_soporte: formEmpresa.telefono_soporte,
+                  lema: formEmpresa.lema,
+                },
+                sistema: {
+                  ...prev.sistema,
+                  version: formEmpresa.version,
+                },
+              }
+            : null
         );
         // Sincronizar también el membrete de las plantillas
         setFormPdf((prev) => ({
@@ -353,6 +563,82 @@ export default function ConfiguracionPage() {
       });
     } finally {
       setIsSavingEmpresa(false);
+    }
+  };
+
+  // Gestión de Reglas Financieras y Plazos de Crédito
+  const handleAgregarPlazo = (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    const val = parseInt(nuevoPlazoInput.trim(), 10);
+    if (isNaN(val) || val <= 0) {
+      setReglasFeedback({
+        type: 'error',
+        message: 'Por favor ingrese un número entero positivo de cuotas (ej. 3, 12, 18).',
+      });
+      return;
+    }
+    if (plazosPermitidos.includes(val)) {
+      setReglasFeedback({
+        type: 'error',
+        message: `El plazo de ${val} cuotas ya está autorizado.`,
+      });
+      return;
+    }
+    const nuevos = [...plazosPermitidos, val].sort((a, b) => b - a);
+    setPlazosPermitidos(nuevos);
+    setNuevoPlazoInput('');
+    setReglasFeedback(null);
+  };
+
+  const handleEliminarPlazo = (plazoAEliminar: number) => {
+    if (plazosPermitidos.length <= 1) {
+      setReglasFeedback({
+        type: 'error',
+        message: 'Debe mantenerse al menos un plazo de cuota autorizado en el sistema.',
+      });
+      return;
+    }
+    const nuevos = plazosPermitidos.filter((p) => p !== plazoAEliminar);
+    setPlazosPermitidos(nuevos);
+    setReglasFeedback(null);
+  };
+
+  const handleGuardarReglasCredito = async () => {
+    if (plazosPermitidos.length === 0) {
+      setReglasFeedback({
+        type: 'error',
+        message: 'Debe autorizar al menos un plazo de cuota.',
+      });
+      return;
+    }
+    setIsSavingReglas(true);
+    setReglasFeedback(null);
+    try {
+      const res = await api.put('/configuracion/parametros', {
+        reglas_credito: {
+          plazos_permitidos: plazosPermitidos,
+        },
+      });
+      if (res.data?.parametros) {
+        setParametros(res.data.parametros);
+      }
+      setReglasFeedback({
+        type: 'success',
+        message: '¡Plazos de crédito guardados exitosamente! Se sincronizarán dinámicamente con el POS y la App Móvil.',
+      });
+      dispararToast(
+        'Plazos de Crédito Actualizados',
+        `Se autorizaron ${plazosPermitidos.length} opciones: [${plazosPermitidos.join(', ')} cuotas].`
+      );
+      setTimeout(() => setReglasFeedback(null), 5000);
+    } catch (err: any) {
+      console.error('Error guardando reglas de crédito:', err);
+      setReglasFeedback({
+        type: 'error',
+        message: err.response?.data?.detail || 'No fue posible guardar las reglas de crédito.',
+      });
+    } finally {
+      setIsSavingReglas(false);
     }
   };
 
@@ -811,10 +1097,10 @@ export default function ConfiguracionPage() {
                 : 'border-transparent text-slate-500 hover:text-slate-700 hover:border-slate-300'
             )}
           >
-            <Database className="w-4 h-4" />
+            <Database className="w-4 h-4 text-emerald-600" />
             <span>Respaldos & Base de Datos</span>
-            <span className="text-[10px] uppercase font-bold tracking-wider px-1.5 py-0.5 rounded-md bg-slate-100 text-slate-600">
-              Próximamente
+            <span className="text-[10px] uppercase font-bold tracking-wider px-1.5 py-0.5 rounded-md bg-emerald-100 text-emerald-800">
+              Activo / JSON
             </span>
           </button>
         </div>
@@ -836,29 +1122,128 @@ export default function ConfiguracionPage() {
             </div>
 
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-              {/* Plazos Permitidos */}
-              <div className="p-5 rounded-xl bg-slate-50 border border-slate-200/60 space-y-3">
+              {/* Plazos Permitidos Dinámicos */}
+              <div className="p-5 rounded-xl bg-slate-50 border border-slate-200/60 space-y-4">
                 <div className="flex items-center justify-between">
                   <span className="text-xs font-bold text-slate-700 uppercase tracking-wider">
                     Plazos de Financiación Autorizados
                   </span>
-                  <span className="text-[10px] font-semibold px-2 py-0.5 rounded bg-slate-200 text-slate-700">
-                    Estricto
+                  <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-emerald-100 text-emerald-800 border border-emerald-200">
+                    {plazosPermitidos.length} {plazosPermitidos.length === 1 ? 'Opción' : 'Opciones'}
                   </span>
                 </div>
                 <p className="text-xs text-slate-600">
-                  La empresa opera exclusivamente bajo 4 modalidades de plazo mensual. No se admiten fraccionamientos informales ni diarios:
+                  Define las opciones de cuotas que estarán disponibles para vendedores en el POS Web y la App Móvil. Añade nuevos plazos o remueve los que no apliquen:
                 </p>
+
+                {/* Etiquetas de Plazos Actuales */}
                 <div className="flex flex-wrap gap-2 pt-1">
-                  {[2, 4, 6, 9].map((plazo) => (
+                  {plazosPermitidos.map((plazo) => (
                     <div
                       key={plazo}
-                      className="flex items-center gap-2 px-3.5 py-2 rounded-xl bg-white border border-slate-300 shadow-2xs font-semibold text-slate-800 text-xs"
+                      className="group flex items-center gap-2 px-3 py-1.5 rounded-xl bg-white border border-slate-300 shadow-2xs font-semibold text-slate-800 text-xs transition-all hover:border-emerald-500"
                     >
                       <Calendar className="w-3.5 h-3.5 text-emerald-600" />
                       <span>{plazo} Cuotas Mensuales</span>
+                      {plazo === 4 && (
+                        <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-emerald-50 text-emerald-700 border border-emerald-200">
+                          Inicial + 3
+                        </span>
+                      )}
+                      <button
+                        type="button"
+                        onClick={() => handleEliminarPlazo(plazo)}
+                        title={`Eliminar plazo de ${plazo} cuotas`}
+                        className="text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-full p-0.5 transition-colors cursor-pointer"
+                      >
+                        <X className="w-3 h-3" />
+                      </button>
                     </div>
                   ))}
+                </div>
+
+                {/* Entrada para Añadir Nuevo Plazo */}
+                <div className="pt-2 border-t border-slate-200/70 flex flex-col sm:flex-row items-stretch sm:items-center gap-2">
+                  <div className="relative flex-1">
+                    <input
+                      type="number"
+                      min="1"
+                      max="120"
+                      placeholder="Nuevo plazo (ej. 12)"
+                      value={nuevoPlazoInput}
+                      onChange={(e) => setNuevoPlazoInput(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') {
+                          e.preventDefault();
+                          handleAgregarPlazo();
+                        }
+                      }}
+                      className="w-full px-3 py-2 rounded-xl border border-slate-300 text-xs font-semibold text-slate-900 bg-white focus:outline-hidden focus:ring-2 focus:ring-emerald-500"
+                    />
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => handleAgregarPlazo()}
+                    className="px-4 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 text-white text-xs font-semibold transition-colors cursor-pointer flex items-center justify-center gap-1.5 shrink-0"
+                  >
+                    <Plus className="w-3.5 h-3.5" />
+                    <span>Añadir Plazo</span>
+                  </button>
+                </div>
+
+                {/* Sugerencias Rápidas */}
+                <div className="flex items-center gap-1.5 flex-wrap">
+                  <span className="text-[10px] text-slate-500 font-medium">Atajos rápidos:</span>
+                  {[1, 3, 12, 18, 24].filter((s) => !plazosPermitidos.includes(s)).slice(0, 4).map((sug) => (
+                    <button
+                      key={sug}
+                      type="button"
+                      onClick={() => {
+                        const nuevos = [...plazosPermitidos, sug].sort((a, b) => b - a);
+                        setPlazosPermitidos(nuevos);
+                        setReglasFeedback(null);
+                      }}
+                      className="text-[10px] font-bold px-2 py-0.5 rounded-md bg-slate-100 hover:bg-emerald-50 hover:text-emerald-700 text-slate-600 transition-colors cursor-pointer border border-slate-200"
+                    >
+                      +{sug} cuotas
+                    </button>
+                  ))}
+                </div>
+
+                {/* Feedback */}
+                {reglasFeedback && (
+                  <div
+                    className={cn(
+                      'p-3 rounded-xl border text-xs flex items-center gap-2 font-medium',
+                      reglasFeedback.type === 'success'
+                        ? 'bg-emerald-50 border-emerald-200 text-emerald-800'
+                        : 'bg-rose-50 border-rose-200 text-rose-800'
+                    )}
+                  >
+                    {reglasFeedback.type === 'success' ? (
+                      <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                    ) : (
+                      <AlertTriangle className="w-4 h-4 text-rose-600 shrink-0" />
+                    )}
+                    <span>{reglasFeedback.message}</span>
+                  </div>
+                )}
+
+                {/* Botón Guardar */}
+                <div className="pt-2 flex justify-end">
+                  <button
+                    type="button"
+                    onClick={handleGuardarReglasCredito}
+                    disabled={isSavingReglas}
+                    className="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold transition-all shadow-xs cursor-pointer flex items-center gap-2 disabled:opacity-50"
+                  >
+                    {isSavingReglas ? (
+                      <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                    ) : (
+                      <Check className="w-3.5 h-3.5" />
+                    )}
+                    <span>{isSavingReglas ? 'Guardando...' : 'Guardar Reglas Financieras'}</span>
+                  </button>
                 </div>
               </div>
 
@@ -1221,21 +1606,21 @@ export default function ConfiguracionPage() {
             </div>
           </div>
 
-          {/* Información Institucional (Formulario Interactivo) */}
+          {/* Información Institucional (Formulario Interactivo - Marca Blanca) */}
           <div className="bg-white rounded-2xl border border-slate-200/80 p-6 shadow-xs space-y-5">
             <div className="flex flex-col sm:flex-row sm:items-center justify-between pb-3 border-b border-slate-100 gap-2">
               <div>
                 <h2 className="text-base font-bold text-slate-900 flex items-center gap-2">
                   <Building2 className="w-5 h-5 text-slate-700" />
-                  <span>Identidad de la Compañía</span>
+                  <span>Identidad Institucional (Marca Blanca)</span>
                 </h2>
                 <p className="text-xs text-slate-500 mt-0.5">
-                  Datos membretados en comprobantes de venta, recibos digitales y actas de restitución.
+                  Parámetros globales que alimentan la plataforma web, la aplicación móvil y la documentación oficial.
                 </p>
               </div>
               <div className="flex items-center gap-2">
-                <span className="text-[11px] font-semibold px-2.5 py-1 rounded-full bg-slate-100 text-slate-700">
-                  Configuración Institucional
+                <span className="text-[11px] font-semibold px-2.5 py-1 rounded-full bg-emerald-50 text-emerald-800 border border-emerald-200">
+                  Marca Blanca Activa
                 </span>
               </div>
             </div>
@@ -1268,7 +1653,7 @@ export default function ConfiguracionPage() {
             )}
 
             <form onSubmit={handleGuardarEmpresa} className="space-y-4">
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
                 <div className="space-y-1.5">
                   <label className="text-xs font-bold text-slate-700 flex items-center gap-1.5">
                     <Building2 className="w-3.5 h-3.5 text-slate-500" />
@@ -1300,7 +1685,7 @@ export default function ConfiguracionPage() {
                 <div className="space-y-1.5">
                   <label className="text-xs font-bold text-slate-700 flex items-center gap-1.5">
                     <MapPin className="w-3.5 h-3.5 text-slate-500" />
-                    <span>Sede Principal</span>
+                    <span>Ciudad / Sede Principal</span>
                   </label>
                   <input
                     type="text"
@@ -1314,13 +1699,41 @@ export default function ConfiguracionPage() {
                 <div className="space-y-1.5">
                   <label className="text-xs font-bold text-slate-700 flex items-center gap-1.5">
                     <Phone className="w-3.5 h-3.5 text-slate-500" />
-                    <span>Línea de Atención</span>
+                    <span>Teléfono de Soporte</span>
                   </label>
                   <input
                     type="text"
                     value={formEmpresa.telefono_soporte}
                     onChange={(e) => setFormEmpresa({ ...formEmpresa, telefono_soporte: e.target.value })}
                     placeholder="3189998877"
+                    className="w-full px-3.5 py-2 text-xs sm:text-sm font-mono font-semibold text-slate-900 bg-white border border-slate-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-slate-900/10 focus:border-slate-900 transition-all shadow-2xs placeholder:text-slate-400"
+                  />
+                </div>
+
+                <div className="space-y-1.5">
+                  <label className="text-xs font-bold text-slate-700 flex items-center gap-1.5">
+                    <Sparkles className="w-3.5 h-3.5 text-slate-500" />
+                    <span>Lema / Eslogan Corporativo</span>
+                  </label>
+                  <input
+                    type="text"
+                    value={formEmpresa.lema}
+                    onChange={(e) => setFormEmpresa({ ...formEmpresa, lema: e.target.value })}
+                    placeholder="El arte a tu alcance con financiamiento transparente"
+                    className="w-full px-3.5 py-2 text-xs sm:text-sm font-semibold text-slate-900 bg-white border border-slate-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-slate-900/10 focus:border-slate-900 transition-all shadow-2xs placeholder:text-slate-400"
+                  />
+                </div>
+
+                <div className="space-y-1.5">
+                  <label className="text-xs font-bold text-slate-700 flex items-center gap-1.5">
+                    <Layers className="w-3.5 h-3.5 text-slate-500" />
+                    <span>Versión Comercial del Sistema</span>
+                  </label>
+                  <input
+                    type="text"
+                    value={formEmpresa.version}
+                    onChange={(e) => setFormEmpresa({ ...formEmpresa, version: e.target.value })}
+                    placeholder="1.2.0"
                     className="w-full px-3.5 py-2 text-xs sm:text-sm font-mono font-semibold text-slate-900 bg-white border border-slate-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-slate-900/10 focus:border-slate-900 transition-all shadow-2xs placeholder:text-slate-400"
                   />
                 </div>
@@ -1356,6 +1769,196 @@ export default function ConfiguracionPage() {
                 </button>
               </div>
             </form>
+          </div>
+
+          {/* TARJETA DE COPIAS DE SEGURIDAD (BACKUPS) EN PARÁMETROS */}
+          <div className="bg-white rounded-2xl border border-slate-200/80 p-6 shadow-xs space-y-6">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-slate-100 pb-4">
+              <div>
+                <h2 className="text-base font-bold text-slate-900 flex items-center gap-2">
+                  <Database className="w-5 h-5 text-emerald-600" />
+                  <span>Copias de Seguridad (Backups)</span>
+                </h2>
+                <p className="text-xs text-slate-500 mt-0.5">
+                  Generación de volcados integrales de la base de datos en JSON con ordenamiento de llaves foráneas.
+                </p>
+              </div>
+
+              <div className="flex items-center gap-2 flex-wrap">
+                <button
+                  type="button"
+                  onClick={cargarResumenBackup}
+                  disabled={isLoadingResumenBackup}
+                  className="px-3 py-2 rounded-xl border border-slate-200 hover:bg-slate-50 text-slate-600 font-semibold text-xs transition-colors flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+                  title="Actualizar diagnóstico"
+                >
+                  <RefreshCw className={cn('w-3.5 h-3.5', isLoadingResumenBackup && 'animate-spin')} />
+                  <span>Diagnóstico</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={handleDescargarBackup}
+                  disabled={isDownloadingBackup || isRestoringBackup}
+                  className="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs transition-all shadow-xs flex items-center gap-2 cursor-pointer disabled:opacity-50"
+                >
+                  {isDownloadingBackup ? (
+                    <>
+                      <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                      <span>Generando Respaldo...</span>
+                    </>
+                  ) : (
+                    <>
+                      <Download className="w-3.5 h-3.5" />
+                      <span>Descargar Copia de Seguridad</span>
+                    </>
+                  )}
+                </button>
+
+                <button
+                  type="button"
+                  onClick={handleTriggerFileSelect}
+                  disabled={isDownloadingBackup || isRestoringBackup}
+                  className="px-4 py-2 rounded-xl bg-rose-600 hover:bg-rose-700 text-white font-bold text-xs transition-all shadow-xs flex items-center gap-2 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+                  title="Sobrescribir base de datos con archivo JSON"
+                >
+                  {isRestoringBackup ? (
+                    <>
+                      <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                      <span>Restaurando...</span>
+                    </>
+                  ) : (
+                    <>
+                      <UploadCloud className="w-3.5 h-3.5" />
+                      <span>Restaurar Copia</span>
+                    </>
+                  )}
+                </button>
+
+                {/* Input de archivo JSON oculto accionado por Restaurar Copia */}
+                <input
+                  type="file"
+                  ref={fileInputBackupRef}
+                  accept=".json"
+                  onChange={handleRestaurarBackup}
+                  className="hidden"
+                />
+              </div>
+            </div>
+
+            {/* Diagnóstico de Salud de la Base de Datos */}
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+              <div className="p-4 rounded-xl bg-slate-50 border border-slate-200/70 space-y-1">
+                <div className="flex items-center justify-between">
+                  <span className="text-[11px] font-bold text-slate-500 uppercase tracking-wider">
+                    Tablas Detectadas
+                  </span>
+                  <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+                </div>
+                <div className="flex items-baseline gap-2">
+                  <span className="text-2xl font-black text-slate-900 font-mono">
+                    {resumenBackup ? resumenBackup.total_tablas : '8'}
+                  </span>
+                  <span className="text-xs text-slate-500 font-medium">tablas activas</span>
+                </div>
+                <p className="text-[11px] text-emerald-700 font-semibold flex items-center gap-1 pt-0.5">
+                  <CheckCircle2 className="w-3.5 h-3.5 shrink-0" />
+                  <span>Jerarquía FK validada</span>
+                </p>
+              </div>
+
+              <div className="p-4 rounded-xl bg-slate-50 border border-slate-200/70 space-y-1">
+                <div className="flex items-center justify-between">
+                  <span className="text-[11px] font-bold text-slate-500 uppercase tracking-wider">
+                    Total de Registros
+                  </span>
+                  <Database className="w-4 h-4 text-slate-400" />
+                </div>
+                <div className="flex items-baseline gap-2">
+                  <span className="text-2xl font-black text-slate-900 font-mono">
+                    {resumenBackup ? resumenBackup.total_registros.toLocaleString('es-CO') : '---'}
+                  </span>
+                  <span className="text-xs text-slate-500 font-medium">filas en BD</span>
+                </div>
+                <p className="text-[11px] text-slate-500">
+                  Volcado estructurado en formato JSON
+                </p>
+              </div>
+
+              <div className="p-4 rounded-xl bg-slate-50 border border-slate-200/70 space-y-1">
+                <div className="flex items-center justify-between">
+                  <span className="text-[11px] font-bold text-slate-500 uppercase tracking-wider">
+                    Estado de Salud
+                  </span>
+                  <ShieldCheck className="w-4 h-4 text-emerald-600" />
+                </div>
+                <div className="flex items-baseline gap-2">
+                  <span className="text-sm font-bold text-emerald-700">
+                    Base de Datos Saludable
+                  </span>
+                </div>
+                <p className="text-[11px] text-slate-500">
+                  Modelos sincronizados con SQLAlchemy
+                </p>
+              </div>
+            </div>
+
+            {/* Listado Rápido de Tablas Detectadas */}
+            {resumenBackup && resumenBackup.tablas && resumenBackup.tablas.length > 0 && (
+              <div className="space-y-2 pt-1">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-bold text-slate-700 uppercase tracking-wider block">
+                    Esquema de Tablas para Exportación
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => setActiveTab('respaldos')}
+                    className="text-xs text-emerald-700 font-semibold hover:underline cursor-pointer"
+                  >
+                    Ver panel detallado →
+                  </button>
+                </div>
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                  {resumenBackup.tablas.map((t) => (
+                    <div
+                      key={t.tabla}
+                      className="p-2.5 rounded-xl bg-white border border-slate-200 shadow-2xs flex items-center justify-between text-xs"
+                    >
+                      <div className="min-w-0 pr-1">
+                        <span className="font-mono font-bold text-slate-800 block truncate" title={t.tabla}>
+                          {t.tabla}
+                        </span>
+                        <span className="text-[10px] text-slate-400 block">
+                          {t.columnas} cols
+                        </span>
+                      </div>
+                      <span className="text-[10px] font-mono font-bold px-1.5 py-0.5 rounded bg-emerald-50 text-emerald-800 border border-emerald-200 shrink-0">
+                        {t.registros} reg
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Alerta de Feedback */}
+            {backupFeedback && (
+              <div
+                className={cn(
+                  'p-3.5 rounded-xl border text-xs flex items-center gap-2 font-medium transition-all animate-in fade-in',
+                  backupFeedback.type === 'success'
+                    ? 'bg-emerald-50 border-emerald-200 text-emerald-800'
+                    : 'bg-rose-50 border-rose-200 text-rose-800'
+                )}
+              >
+                {backupFeedback.type === 'success' ? (
+                  <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                ) : (
+                  <AlertTriangle className="w-4 h-4 text-rose-600 shrink-0" />
+                )}
+                <span className="flex-1">{backupFeedback.message}</span>
+              </div>
+            )}
           </div>
         </div>
       )}
@@ -2440,36 +3043,114 @@ export default function ConfiguracionPage() {
       {/* CONTENIDO PESTAÑA 4: RESPALDOS & BASE DE DATOS */}
       {activeTab === 'respaldos' && (
         <div className="space-y-6">
-          <div className="bg-gradient-to-br from-slate-900 via-slate-800 to-emerald-950 rounded-2xl p-6 text-white shadow-md">
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-              <div className="space-y-1.5 max-w-2xl">
-                <div className="flex items-center gap-2">
+          <div className="bg-gradient-to-br from-slate-900 via-slate-800 to-emerald-950 rounded-2xl p-6 sm:p-8 text-white shadow-md">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-6">
+              <div className="space-y-2 max-w-2xl">
+                <div className="flex items-center gap-2 flex-wrap">
                   <span className="px-2.5 py-0.5 rounded-full text-[10px] font-bold tracking-wider uppercase bg-emerald-500/20 text-emerald-300 border border-emerald-400/30">
-                    Motor SQLite Transaccional WAL
+                    Motor SQLAlchemy Asíncrono
                   </span>
                   <span className="px-2.5 py-0.5 rounded-full text-[10px] font-bold tracking-wider uppercase bg-sky-500/20 text-sky-300 border border-sky-400/30">
                     Snapshots JSON Atómicos
                   </span>
+                  <span className="px-2.5 py-0.5 rounded-full text-[10px] font-bold tracking-wider uppercase bg-amber-500/20 text-amber-300 border border-amber-400/30">
+                    Ordenamiento FK
+                  </span>
                 </div>
-                <h2 className="text-xl font-bold tracking-tight text-white flex items-center gap-2">
-                  <Database className="w-5 h-5 text-emerald-400" />
-                  Respaldos, Integridad y Resiliencia de Datos
+                <h2 className="text-xl sm:text-2xl font-bold tracking-tight text-white flex items-center gap-2.5">
+                  <Database className="w-6 h-6 text-emerald-400" />
+                  <span>Copias de Seguridad (Backups) & Salud de la Base de Datos</span>
                 </h2>
                 <p className="text-xs sm:text-sm text-slate-300 leading-relaxed">
-                  Supervisa la integridad del almacenamiento transaccional local, copias de seguridad de cartera histórica y configuración de políticas para asegurar cero pérdida de transacciones de recaudo.
+                  Exporta volcados completos de datos organizados por dependencias relacionales de claves foráneas (Foreign Keys). Garantiza resiliencia frente a contingencias y respaldo atómico de toda la operación crediticia.
                 </p>
+              </div>
+
+              <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2.5 shrink-0">
+                <button
+                  type="button"
+                  onClick={cargarResumenBackup}
+                  disabled={isLoadingResumenBackup}
+                  className="px-4 py-2.5 rounded-xl bg-white/10 hover:bg-white/20 border border-white/10 text-white font-semibold text-xs transition-colors flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50"
+                >
+                  <RefreshCw className={cn('w-4 h-4', isLoadingResumenBackup && 'animate-spin')} />
+                  <span>Actualizar Diagnóstico</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={handleDescargarBackup}
+                  disabled={isDownloadingBackup || isRestoringBackup}
+                  className="px-5 py-2.5 rounded-xl bg-emerald-500 hover:bg-emerald-600 text-slate-950 font-bold text-xs transition-all shadow-md flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50"
+                >
+                  {isDownloadingBackup ? (
+                    <>
+                      <RefreshCw className="w-4 h-4 animate-spin" />
+                      <span>Generando Respaldo...</span>
+                    </>
+                  ) : (
+                    <>
+                      <Download className="w-4 h-4" />
+                      <span>Descargar Copia de Seguridad</span>
+                    </>
+                  )}
+                </button>
+
+                <button
+                  type="button"
+                  onClick={handleTriggerFileSelect}
+                  disabled={isDownloadingBackup || isRestoringBackup}
+                  className="px-5 py-2.5 rounded-xl bg-rose-600 hover:bg-rose-700 text-white font-bold text-xs transition-all shadow-md flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  {isRestoringBackup ? (
+                    <>
+                      <RefreshCw className="w-4 h-4 animate-spin" />
+                      <span>Restaurando...</span>
+                    </>
+                  ) : (
+                    <>
+                      <UploadCloud className="w-4 h-4" />
+                      <span>Restaurar Copia</span>
+                    </>
+                  )}
+                </button>
               </div>
             </div>
           </div>
 
+          {/* Feedback de Descarga */}
+          {backupFeedback && (
+            <div
+              className={cn(
+                'p-4 rounded-xl border text-xs sm:text-sm flex items-center gap-3 font-medium transition-all animate-in fade-in',
+                backupFeedback.type === 'success'
+                  ? 'bg-emerald-50 border-emerald-200 text-emerald-800'
+                  : 'bg-rose-50 border-rose-200 text-rose-800'
+              )}
+            >
+              {backupFeedback.type === 'success' ? (
+                <CheckCircle2 className="w-5 h-5 text-emerald-600 shrink-0" />
+              ) : (
+                <AlertTriangle className="w-5 h-5 text-rose-600 shrink-0" />
+              )}
+              <span className="flex-1">{backupFeedback.message}</span>
+            </div>
+          )}
+
+          {/* Panel de Métricas de Salud */}
           <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
             <div className="bg-white rounded-2xl border border-slate-200/80 p-6 shadow-xs space-y-3">
               <div className="w-10 h-10 rounded-xl bg-emerald-50 text-emerald-600 flex items-center justify-center font-bold">
                 <Database className="w-5 h-5" />
               </div>
-              <h3 className="text-sm font-bold text-slate-900">Base de Datos Principal</h3>
+              <div className="flex items-center justify-between">
+                <h3 className="text-sm font-bold text-slate-900">Tablas Detectadas</h3>
+                <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-100 text-emerald-800">
+                  {resumenBackup ? `${resumenBackup.total_tablas} Tablas` : '8 Tablas'}
+                </span>
+              </div>
               <p className="text-xs text-slate-500 leading-relaxed">
-                Archivo de persistencia SQLite transaccional <code className="text-slate-800 font-mono bg-slate-100 px-1 py-0.5 rounded">backend/remundial.db</code> con modo Write-Ahead Logging (WAL) activado para concurrencia segura.
+                Todas las tablas registradas en el metadato declarativo de SQLAlchemy disponibles para extracción jerárquica.
               </p>
               <div className="pt-2 flex items-center gap-2 text-xs font-semibold text-emerald-700">
                 <CheckCircle2 className="w-4 h-4" />
@@ -2481,28 +3162,83 @@ export default function ConfiguracionPage() {
               <div className="w-10 h-10 rounded-xl bg-indigo-50 text-indigo-600 flex items-center justify-center font-bold">
                 <ShieldCheck className="w-5 h-5" />
               </div>
-              <h3 className="text-sm font-bold text-slate-900">Políticas Institucionales</h3>
+              <div className="flex items-center justify-between">
+                <h3 className="text-sm font-bold text-slate-900">Total de Registros</h3>
+                <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-indigo-100 text-indigo-800 font-mono">
+                  {resumenBackup ? `${resumenBackup.total_registros.toLocaleString('es-CO')} filas` : '---'}
+                </span>
+              </div>
               <p className="text-xs text-slate-500 leading-relaxed">
-                Persistencia JSON de alta disponibilidad en <code className="text-slate-800 font-mono bg-slate-100 px-1 py-0.5 rounded">storage/config_parametros.json</code> con respaldo atómico tras cada modificación del supervisor.
+                Suma acumulada de filas activas en clientes, contratos, amortizaciones, productos, usuarios y cierres.
               </p>
               <div className="pt-2 flex items-center gap-2 text-xs font-semibold text-indigo-700">
                 <CheckCircle2 className="w-4 h-4" />
-                <span>Sincronización Inmediata</span>
+                <span>Base de Datos Sincronizada</span>
               </div>
             </div>
 
             <div className="bg-white rounded-2xl border border-slate-200/80 p-6 shadow-xs space-y-3">
               <div className="w-10 h-10 rounded-xl bg-amber-50 text-amber-600 flex items-center justify-center font-bold">
-                <FileSpreadsheet className="w-5 h-5" />
+                <Layers className="w-5 h-5" />
               </div>
-              <h3 className="text-sm font-bold text-slate-900">Histórico de Migración Masiva</h3>
+              <div className="flex items-center justify-between">
+                <h3 className="text-sm font-bold text-slate-900">Jerarquía Relacional</h3>
+                <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-100 text-amber-800">
+                  sorted_tables
+                </span>
+              </div>
               <p className="text-xs text-slate-500 leading-relaxed">
-                Cada cargue masivo Excel genera una transacción atómica verificada con registro de auditoría de contratos importados y saldos iniciales.
+                La exportación preserva el orden de claves foráneas para permitir restauración sin conflictos de integridad referencial.
               </p>
               <div className="pt-2 flex items-center gap-2 text-xs font-semibold text-amber-700">
                 <CheckCircle2 className="w-4 h-4" />
-                <span>Auditoría Híbrida Habilitada</span>
+                <span>Orden Topológico Activo</span>
               </div>
+            </div>
+          </div>
+
+          {/* Grilla Detallada de Tablas y Columnas */}
+          <div className="bg-white rounded-2xl border border-slate-200/80 p-6 shadow-xs space-y-4">
+            <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+              <div>
+                <h3 className="text-sm font-bold text-slate-900">
+                  Desglose de Tablas en el Volcado
+                </h3>
+                <p className="text-xs text-slate-500 mt-0.5">
+                  Estructura y volumen de datos que se empaquetan en el archivo de copia de seguridad.
+                </p>
+              </div>
+              <span className="text-xs font-mono font-bold text-slate-500 bg-slate-100 px-2.5 py-1 rounded-lg">
+                {resumenBackup?.tablas?.length || 0} Tablas
+              </span>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+              {resumenBackup?.tablas && resumenBackup.tablas.length > 0 ? (
+                resumenBackup.tablas.map((t) => (
+                  <div
+                    key={t.tabla}
+                    className="p-3.5 rounded-xl border border-slate-200 bg-slate-50/60 hover:bg-white hover:border-emerald-300 hover:shadow-xs transition-all space-y-1.5"
+                  >
+                    <div className="flex items-center justify-between">
+                      <span className="font-mono font-bold text-xs text-slate-900 truncate" title={t.tabla}>
+                        {t.tabla}
+                      </span>
+                      <span className="w-2 h-2 rounded-full bg-emerald-500 shrink-0" />
+                    </div>
+                    <div className="flex items-center justify-between text-[11px] text-slate-500">
+                      <span>Columnas: {t.columnas}</span>
+                      <span className="font-mono font-bold text-emerald-800 bg-emerald-100/70 px-1.5 py-0.5 rounded">
+                        {t.registros.toLocaleString('es-CO')} filas
+                      </span>
+                    </div>
+                  </div>
+                ))
+              ) : (
+                <div className="col-span-full py-8 text-center text-xs text-slate-400">
+                  {isLoadingResumenBackup ? 'Consultando tablas...' : 'Haga clic en "Actualizar Diagnóstico" para ver las tablas.'}
+                </div>
+              )}
             </div>
           </div>
         </div>

@@ -1,6 +1,7 @@
 import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import apiClient, { STORAGE_KEYS, limpiarCredencialesLocales, setOnUnauthorized } from '../api/client';
+import { CACHE_CONFIG } from '../storage/database';
 
 export const AuthContext = createContext(null);
 
@@ -34,6 +35,15 @@ export const AuthProvider = ({ children }) => {
         setToken(tokenEfectivo);
         setUser(parsedUser);
         setUserRole(storedRole || parsedUser.rol);
+
+        // Sincronización en segundo plano de parámetros si hay red disponible
+        apiClient.get('/configuracion/parametros')
+          .then(async (res) => {
+            if (res?.data) {
+              await AsyncStorage.setItem(CACHE_CONFIG, JSON.stringify(res.data));
+            }
+          })
+          .catch(() => {});
       } else {
         // Si no hay credenciales completas válidas, asegurar almacenamiento limpio
         setToken(null);
@@ -114,6 +124,19 @@ export const AuthProvider = ({ children }) => {
       setToken(access_token);
       setUser(usuario);
       setUserRole(usuario.rol);
+
+      // Sincronización en segundo plano de parámetros y reglas de negocio (Offline-First)
+      try {
+        const resConfig = await apiClient.get('/configuracion/parametros', {
+          headers: { Authorization: `Bearer ${access_token}` },
+        });
+        if (resConfig?.data) {
+          await AsyncStorage.setItem(CACHE_CONFIG, JSON.stringify(resConfig.data));
+        }
+      } catch (errConfig) {
+        // En ausencia de red o fallo temporal, ignora el error y preserva la caché existente
+        console.warn('[AuthContext] Sincronización diferida de configuración (sin red):', errConfig?.message);
+      }
 
       return { success: true, user: usuario };
     } catch (error) {

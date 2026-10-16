@@ -16,6 +16,7 @@ import {
   ClientesScreen,
   NuevaVentaScreen,
   CatalogoScreen,
+  AcercaDeScreen,
 } from '../screens';
 
 const Stack = createNativeStackNavigator();
@@ -63,7 +64,7 @@ export default function AppNavigator() {
     return (
       <View style={styles.loadingContainer}>
         <ActivityIndicator size="small" color="#059669" />
-        <Text style={styles.loadingText}>Iniciando Remundial Core...</Text>
+        <Text style={styles.loadingText}>Iniciando Sistema...</Text>
       </View>
     );
   }
@@ -86,12 +87,14 @@ export default function AppNavigator() {
           <Stack.Screen name="NuevaVenta" component={NuevaVentaScreen} />
           <Stack.Screen name="Clientes" component={ClientesScreen} />
           <Stack.Screen name="Catalogo" component={CatalogoScreen} />
+          <Stack.Screen name="AcercaDe" component={AcercaDeScreen} />
         </Stack.Group>
       ) : userRole === 'cobrador' ? (
         // Flujo Privado: Rol Cobrador en Terreno
         <Stack.Group>
           <Stack.Screen name="CobradorDashboard" component={CobradorDashboard} />
           <Stack.Screen name="Clientes" component={ClientesScreen} />
+          <Stack.Screen name="AcercaDe" component={AcercaDeScreen} />
         </Stack.Group>
       ) : (
         // Flujo de Respaldo: Roles no contemplados en móvil de campo

@@ -17,6 +17,8 @@ import { useAuth } from '../context/AuthContext';
 import { useSync } from '../context/SyncContext';
 import apiClient, { STORAGE_KEYS, limpiarCredencialesLocales } from '../api/client';
 import InFrameModal from '../components/InFrameModal';
+import { version as appVersion } from '../../package.json';
+import { CACHE_CONFIG } from '../storage/database';
 
 const formatCOP = (val) => {
   const num = Math.round(Number(val) || 0);
@@ -37,6 +39,38 @@ export default function VendedorDashboard({ navigation }) {
 
   // Estado del Modal de Confirmación de Cierre de Sesión
   const [showLogoutModal, setShowLogoutModal] = useState(false);
+
+  // Estados dinámicos de Marca Blanca y Versión de la Aplicación
+  const [empresaNombre, setEmpresaNombre] = useState('');
+  const [footerDinamico, setFooterDinamico] = useState(`v${appVersion} • Operaciones de Campo`);
+
+  useEffect(() => {
+    let isMounted = true;
+    const cargarMarcaBlanca = async () => {
+      try {
+        const cached = await AsyncStorage.getItem(CACHE_CONFIG);
+        if (cached && isMounted) {
+          const cfg = JSON.parse(cached);
+          const emp = cfg.empresa?.razon_social;
+          if (emp) {
+            setEmpresaNombre(emp);
+          }
+          const rawPie = cfg.identidad_visual?.pie_mobile;
+          if (rawPie && !rawPie.includes('v1.2.0')) {
+            setFooterDinamico(rawPie);
+          } else {
+            setFooterDinamico(
+              emp ? `${emp} v${appVersion} • Operaciones de Campo` : `v${appVersion} • Operaciones de Campo`
+            );
+          }
+        }
+      } catch (e) {}
+    };
+    cargarMarcaBlanca();
+    return () => {
+      isMounted = false;
+    };
+  }, []);
 
   // ==========================================
   // ESTADOS Y GESTIÓN DE GARANTÍAS Y RESPALDO
@@ -321,7 +355,7 @@ export default function VendedorDashboard({ navigation }) {
       <View style={styles.topHeader}>
         <View style={styles.headerLeftCol}>
           <View style={styles.headerTitleRow}>
-            <Text style={styles.appTitle}>Remundial</Text>
+            <Text style={styles.appTitle}>{empresaNombre || 'Plataforma'}</Text>
             <View style={styles.vendedorBadge}>
               <Text style={styles.vendedorBadgeText}>VENDEDOR EN TERRENO</Text>
             </View>
@@ -329,14 +363,25 @@ export default function VendedorDashboard({ navigation }) {
           <Text style={styles.headerSub}>Originación de Créditos y Ventas</Text>
         </View>
 
-        <TouchableOpacity
-          style={styles.logoutBtn}
-          onPress={() => setShowLogoutModal(true)}
-          accessibilityRole="button"
-          accessibilityLabel="Cerrar sesión"
-        >
-          <Text style={styles.logoutBtnText}>Salir</Text>
-        </TouchableOpacity>
+        <View style={styles.topHeaderRightActions}>
+          <TouchableOpacity
+            style={styles.infoBtn}
+            onPress={() => navigation?.navigate('AcercaDe')}
+            accessibilityRole="button"
+            accessibilityLabel="Acerca de la aplicación"
+          >
+            <Text style={styles.infoBtnText}>ℹ</Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={styles.logoutBtn}
+            onPress={() => setShowLogoutModal(true)}
+            accessibilityRole="button"
+            accessibilityLabel="Cerrar sesión"
+          >
+            <Text style={styles.logoutBtnText}>Salir</Text>
+          </TouchableOpacity>
+        </View>
       </View>
 
       <ScrollView
@@ -703,6 +748,18 @@ export default function VendedorDashboard({ navigation }) {
         >
           <Text style={styles.logoutButtonSecondaryText}>Finalizar Turno / Salir</Text>
         </TouchableOpacity>
+
+        {/* Pie de Página Institucional Dinámico */}
+        <View style={styles.footerContainer}>
+          <Text style={styles.footerBrandText}>{footerDinamico}</Text>
+          <TouchableOpacity
+            onPress={() => navigation?.navigate('AcercaDe')}
+            accessibilityRole="button"
+            style={styles.aboutLinkBtn}
+          >
+            <Text style={styles.aboutLinkText}>Acerca de la Aplicación →</Text>
+          </TouchableOpacity>
+        </View>
       </ScrollView>
 
       {/* ========================================================================= */}
@@ -1021,6 +1078,27 @@ const styles = StyleSheet.create({
     color: '#64748B',
     marginTop: 2,
   },
+  topHeaderRightActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  infoBtn: {
+    width: 32,
+    height: 32,
+    borderRadius: 8,
+    backgroundColor: '#F1F5F9',
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    alignItems: 'center',
+    justifyContent: 'center',
+    cursor: 'pointer',
+  },
+  infoBtnText: {
+    fontSize: 14,
+    color: '#059669',
+    fontWeight: '800',
+  },
   logoutBtn: {
     backgroundColor: '#FFF1F2',
     borderWidth: 1,
@@ -1033,6 +1111,26 @@ const styles = StyleSheet.create({
     color: '#E11D48',
     fontSize: 12,
     fontWeight: '700',
+  },
+  footerContainer: {
+    alignItems: 'center',
+    paddingVertical: 20,
+    gap: 6,
+  },
+  footerBrandText: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#64748B',
+    textAlign: 'center',
+  },
+  aboutLinkBtn: {
+    paddingVertical: 4,
+    paddingHorizontal: 8,
+  },
+  aboutLinkText: {
+    fontSize: 11,
+    fontWeight: '800',
+    color: '#059669',
   },
   container: {
     paddingHorizontal: 14,

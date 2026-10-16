@@ -12,6 +12,7 @@ import {
   limpiarItemsFallidosCola,
   guardarEnCache,
   STORAGE_KEYS as DB_STORAGE_KEYS,
+  CACHE_CONFIG,
 } from '../storage/database';
 
 /**
@@ -225,12 +226,31 @@ export function SyncProvider({ children }) {
   }, []);
 
   // =========================================================================
+  // 3c. SINCRONIZACIÓN DE REGLAS DE CRÉDITO Y PARÁMETROS OPERATIVOS
+  // =========================================================================
+  const sincronizarParametrosOperativos = useCallback(async () => {
+    try {
+      const res = await apiClient.get('/configuracion/parametros', { timeout: 4000 });
+      if (res?.data) {
+        await AsyncStorage.setItem(CACHE_CONFIG, JSON.stringify(res.data));
+        return res.data;
+      }
+    } catch (err) {
+      // Ignorar de forma resiliente si no hay conectividad
+    }
+    return null;
+  }, []);
+
+  // =========================================================================
   // 4. LISTENERS DE CICLO DE VIDA (AppState y Navegador)
   // =========================================================================
   useEffect(() => {
     refrescarContador();
     verificarConectividad().then((online) => {
-      if (online) sincronizarCiudadesOperativas();
+      if (online) {
+        sincronizarCiudadesOperativas();
+        sincronizarParametrosOperativos();
+      }
     });
 
     // Eventos Web online / offline: sincronizar al instante sin retardos
@@ -238,6 +258,7 @@ export function SyncProvider({ children }) {
       setIsOnline(true);
       procesarCola();
       sincronizarCiudadesOperativas();
+      sincronizarParametrosOperativos();
     };
     const handleOffline = () => {
       setIsOnline(false);
@@ -255,6 +276,7 @@ export function SyncProvider({ children }) {
           if (online) {
             procesarCola();
             sincronizarCiudadesOperativas();
+            sincronizarParametrosOperativos();
           }
         });
       }
