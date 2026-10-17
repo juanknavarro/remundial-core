@@ -495,13 +495,7 @@ export default function DashboardLayout({
               </div>
 
               <div className="flex items-center justify-between px-3 py-1.5 mb-1 text-[11px] text-slate-500 border-t border-slate-100/80">
-                <Link
-                  href="/dashboard/acerca-de"
-                  className="hover:text-emerald-700 transition-colors flex items-center gap-1.5 font-semibold text-slate-600"
-                >
-                  <Info className="w-3.5 h-3.5 text-emerald-600" />
-                  <span>Acerca de</span>
-                </Link>
+                <span className="font-medium text-slate-400">Versión del Sistema</span>
                 <span className="font-mono text-slate-400 font-medium">v{sistemaVersion}</span>
               </div>
 

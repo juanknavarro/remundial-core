@@ -133,7 +133,7 @@ const calcularCronogramaCuotas = (fechaInicialStr, numCuotas, frecuencia = 'mens
 };
 
 export default function NuevaVentaScreen({ route, navigation }) {
-  const { user, token: authToken } = useAuth();
+  const { user, userRole, token: authToken } = useAuth();
   const { encolarVenta, isOnline } = useSync();
 
   // Estados de datos maestros
@@ -2383,7 +2383,7 @@ export default function NuevaVentaScreen({ route, navigation }) {
         animationType="fade"
         onRequestClose={async () => {
           await resetearFormularioCompleto();
-          navigation.navigate('VendedorDashboard');
+          navigation.navigate(userRole?.toLowerCase() === 'supervisor' || userRole?.toLowerCase() === 'master' ? 'SupervisorDashboard' : 'VendedorDashboard');
         }}
       >
         <View style={styles.modalBackdropCenter}>
@@ -2546,7 +2546,7 @@ export default function NuevaVentaScreen({ route, navigation }) {
               style={styles.successCloseBtn}
               onPress={async () => {
                 await resetearFormularioCompleto();
-                navigation.navigate('VendedorDashboard');
+                navigation.navigate(userRole?.toLowerCase() === 'supervisor' || userRole?.toLowerCase() === 'master' ? 'SupervisorDashboard' : 'VendedorDashboard');
               }}
             >
               <Text style={styles.successCloseBtnText}>Finalizar y Volver al Panel →</Text>

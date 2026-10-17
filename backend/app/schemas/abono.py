@@ -179,6 +179,10 @@ class AbonoResponse(BaseModel):
         default=None,
         description="Nombre del cobrador en ruta que realizó el recaudo",
     )
+    ciudad: Optional[str] = Field(
+        default=None,
+        description="Ciudad del cliente o donde se celebró la venta para contexto geográfico",
+    )
 
     model_config = ConfigDict(from_attributes=True)
 

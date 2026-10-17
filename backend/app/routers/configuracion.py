@@ -45,6 +45,7 @@ class ReglasCreditoUpdateRequest(BaseModel):
     umbral_mora_critica: Optional[int] = Field(None, ge=1)
     cuota_inicial_minima: Optional[float] = Field(None, ge=0)
     tasa_interes_incluida: Optional[bool] = None
+    descripcion_mora_critica: Optional[str] = Field(None, description="Texto explicativo de la política de cartera crítica")
 
 
 class ActualizarEmpresaRequest(BaseModel):

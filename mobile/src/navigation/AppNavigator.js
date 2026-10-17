@@ -13,6 +13,14 @@ import {
   LoginScreen,
   VendedorDashboard,
   CobradorDashboard,
+  SupervisorDashboard,
+  DirectorioScreen,
+  InventarioScreen,
+  CalendarioScreen,
+  CarteraCriticaScreen,
+  PersonalScreen,
+  ComprobantesScreen,
+  ReportesScreen,
   ClientesScreen,
   NuevaVentaScreen,
   CatalogoScreen,
@@ -22,7 +30,7 @@ import {
 const Stack = createNativeStackNavigator();
 
 /**
- * Pantalla informativa de respaldo si un usuario con rol distinto (ej. supervisor/secretaria)
+ * Pantalla informativa de respaldo si un usuario con rol distinto (ej. secretaria)
  * inicia sesión en la aplicación móvil de terreno.
  */
 function RolNoAutorizadoScreen() {
@@ -37,7 +45,7 @@ function RolNoAutorizadoScreen() {
         <Text style={styles.unauthorizedBadge}>ACCESO RESTRINGIDO</Text>
         <Text style={styles.unauthorizedTitle}>Rol No Compatible</Text>
         <Text style={styles.unauthorizedText}>
-          Esta aplicación móvil está diseñada exclusivamente para la operación en terreno de Vendedores y Cobradores.
+          Esta aplicación móvil está diseñada para la operación de Vendedores, Cobradores y Supervisores de Campo.
         </Text>
         <View style={styles.unauthorizedInfoBox}>
           <Text style={styles.unauthorizedInfoLabel}>USUARIO CONECTADO</Text>
@@ -69,6 +77,8 @@ export default function AppNavigator() {
     );
   }
 
+  const role = (userRole || '').toLowerCase();
+
   return (
     <Stack.Navigator
       screenOptions={{
@@ -80,7 +90,7 @@ export default function AppNavigator() {
       {!token ? (
         // Flujo Público: Usuario no autenticado
         <Stack.Screen name="Login" component={LoginScreen} />
-      ) : userRole === 'vendedor' ? (
+      ) : role === 'vendedor' ? (
         // Flujo Privado: Rol Vendedor en Terreno
         <Stack.Group>
           <Stack.Screen name="VendedorDashboard" component={VendedorDashboard} />
@@ -89,11 +99,31 @@ export default function AppNavigator() {
           <Stack.Screen name="Catalogo" component={CatalogoScreen} />
           <Stack.Screen name="AcercaDe" component={AcercaDeScreen} />
         </Stack.Group>
-      ) : userRole === 'cobrador' ? (
+      ) : role === 'cobrador' ? (
         // Flujo Privado: Rol Cobrador en Terreno
         <Stack.Group>
           <Stack.Screen name="CobradorDashboard" component={CobradorDashboard} />
           <Stack.Screen name="Clientes" component={ClientesScreen} />
+          <Stack.Screen name="AcercaDe" component={AcercaDeScreen} />
+        </Stack.Group>
+      ) : (role === 'supervisor' || role === 'master') ? (
+        // Flujo Privado: Rol Supervisor / Master
+        <Stack.Group>
+          <Stack.Screen name="SupervisorDashboard" component={SupervisorDashboard} />
+          <Stack.Screen name="SupervisorMain" component={SupervisorDashboard} />
+          <Stack.Screen name="DirectorioScreen" component={DirectorioScreen} />
+          <Stack.Screen name="InventarioScreen" component={InventarioScreen} />
+          <Stack.Screen name="CalendarioScreen" component={CalendarioScreen} />
+          <Stack.Screen name="CarteraCriticaScreen" component={CarteraCriticaScreen} />
+          <Stack.Screen name="PersonalScreen" component={PersonalScreen} />
+          <Stack.Screen name="ComprobantesScreen" component={ComprobantesScreen} />
+          <Stack.Screen name="ReportesScreen" component={ReportesScreen} />
+          <Stack.Screen name="Personal" component={PersonalScreen} />
+          <Stack.Screen name="Comprobantes" component={ComprobantesScreen} />
+          <Stack.Screen name="Reportes" component={ReportesScreen} />
+          <Stack.Screen name="NuevaVenta" component={NuevaVentaScreen} />
+          <Stack.Screen name="Clientes" component={ClientesScreen} />
+          <Stack.Screen name="Catalogo" component={CatalogoScreen} />
           <Stack.Screen name="AcercaDe" component={AcercaDeScreen} />
         </Stack.Group>
       ) : (

@@ -1,6 +1,8 @@
 import enum
 import json
 import logging
+import os
+import re
 from datetime import date, datetime, time
 from decimal import Decimal
 from typing import Any, Dict, List
@@ -19,6 +21,26 @@ import app.models  # noqa: F401 - Asegura el registro íntegro de todos los mode
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/respaldos", tags=["Respaldos & Copias de Seguridad"])
+
+STORAGE_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "storage")
+CONFIG_FILE_PATH = os.path.join(STORAGE_DIR, "config_parametros.json")
+
+
+def _obtener_empresa_slug() -> str:
+    """Extrae y sanitiza el nombre comercial de la empresa desde config_parametros.json para nombres de archivo."""
+    razon_social = "remundial"
+    if os.path.exists(CONFIG_FILE_PATH):
+        try:
+            with open(CONFIG_FILE_PATH, "r", encoding="utf-8") as f:
+                cfg = json.load(f)
+                rs = cfg.get("empresa", {}).get("razon_social")
+                if rs and isinstance(rs, str) and rs.strip():
+                    razon_social = rs.strip()
+        except Exception:
+            pass
+    # Sanitizar: minúsculas, espacios a guiones bajos y eliminar caracteres especiales
+    slug = re.sub(r"[^a-zA-Z0-9]+", "_", razon_social.lower()).strip("_")
+    return slug or "remundial"
 
 
 def custom_json_encoder(obj: Any) -> Any:
@@ -132,7 +154,8 @@ async def exportar_respaldo_completo(
     )
 
     timestamp = datetime.now().strftime("%Y%m%d_%H%M")
-    filename = f"backup_remundial_{timestamp}.json"
+    empresa_slug = _obtener_empresa_slug()
+    filename = f"backup_{empresa_slug}_{timestamp}.json"
 
     return Response(
         content=json_str,

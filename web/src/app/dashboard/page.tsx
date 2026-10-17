@@ -35,6 +35,8 @@ interface OperacionReciente {
   responsable: string;
   valor: number;
   sector: string;
+  ciudad?: string;
+  ciudad_venta?: string;
   estado: string;
   fecha: Date;
   esAbono: boolean;
@@ -315,6 +317,7 @@ export default function MasterDashboardPage() {
 
     // Abonos
     abonos.forEach((a) => {
+      const ciudadAbono = a.ciudad || a.ciudad_venta || null;
       listado.push({
         id: `abono-${a.id_recibo}`,
         contrato: a.credito_id ? `CTR-${a.credito_id.slice(0, 8).toUpperCase()}` : 'CTR-RECIBO',
@@ -322,7 +325,9 @@ export default function MasterDashboardPage() {
         tipo: 'Abono de Cuota',
         responsable: a.cobrador?.nombre || 'Pedro Cobrador',
         valor: Number(a.valor_abonado || 0),
-        sector: 'Ruta de Cobro',
+        sector: ciudadAbono || 'Ruta de Cobro',
+        ciudad: a.ciudad,
+        ciudad_venta: a.ciudad_venta,
         estado: a.estado === 'conciliado' ? 'conciliado' : 'completado',
         fecha: new Date(a.fecha || a.creado_en || Date.now()),
         esAbono: true,
@@ -331,6 +336,7 @@ export default function MasterDashboardPage() {
 
     // Créditos
     creditos.forEach((c) => {
+      const ciudadCredito = c.ciudad_venta || c.cliente?.ciudad || c.cliente?.barrio;
       listado.push({
         id: `credito-${c.id_contrato}`,
         contrato: `CTR-${c.id_contrato.slice(0, 8).toUpperCase()}`,
@@ -338,7 +344,9 @@ export default function MasterDashboardPage() {
         tipo: c.estado === 'pendiente' ? 'Solicitud de Crédito' : 'Venta Originada',
         responsable: c.vendedor?.nombre || 'Juan Vendedor',
         valor: Number(c.monto_financiado || 0) + Number(c.cuota_inicial || 0),
-        sector: c.cliente?.barrio || c.cliente?.ciudad || 'Punto de Venta',
+        sector: ciudadCredito || 'Punto de Venta',
+        ciudad: c.cliente?.ciudad,
+        ciudad_venta: c.ciudad_venta,
         estado: c.estado,
         fecha: new Date(c.creado_en || Date.now()),
         esAbono: false,
@@ -1117,7 +1125,7 @@ export default function MasterDashboardPage() {
                     </td>
                     <td className="px-6 py-4 text-slate-600 flex items-center gap-1">
                       <MapPin className="w-3.5 h-3.5 text-slate-500" />
-                      <span>{op.sector}</span>
+                      <span>{op.ciudad || op.ciudad_venta || op.sector || 'Ruta de Cobro'}</span>
                     </td>
                     <td className="px-6 py-4 text-right">
                       {op.estado === 'conciliado' && (

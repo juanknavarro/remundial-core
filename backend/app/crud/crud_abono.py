@@ -35,6 +35,10 @@ def _enriquecer_abono_con_cronograma(a: Optional[Abono]) -> Optional[Abono]:
         if a.credito.cliente:
             setattr(a, "cliente_nombre", a.credito.cliente.nombres)
             setattr(a, "cliente_cedula", a.credito.cliente.cedula)
+            if getattr(a.credito.cliente, "ciudad", None):
+                setattr(a, "ciudad", a.credito.cliente.ciudad)
+        if not getattr(a, "ciudad", None) and getattr(a.credito, "ciudad_venta", None):
+            setattr(a, "ciudad", a.credito.ciudad_venta)
         setattr(a, "saldo_restante_credito", a.credito.saldo_pendiente)
 
         # Si ya fue enriquecido por create_abono, retornar directamente

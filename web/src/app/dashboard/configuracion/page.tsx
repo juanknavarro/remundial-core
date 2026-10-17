@@ -149,6 +149,7 @@ export default function ConfiguracionPage() {
 
   // Estados Formulario Reglas Financieras y Plazos de Crédito Dinámicos
   const [plazosPermitidos, setPlazosPermitidos] = useState<number[]>([9, 6, 4, 2]);
+  const [descripcionMoraCritica, setDescripcionMoraCritica] = useState<string>('');
   const [nuevoPlazoInput, setNuevoPlazoInput] = useState<string>('');
   const [isSavingReglas, setIsSavingReglas] = useState<boolean>(false);
   const [reglasFeedback, setReglasFeedback] = useState<{
@@ -275,6 +276,9 @@ export default function ConfiguracionPage() {
           setPlazosPermitidos(cleanPlazos);
         }
       }
+      if (res.data?.reglas_credito?.descripcion_mora_critica) {
+        setDescripcionMoraCritica(res.data.reglas_credito.descripcion_mora_critica);
+      }
       // Cargar catálogo de ciudades estructurado (Córdoba y Sucre)
       try {
         const cRes = await api.get('/config/ciudades');
@@ -376,7 +380,11 @@ export default function ConfiguracionPage() {
       });
 
       // Extraer nombre de archivo desde Content-Disposition si existe
-      let filename = `backup_remundial_${new Date().toISOString().slice(0, 10).replace(/-/g, '')}.json`;
+      const empSlug = (formEmpresa.razon_social || 'remundial')
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, '_')
+        .replace(/^_+|_+$/g, '');
+      let filename = `backup_${empSlug || 'remundial'}_${new Date().toISOString().slice(0, 10).replace(/-/g, '')}.json`;
       const contentDisposition = response.headers?.['content-disposition'];
       if (contentDisposition) {
         const match = contentDisposition.match(/filename=["']?([^"';]+)["']?/);
@@ -617,6 +625,7 @@ export default function ConfiguracionPage() {
       const res = await api.put('/configuracion/parametros', {
         reglas_credito: {
           plazos_permitidos: plazosPermitidos,
+          descripcion_mora_critica: descripcionMoraCritica,
         },
       });
       if (res.data?.parametros) {
@@ -1248,21 +1257,50 @@ export default function ConfiguracionPage() {
               </div>
 
               {/* Política de Cartera Crítica */}
-              <div className="p-5 rounded-xl bg-rose-50/60 border border-rose-200/80 space-y-3">
-                <div className="flex items-center justify-between">
-                  <span className="text-xs font-bold text-rose-900 uppercase tracking-wider">
-                    Política de Cartera Crítica & Retiros
-                  </span>
-                  <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-rose-200 text-rose-900">
-                    ≥ 3 Cuotas Vencidas
-                  </span>
+              <div className="p-5 rounded-xl bg-rose-50/60 border border-rose-200/80 space-y-3 flex flex-col justify-between">
+                <div className="space-y-3">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-bold text-rose-900 uppercase tracking-wider">
+                      Política de Cartera Crítica & Retiros
+                    </span>
+                    <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-rose-200 text-rose-900">
+                      ≥ 3 Cuotas Vencidas
+                    </span>
+                  </div>
+
+                  <div>
+                    <label className="block text-[11px] font-bold text-rose-900 uppercase tracking-wider mb-1.5">
+                      Texto Descriptivo de Política de Cartera Crítica
+                    </label>
+                    <textarea
+                      rows={4}
+                      value={descripcionMoraCritica}
+                      onChange={(e) => setDescripcionMoraCritica(e.target.value)}
+                      placeholder="Define la directriz de mora crítica (ej. Se clasifica en Cartera Crítica a partir de 3 cuotas vencidas)..."
+                      className="w-full px-3 py-2.5 rounded-xl border border-rose-200 text-xs font-medium text-slate-800 bg-white placeholder-slate-400 focus:outline-hidden focus:ring-2 focus:ring-rose-500 focus:border-rose-500 leading-relaxed transition-all resize-y"
+                    />
+                  </div>
+
+                  <div className="text-[11px] font-medium text-rose-700 flex items-center gap-1.5">
+                    <Info className="w-3.5 h-3.5 shrink-0" />
+                    <span>Excluye contratos de 2 cuotas por política de mitigación de riesgo.</span>
+                  </div>
                 </div>
-                <p className="text-xs text-rose-800 leading-relaxed">
-                  Todo crédito con 3 o más cuotas en estado vencida pasa de forma automática a la bandeja de Cartera Crítica para emisión de Orden de Retiro y Acta oficial de Restitución de Bienes con doble firma digital.
-                </p>
-                <div className="text-[11px] font-medium text-rose-700 flex items-center gap-1.5 pt-1">
-                  <Info className="w-3.5 h-3.5" />
-                  <span>Excluye contratos de 2 cuotas por política de mitigación de riesgo.</span>
+
+                <div className="pt-2 flex justify-end">
+                  <button
+                    type="button"
+                    onClick={handleGuardarReglasCredito}
+                    disabled={isSavingReglas}
+                    className="px-4 py-2 rounded-xl bg-rose-700 hover:bg-rose-800 text-white text-xs font-bold transition-all shadow-xs cursor-pointer flex items-center gap-2 disabled:opacity-50"
+                  >
+                    {isSavingReglas ? (
+                      <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                    ) : (
+                      <Check className="w-3.5 h-3.5" />
+                    )}
+                    <span>{isSavingReglas ? 'Guardando...' : 'Guardar Política'}</span>
+                  </button>
                 </div>
               </div>
             </div>
