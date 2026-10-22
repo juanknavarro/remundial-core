@@ -162,6 +162,8 @@ export default function ConfiguracionPage() {
   const [isLoadingResumenBackup, setIsLoadingResumenBackup] = useState<boolean>(false);
   const [isDownloadingBackup, setIsDownloadingBackup] = useState<boolean>(false);
   const [isRestoringBackup, setIsRestoringBackup] = useState<boolean>(false);
+  const [isRestoreModalOpen, setIsRestoreModalOpen] = useState<boolean>(false);
+  const [pendingRestoreFile, setPendingRestoreFile] = useState<File | null>(null);
   const fileInputBackupRef = React.useRef<HTMLInputElement | null>(null);
   const [backupFeedback, setBackupFeedback] = useState<{
     type: 'success' | 'error';
@@ -241,11 +243,16 @@ export default function ConfiguracionPage() {
     id: number;
     title: string;
     message: string;
+    type?: 'success' | 'error' | 'warning';
   } | null>(null);
 
-  const dispararToast = (title: string, message: string) => {
+  const dispararToast = (
+    title: string,
+    message: string,
+    type: 'success' | 'error' | 'warning' = 'success'
+  ) => {
     const id = Date.now();
-    setToast({ id, title, message });
+    setToast({ id, title, message, type });
     setTimeout(() => {
       setToast((curr) => (curr?.id === id ? null : curr));
     }, 3500);
@@ -261,6 +268,8 @@ export default function ConfiguracionPage() {
     mensaje: string;
   } | null>(null);
   const [errorSubida, setErrorSubida] = useState<string | null>(null);
+  const [isResettingData, setIsResettingData] = useState<boolean>(false);
+  const [isResetModalOpen, setIsResetModalOpen] = useState<boolean>(false);
 
   // Cargar parámetros del backend
   const cargarParametros = async () => {
@@ -424,30 +433,49 @@ export default function ConfiguracionPage() {
 
   // Disparar diálogo del selector de archivos para restaurar respaldo
   const handleTriggerFileSelect = () => {
-    fileInputBackupRef.current?.click();
+    if (fileInputBackupRef.current) {
+      fileInputBackupRef.current.value = '';
+      fileInputBackupRef.current.click();
+    }
   };
 
-  // Procesar archivo seleccionado y ejecutar restauración con confirmación de seguridad
-  const handleRestaurarBackup = async (e: React.ChangeEvent<HTMLInputElement>) => {
+  // Selección de archivo JSON desde explorador (abre modal sin disparar HTTP aún)
+  const handleFileSelectBackup = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
 
     // Resetear valor para que vuelva a disparar si se selecciona el mismo archivo
     e.target.value = '';
 
-    const advertencia =
-      '¡Peligro! Esto sobrescribirá toda la base de datos actual con los datos del archivo. Esta acción no se puede deshacer.';
-    const confirmado = window.confirm(advertencia);
-    if (!confirmado) {
+    if (!file.name.toLowerCase().endsWith('.json')) {
+      dispararToast(
+        'Archivo Inválido',
+        'Por favor seleccione un archivo de copia de seguridad con formato .json.',
+        'error'
+      );
       return;
     }
+
+    setPendingRestoreFile(file);
+    setIsRestoreModalOpen(true);
+  };
+
+  // Cancelar diálogo modal de restauración
+  const handleCancelarRestauracion = () => {
+    setPendingRestoreFile(null);
+    setIsRestoreModalOpen(false);
+  };
+
+  // Ejecución definitiva de la restauración (POST /respaldos/restaurar)
+  const handleConfirmarRestauracion = async () => {
+    if (!pendingRestoreFile) return;
 
     setIsRestoringBackup(true);
     setBackupFeedback(null);
 
     try {
       const formData = new FormData();
-      formData.append('file', file);
+      formData.append('file', pendingRestoreFile);
 
       const res = await api.post('/respaldos/restaurar', formData, {
         headers: {
@@ -466,8 +494,12 @@ export default function ConfiguracionPage() {
 
       dispararToast(
         'Base de Datos Restaurada',
-        `Se importaron satisfactoriamente ${res.data?.total_registros ?? 0} registros.`
+        `Se importaron satisfactoriamente ${res.data?.total_registros ?? 0} registros.`,
+        'success'
       );
+
+      setIsRestoreModalOpen(false);
+      setPendingRestoreFile(null);
 
       // Sincronizar nuevamente la interfaz con el estado recién restaurado
       await cargarResumenBackup();
@@ -482,7 +514,7 @@ export default function ConfiguracionPage() {
         type: 'error',
         message: errorMsg,
       });
-      dispararToast('Error en Restauración', errorMsg);
+      dispararToast('Error en Restauración', errorMsg, 'error');
     } finally {
       setIsRestoringBackup(false);
     }
@@ -959,7 +991,11 @@ export default function ConfiguracionPage() {
       window.URL.revokeObjectURL(url);
     } catch (err) {
       console.error('Error al descargar plantilla Excel:', err);
-      alert('No fue posible descargar la plantilla oficial. Verifique la conexión con el servidor.');
+      dispararToast(
+        'Descarga Fallida',
+        'No fue posible descargar la plantilla oficial. Verifique la conexión con el servidor.',
+        'error'
+      );
     } finally {
       setIsDownloading(false);
     }
@@ -1011,6 +1047,31 @@ export default function ConfiguracionPage() {
       );
     } finally {
       setIsUploading(false);
+    }
+  };
+
+  // Confirmar y disparar el Hard Reset de Datos de Prueba (Dev Only) sin window.confirm ni window.alert
+  const handleConfirmHardReset = async () => {
+    setIsResettingData(true);
+    try {
+      const res = await api.post('/respaldos/hard-reset-dev');
+      setIsResetModalOpen(false);
+      dispararToast(
+        'Hard Reset Exitoso',
+        res.data?.mensaje || 'Base de datos de prueba limpiada exitosamente.',
+        'success'
+      );
+      setTimeout(() => {
+        window.location.reload();
+      }, 1500);
+    } catch (err: any) {
+      console.error('Error al ejecutar Hard Reset:', err);
+      const errorMsg =
+        err?.response?.data?.detail ||
+        err?.message ||
+        'Ocurrió un error al intentar limpiar los datos de prueba.';
+      dispararToast('Error en Hard Reset', errorMsg, 'error');
+      setIsResettingData(false);
     }
   };
 
@@ -1872,15 +1933,6 @@ export default function ConfiguracionPage() {
                     </>
                   )}
                 </button>
-
-                {/* Input de archivo JSON oculto accionado por Restaurar Copia */}
-                <input
-                  type="file"
-                  ref={fileInputBackupRef}
-                  accept=".json"
-                  onChange={handleRestaurarBackup}
-                  className="hidden"
-                />
               </div>
             </div>
 
@@ -2287,6 +2339,45 @@ export default function ConfiguracionPage() {
               </div>
             </div>
           )}
+
+          {/* SECCIÓN DE PELIGRO / PRUEBAS DE DESARROLLO (HARD RESET) */}
+          <div className="bg-rose-50/70 border-2 border-rose-200 rounded-2xl p-6 shadow-xs space-y-4">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+              <div className="space-y-1.5 max-w-2xl">
+                <div className="flex items-center gap-2">
+                  <span className="px-2.5 py-0.5 rounded-full text-[10px] font-bold tracking-wider uppercase bg-rose-200 text-rose-900 border border-rose-300">
+                    Entorno de Desarrollo & Pruebas
+                  </span>
+                  <span className="px-2.5 py-0.5 rounded-full text-[10px] font-bold tracking-wider uppercase bg-emerald-100 text-emerald-800 border border-emerald-300">
+                    Usuarios & Stock Protegidos
+                  </span>
+                </div>
+                <h3 className="text-base font-bold text-rose-950 flex items-center gap-2">
+                  <AlertTriangle className="w-5 h-5 text-rose-600 shrink-0" />
+                  <span>Zona de Peligro: Reinicio Seguro de Datos (Hard Reset)</span>
+                </h3>
+                <p className="text-xs text-rose-800 leading-relaxed">
+                  Vacía de manera atómica todos los <strong>clientes</strong>, <strong>contratos de créditos</strong>, <strong>amortizaciones</strong>, <strong>abonos</strong> y <strong>cierres de caja</strong> para facilitar pruebas de migración o validación de nuevos módulos de cobro.
+                </p>
+                <div className="flex items-center gap-2 text-[11px] text-rose-700 font-semibold pt-1">
+                  <ShieldCheck className="w-4 h-4 text-emerald-600 shrink-0" />
+                  <span>Las tablas de <strong className="text-slate-900">Usuarios</strong> (credenciales de acceso) y <strong className="text-slate-900">Productos</strong> (catálogo base) NO serán eliminadas.</span>
+                </div>
+              </div>
+
+              <div className="shrink-0 flex items-center">
+                <button
+                  type="button"
+                  onClick={() => setIsResetModalOpen(true)}
+                  disabled={isResettingData}
+                  className="w-full sm:w-auto px-5 py-3 rounded-xl bg-rose-600 hover:bg-rose-700 active:scale-98 text-white font-bold text-xs sm:text-sm shadow-md hover:shadow-lg transition-all flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed border border-rose-700"
+                >
+                  <Trash2 className="w-4 h-4" />
+                  <span>⚠️ Limpiar Datos de Prueba (Hard Reset)</span>
+                </button>
+              </div>
+            </div>
+          </div>
         </div>
       )}
 
@@ -3282,6 +3373,178 @@ export default function ConfiguracionPage() {
         </div>
       )}
 
+      {/* Input de archivo JSON oculto accionado por Restaurar Copia (Montado a nivel raíz persistente para todas las pestañas) */}
+      <input
+        type="file"
+        ref={fileInputBackupRef}
+        accept=".json"
+        onChange={handleFileSelectBackup}
+        className="hidden"
+      />
+
+      {/* MODAL PERSONALIZADO DE CONFIRMACIÓN: RESTAURACIÓN DE COPIA DE SEGURIDAD */}
+      {isRestoreModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs animate-in fade-in">
+          <div className="bg-white rounded-2xl w-full max-w-lg border border-slate-200 shadow-2xl p-6 space-y-5 animate-in zoom-in-95 duration-150">
+            <div className="flex items-start gap-3.5">
+              <div className="w-11 h-11 rounded-2xl bg-amber-50 text-amber-600 border border-amber-200 flex items-center justify-center shrink-0 shadow-2xs">
+                <AlertTriangle className="w-6 h-6 text-amber-600" />
+              </div>
+              <div className="space-y-1.5 flex-1">
+                <div className="flex items-center gap-2">
+                  <h3 className="text-base font-bold text-slate-900">
+                    Advertencia de Sobrescritura
+                  </h3>
+                  <span className="px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider bg-amber-100 text-amber-800 border border-amber-200">
+                    Restauración
+                  </span>
+                </div>
+                <p className="text-xs text-slate-600 leading-relaxed">
+                  ¡Peligro! Esto sobrescribirá toda la base de datos actual con los datos del archivo de respaldo seleccionado. Esta acción no se puede deshacer.
+                </p>
+              </div>
+            </div>
+
+            {/* Ficha técnica del archivo seleccionado */}
+            {pendingRestoreFile && (
+              <div className="p-3.5 rounded-xl bg-slate-50 border border-slate-200/90 text-xs space-y-1.5">
+                <div className="flex items-center justify-between">
+                  <span className="font-semibold text-slate-600">Archivo de respaldo a procesar:</span>
+                  <span className="text-[11px] font-mono text-slate-500 font-semibold">
+                    {(pendingRestoreFile.size / 1024).toFixed(1)} KB
+                  </span>
+                </div>
+                <div className="flex items-center gap-2 text-slate-900 font-mono font-bold bg-white px-3 py-2 rounded-lg border border-slate-200 truncate">
+                  <Database className="w-4 h-4 text-emerald-600 shrink-0" />
+                  <span className="truncate" title={pendingRestoreFile.name}>
+                    {pendingRestoreFile.name}
+                  </span>
+                </div>
+              </div>
+            )}
+
+            <div className="p-3 rounded-xl bg-amber-50/80 border border-amber-200/80 text-xs text-amber-900 flex items-start gap-2">
+              <ShieldCheck className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
+              <p className="leading-relaxed text-[11px]">
+                Se aplicará una <strong>transacción atómica</strong>: si el archivo presenta alguna inconsistencia relacional, se ejecutará rollback automático y la base de datos actual se mantendrá intacta.
+              </p>
+            </div>
+
+            <div className="flex items-center justify-end gap-3 pt-3 border-t border-slate-100">
+              <button
+                type="button"
+                onClick={handleCancelarRestauracion}
+                disabled={isRestoringBackup}
+                className="px-4 py-2.5 rounded-xl border border-slate-200 text-xs font-semibold text-slate-700 hover:bg-slate-50 transition-colors cursor-pointer disabled:opacity-50"
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                onClick={handleConfirmarRestauracion}
+                disabled={isRestoringBackup}
+                className="px-5 py-2.5 rounded-xl bg-rose-600 hover:bg-rose-700 active:scale-[0.99] text-white text-xs font-semibold shadow-xs transition-all cursor-pointer flex items-center gap-1.5 disabled:opacity-50 disabled:cursor-not-allowed border border-rose-700"
+              >
+                {isRestoringBackup ? (
+                  <>
+                    <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                    <span>Restaurando Base de Datos...</span>
+                  </>
+                ) : (
+                  <>
+                    <UploadCloud className="w-3.5 h-3.5" />
+                    <span>Sí, Restaurar Base de Datos</span>
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL PERSONALIZADO DE CONFIRMACIÓN: HARD RESET (DEV ONLY) */}
+      {isResetModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs animate-in fade-in">
+          <div className="bg-white rounded-2xl w-full max-w-lg border border-slate-200 shadow-2xl p-6 space-y-5 animate-in zoom-in-95 duration-150">
+            <div className="flex items-start gap-3.5">
+              <div className="w-11 h-11 rounded-2xl bg-rose-50 text-rose-600 border border-rose-100 flex items-center justify-center shrink-0 shadow-2xs">
+                <AlertTriangle className="w-6 h-6" />
+              </div>
+              <div className="space-y-1.5 flex-1">
+                <div className="flex items-center gap-2">
+                  <h3 className="text-base font-bold text-slate-900">
+                    Advertencia Crítica
+                  </h3>
+                  <span className="px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider bg-rose-100 text-rose-800 border border-rose-200">
+                    Hard Reset • Dev
+                  </span>
+                </div>
+                <p className="text-xs text-slate-600 leading-relaxed">
+                  ¿Estás seguro de que deseas vaciar los datos de prueba? Esta acción es irreversible y eliminará todos los registros operativos del entorno de desarrollo.
+                </p>
+              </div>
+            </div>
+
+            {/* Cuadro informativo de tablas afectadas vs protegidas */}
+            <div className="space-y-2.5 text-xs bg-slate-50/90 border border-slate-200/90 rounded-xl p-4">
+              <div className="flex items-start gap-2 text-rose-800">
+                <Trash2 className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
+                <div>
+                  <span className="font-bold">Tablas que se vaciarán permanentemente:</span>
+                  <p className="text-slate-600 text-[11px] mt-0.5 leading-relaxed">
+                    • <strong>Cierres de caja</strong> y arqueos de ruta<br />
+                    • <strong>Abonos</strong> y recaudos de cobranza<br />
+                    • <strong>Líneas y cuotas de crédito</strong> (<code className="font-mono text-rose-900">credito_detalle</code>)<br />
+                    • <strong>Créditos</strong> y contratos activos<br />
+                    • <strong>Clientes</strong> y referencias comerciales
+                  </p>
+                </div>
+              </div>
+
+              <div className="border-t border-slate-200/80 pt-2.5 flex items-start gap-2 text-emerald-800">
+                <ShieldCheck className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
+                <div>
+                  <span className="font-bold">Tablas que se conservarán intactas:</span>
+                  <p className="text-slate-600 text-[11px] mt-0.5 leading-relaxed">
+                    • <strong className="text-slate-800">Usuarios</strong> (credenciales de acceso, contraseñas y roles)<br />
+                    • <strong className="text-slate-800">Productos</strong> (catálogo e inventario base)
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            <div className="flex items-center justify-end gap-3 pt-3 border-t border-slate-100">
+              <button
+                type="button"
+                onClick={() => setIsResetModalOpen(false)}
+                disabled={isResettingData}
+                className="px-4 py-2.5 rounded-xl border border-slate-200 text-xs font-semibold text-slate-700 hover:bg-slate-50 transition-colors cursor-pointer disabled:opacity-50"
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                onClick={handleConfirmHardReset}
+                disabled={isResettingData}
+                className="px-4 py-2.5 rounded-xl bg-rose-600 hover:bg-rose-700 active:scale-[0.99] text-white text-xs font-semibold shadow-xs transition-all cursor-pointer flex items-center gap-1.5 disabled:opacity-50 disabled:cursor-not-allowed border border-rose-700"
+              >
+                {isResettingData ? (
+                  <>
+                    <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                    <span>Limpiando Todo...</span>
+                  </>
+                ) : (
+                  <>
+                    <Trash2 className="w-3.5 h-3.5" />
+                    <span>Sí, Limpiar Todo</span>
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Notificación Flotante Elegante (Toast Tailwind) */}
       <div
         className={cn(
@@ -3292,13 +3555,44 @@ export default function ConfiguracionPage() {
         )}
       >
         {toast && (
-          <div className="bg-white/95 backdrop-blur-md rounded-2xl border border-emerald-200/90 p-4 shadow-xl shadow-slate-900/10 flex items-start gap-3.5 relative overflow-hidden">
-            {/* Acento verde institucional lateral */}
-            <div className="absolute left-0 top-0 bottom-0 w-1.5 bg-emerald-500 rounded-l-2xl" />
+          <div
+            className={cn(
+              'bg-white/95 backdrop-blur-md rounded-2xl border p-4 shadow-xl shadow-slate-900/10 flex items-start gap-3.5 relative overflow-hidden',
+              toast.type === 'error'
+                ? 'border-rose-200/90'
+                : toast.type === 'warning'
+                ? 'border-amber-200/90'
+                : 'border-emerald-200/90'
+            )}
+          >
+            {/* Acento lateral de color según estado */}
+            <div
+              className={cn(
+                'absolute left-0 top-0 bottom-0 w-1.5 rounded-l-2xl',
+                toast.type === 'error'
+                  ? 'bg-rose-500'
+                  : toast.type === 'warning'
+                  ? 'bg-amber-500'
+                  : 'bg-emerald-500'
+              )}
+            />
 
-            {/* Ícono de verificación institucional */}
-            <div className="w-9 h-9 rounded-xl bg-emerald-50 text-emerald-600 border border-emerald-200/60 flex items-center justify-center shrink-0 mt-0.5 shadow-xs">
-              <CheckCircle2 className="w-5 h-5" />
+            {/* Ícono institucional semántico */}
+            <div
+              className={cn(
+                'w-9 h-9 rounded-xl border flex items-center justify-center shrink-0 mt-0.5 shadow-xs',
+                toast.type === 'error'
+                  ? 'bg-rose-50 text-rose-600 border-rose-200/60'
+                  : toast.type === 'warning'
+                  ? 'bg-amber-50 text-amber-600 border-amber-200/60'
+                  : 'bg-emerald-50 text-emerald-600 border-emerald-200/60'
+              )}
+            >
+              {toast.type === 'error' ? (
+                <AlertTriangle className="w-5 h-5" />
+              ) : (
+                <CheckCircle2 className="w-5 h-5" />
+              )}
             </div>
 
             <div className="flex-1 min-w-0 pr-1">
@@ -3306,8 +3600,17 @@ export default function ConfiguracionPage() {
                 <h4 className="text-xs sm:text-sm font-bold text-slate-900 truncate">
                   {toast.title}
                 </h4>
-                <span className="text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 border border-emerald-200/60 shrink-0">
-                  Éxito
+                <span
+                  className={cn(
+                    'text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-full border shrink-0',
+                    toast.type === 'error'
+                      ? 'bg-rose-100 text-rose-800 border-rose-200/60'
+                      : toast.type === 'warning'
+                      ? 'bg-amber-100 text-amber-800 border-amber-200/60'
+                      : 'bg-emerald-100 text-emerald-800 border-emerald-200/60'
+                  )}
+                >
+                  {toast.type === 'error' ? 'Error' : toast.type === 'warning' ? 'Aviso' : 'Éxito'}
                 </span>
               </div>
               <p className="text-xs text-slate-600 mt-1 leading-relaxed">

@@ -5,16 +5,19 @@ import os
 import re
 from datetime import date, datetime, time
 from decimal import Decimal
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, File, HTTPException, Response, UploadFile, status
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import Date, DateTime, Numeric, func, select
+from sqlalchemy import Date, DateTime, Numeric, delete, func, select
 from sqlalchemy.schema import FetchedValue
 
 from app.core.database import Base, get_db
 from app.core.deps import get_user_from_header_or_query
+from app.models.abono import Abono, CierreCaja
+from app.models.cliente import Cliente, ReferenciaCliente
+from app.models.credito import Credito, CreditoDetalle
 from app.models.usuario import RolUsuario, Usuario
 import app.models  # noqa: F401 - Asegura el registro íntegro de todos los modelos ORM en Base.metadata
 
@@ -304,5 +307,76 @@ async def restaurar_respaldo_completo(
         "total_tablas": len(Base.metadata.sorted_tables),
         "total_registros": total_insertados,
         "detalles": tablas_procesadas,
+        "fecha": datetime.now().isoformat(),
+    }
+
+
+@router.post(
+    "/hard-reset-dev",
+    summary="Limpieza total de datos de prueba para entorno de desarrollo (Hard Reset)",
+    description=(
+        "Elimina en cascada transaccional y orden referencial estricto: cierres_caja, abonos, "
+        "credito_detalle, creditos, referencias_cliente y clientes. Preserva intactas las tablas de "
+        "usuarios (autenticación) y productos (catálogo/inventario base)."
+    ),
+)
+async def hard_reset_dev(
+    db: AsyncSession = Depends(get_db),
+    usuario_auth: Optional[Usuario] = Depends(get_user_from_header_or_query),
+) -> Dict[str, Any]:
+    """Ejecuta una limpieza completa de datos transaccionales respetando foreign keys."""
+    # Si la sesión tiene una transacción abierta previa, cerrarla para un bloque maestro
+    if db.in_transaction():
+        await db.commit()
+
+    registros_eliminados: Dict[str, int] = {}
+    try:
+        async with db.begin():
+            # 1. cierres_caja (elimina cierres antes o después de abonos)
+            res_cierres = await db.execute(delete(CierreCaja))
+            registros_eliminados["cierres_caja"] = res_cierres.rowcount if res_cierres.rowcount is not None and res_cierres.rowcount >= 0 else 0
+
+            # 2. abonos (recaudos en terreno)
+            res_abonos = await db.execute(delete(Abono))
+            registros_eliminados["abonos"] = res_abonos.rowcount if res_abonos.rowcount is not None and res_abonos.rowcount >= 0 else 0
+
+            # 3. credito_detalle (líneas de artículos por contrato)
+            res_detalles = await db.execute(delete(CreditoDetalle))
+            registros_eliminados["credito_detalle"] = res_detalles.rowcount if res_detalles.rowcount is not None and res_detalles.rowcount >= 0 else 0
+
+            # 4. creditos (contratos de crédito y contado)
+            res_creditos = await db.execute(delete(Credito))
+            registros_eliminados["creditos"] = res_creditos.rowcount if res_creditos.rowcount is not None and res_creditos.rowcount >= 0 else 0
+
+            # 5. referencias_cliente (codeudores y familiares de respaldo)
+            res_refs = await db.execute(delete(ReferenciaCliente))
+            registros_eliminados["referencias_cliente"] = res_refs.rowcount if res_refs.rowcount is not None and res_refs.rowcount >= 0 else 0
+
+            # 6. clientes (directorio de clientes titulares)
+            res_clientes = await db.execute(delete(Cliente))
+            registros_eliminados["clientes"] = res_clientes.rowcount if res_clientes.rowcount is not None and res_clientes.rowcount >= 0 else 0
+
+        logger.info(
+            f"[HARD RESET DEV] Limpieza ejecutada exitosamente. Registros eliminados: {registros_eliminados} "
+            f"por usuario {getattr(usuario_auth, 'nombre', 'Anónimo/Dev')}"
+        )
+
+    except Exception as e:
+        logger.error(f"[HARD RESET DEV] Error durante el vaciado de tablas: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=(
+                f"Error al ejecutar Hard Reset: {str(e)}. "
+                "Se aplicó rollback y no se modificaron los registros."
+            ),
+        )
+
+    total_vacios = sum(registros_eliminados.values())
+
+    return {
+        "success": True,
+        "mensaje": f"Hard Reset completado con éxito. Se eliminaron {total_vacios} registros transaccionales sin afectar usuarios ni productos.",
+        "eliminados": registros_eliminados,
+        "tablas_conservadas": ["usuarios", "productos"],
         "fecha": datetime.now().isoformat(),
     }
