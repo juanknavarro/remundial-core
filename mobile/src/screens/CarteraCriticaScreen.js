@@ -40,6 +40,9 @@ export default function CarteraCriticaScreen({ navigation }) {
   const [contratoSeleccionado, setContratoSeleccionado] = useState(null);
   const [detalleModalVisible, setDetalleModalVisible] = useState(false);
 
+  // Estado del patrón Acordeón (primera tarjeta expandida por defecto)
+  const [expandedIndex, setExpandedIndex] = useState(0);
+
   // Carga de datos de Cartera Crítica
   const cargarCarteraCritica = useCallback(async (isPullRefresh = false) => {
     if (isPullRefresh) {
@@ -143,7 +146,8 @@ export default function CarteraCriticaScreen({ navigation }) {
     setDetalleModalVisible(true);
   };
 
-  const renderCardCritica = ({ item }) => {
+  const renderCardCritica = ({ item, index }) => {
+    const isExpanded = expandedIndex === index;
     const clienteNombre = item.cliente?.nombres || item.cliente?.nombre_completo || item.cliente_nombre || 'Cliente Titular';
     const cedula = item.cliente?.cedula || item.cliente_cedula || 'S/N';
     const contratoCodigo = item.codigo_contrato || `CTR-${String(item.id_contrato || '').slice(0, 8).toUpperCase()}`;
@@ -158,83 +162,106 @@ export default function CarteraCriticaScreen({ navigation }) {
     const cobrador = item.cobrador?.nombre || item.cobrador_nombre || 'Cobrador en Ruta';
 
     return (
-      <View style={styles.alertCard}>
-        {/* Indicador Superior de Alerta */}
-        <View style={styles.cardHeader}>
-          <View style={styles.contratoBadge}>
-            <Text style={styles.contratoText}>{contratoCodigo}</Text>
+      <View style={[styles.alertCard, isExpanded && styles.alertCardExpanded]}>
+        {/* Cabecera Interactiva del Acordeón */}
+        <TouchableOpacity
+          style={styles.accordionHeaderTouchable}
+          onPress={() => setExpandedIndex(isExpanded ? -1 : index)}
+          activeOpacity={0.8}
+        >
+          <View style={styles.cardHeader}>
+            <View style={styles.contratoBadge}>
+              <Text style={styles.contratoText}>{contratoCodigo}</Text>
+            </View>
+
+            <View style={styles.headerRightGroup}>
+              <View style={styles.alertaBadge}>
+                <View style={styles.alertaPulse} />
+                <Text style={styles.alertaBadgeText}>
+                  ⚠️ {cuotasVencidas} de {totalCuotas} vencidas
+                </Text>
+              </View>
+              <Text style={styles.accordionChevronText}>
+                {isExpanded ? '▲' : '▼'}
+              </Text>
+            </View>
           </View>
 
-          <View style={styles.alertaBadge}>
-            <View style={styles.alertaPulse} />
-            <Text style={styles.alertaBadgeText}>
-              ⚠️ {cuotasVencidas} de {totalCuotas} cuotas vencidas
+          {/* Resumen colapsado permanente */}
+          <View style={styles.accordionSummaryRow}>
+            <Text style={styles.clienteNombre} numberOfLines={1}>
+              {clienteNombre}
+            </Text>
+            <Text style={styles.moraMontoHighlight}>
+              {formatCOP(totalVencido)}
             </Text>
           </View>
-        </View>
+        </TouchableOpacity>
 
-        {/* Cliente y Ubicación */}
-        <View style={styles.cardBody}>
-          <Text style={styles.clienteNombre} numberOfLines={1}>
-            {clienteNombre}
-          </Text>
-          <View style={styles.infoRow}>
-            <Text style={styles.docText}>CC: {cedula}</Text>
-            <Text style={styles.dotSeparator}>•</Text>
-            <Text style={styles.cityText}>📍 {ciudad}</Text>
+        {/* Cuerpo Expandido del Acordeón (index === expandedIndex) */}
+        {isExpanded ? (
+          <View style={styles.accordionExpandedContent}>
+            {/* Ubicación y Documento */}
+            <View style={styles.cardBody}>
+              <View style={styles.infoRow}>
+                <Text style={styles.docText}>CC: {cedula}</Text>
+                <Text style={styles.dotSeparator}>•</Text>
+                <Text style={styles.cityText}>📍 {ciudad}</Text>
+              </View>
+            </View>
+
+            {/* Bloque Financiero Crítico: Días de Mora y Total Vencido */}
+            <View style={styles.criticalStatsBox}>
+              <View style={styles.statCol}>
+                <Text style={styles.statLabel}>DÍAS EN MORA</Text>
+                <Text style={styles.diasMoraText}>⏱️ {diasMora} días</Text>
+              </View>
+
+              <View style={styles.statDivider} />
+
+              <View style={styles.statCol}>
+                <Text style={[styles.statLabel, { color: '#BE123C' }]}>TOTAL VENCIDO</Text>
+                <Text style={styles.totalVencidoText}>{formatCOP(totalVencido)}</Text>
+              </View>
+
+              <View style={styles.statDivider} />
+
+              <View style={styles.statCol}>
+                <Text style={styles.statLabel}>SALDO TOTAL</Text>
+                <Text style={styles.saldoTotalText}>{formatCOP(saldoPendiente)}</Text>
+              </View>
+            </View>
+
+            <View style={styles.cobradorRow}>
+              <Text style={styles.cobradorLabel}>Cobrador a cargo:</Text>
+              <Text style={styles.cobradorValue}>{cobrador}</Text>
+            </View>
+
+            {/* Botones Destacados de Acción */}
+            <View style={styles.cardActionsRow}>
+              <TouchableOpacity
+                style={styles.btnDetalle}
+                onPress={() => handleAbrirDetalle(item)}
+                activeOpacity={0.8}
+              >
+                <Text style={styles.btnDetalleIcon}>📋</Text>
+                <Text style={styles.btnDetalleText}>Ver Detalle</Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={[styles.btnLlamar, !telefono && styles.btnDisabled]}
+                onPress={() => handleLlamar(telefono)}
+                disabled={!telefono}
+                activeOpacity={0.8}
+              >
+                <Text style={styles.btnLlamarIcon}>📞</Text>
+                <Text style={styles.btnLlamarText}>
+                  {telefono ? `Llamar (${telefono})` : 'Sin Teléfono'}
+                </Text>
+              </TouchableOpacity>
+            </View>
           </View>
-        </View>
-
-        {/* Bloque Financiero Crítico: Días de Mora y Total Vencido */}
-        <View style={styles.criticalStatsBox}>
-          <View style={styles.statCol}>
-            <Text style={styles.statLabel}>DÍAS EN MORA</Text>
-            <Text style={styles.diasMoraText}>⏱️ {diasMora} días</Text>
-          </View>
-
-          <View style={styles.statDivider} />
-
-          <View style={styles.statCol}>
-            <Text style={[styles.statLabel, { color: '#BE123C' }]}>TOTAL VENCIDO</Text>
-            <Text style={styles.totalVencidoText}>{formatCOP(totalVencido)}</Text>
-          </View>
-
-          <View style={styles.statDivider} />
-
-          <View style={styles.statCol}>
-            <Text style={styles.statLabel}>SALDO TOTAL</Text>
-            <Text style={styles.saldoTotalText}>{formatCOP(saldoPendiente)}</Text>
-          </View>
-        </View>
-
-        <View style={styles.cobradorRow}>
-          <Text style={styles.cobradorLabel}>Cobrador a cargo:</Text>
-          <Text style={styles.cobradorValue}>{cobrador}</Text>
-        </View>
-
-        {/* Botones Destacados de Acción */}
-        <View style={styles.cardActionsRow}>
-          <TouchableOpacity
-            style={styles.btnDetalle}
-            onPress={() => handleAbrirDetalle(item)}
-            activeOpacity={0.8}
-          >
-            <Text style={styles.btnDetalleIcon}>📋</Text>
-            <Text style={styles.btnDetalleText}>Ver Detalle</Text>
-          </TouchableOpacity>
-
-          <TouchableOpacity
-            style={[styles.btnLlamar, !telefono && styles.btnDisabled]}
-            onPress={() => handleLlamar(telefono)}
-            disabled={!telefono}
-            activeOpacity={0.8}
-          >
-            <Text style={styles.btnLlamarIcon}>📞</Text>
-            <Text style={styles.btnLlamarText}>
-              {telefono ? `Llamar (${telefono})` : 'Sin Teléfono'}
-            </Text>
-          </TouchableOpacity>
-        </View>
+        ) : null}
       </View>
     );
   };
@@ -624,6 +651,39 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.08,
     shadowRadius: 10,
     elevation: 3,
+  },
+  alertCardExpanded: {
+    borderColor: '#E11D48',
+    shadowOpacity: 0.15,
+    shadowRadius: 12,
+  },
+  accordionHeaderTouchable: {
+    paddingVertical: 2,
+  },
+  headerRightGroup: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  accordionChevronText: {
+    fontSize: 12,
+    color: '#E11D48',
+    fontWeight: '800',
+    paddingHorizontal: 4,
+  },
+  accordionSummaryRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginTop: 4,
+  },
+  moraMontoHighlight: {
+    fontSize: 14,
+    fontWeight: '900',
+    color: '#BE123C',
+  },
+  accordionExpandedContent: {
+    marginTop: 10,
   },
   cardHeader: {
     flexDirection: 'row',

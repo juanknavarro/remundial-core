@@ -21,6 +21,7 @@ import {
   PersonalScreen,
   ComprobantesScreen,
   ReportesScreen,
+  ArqueoScreen,
   ClientesScreen,
   NuevaVentaScreen,
   CatalogoScreen,
@@ -118,6 +119,8 @@ export default function AppNavigator() {
           <Stack.Screen name="PersonalScreen" component={PersonalScreen} />
           <Stack.Screen name="ComprobantesScreen" component={ComprobantesScreen} />
           <Stack.Screen name="ReportesScreen" component={ReportesScreen} />
+          <Stack.Screen name="ArqueoScreen" component={ArqueoScreen} />
+          <Stack.Screen name="Arqueo" component={ArqueoScreen} />
           <Stack.Screen name="Personal" component={PersonalScreen} />
           <Stack.Screen name="Comprobantes" component={ComprobantesScreen} />
           <Stack.Screen name="Reportes" component={ReportesScreen} />

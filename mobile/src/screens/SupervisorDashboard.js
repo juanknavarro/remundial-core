@@ -17,7 +17,7 @@ import {
 } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useAuth } from '../context/AuthContext';
-import apiClient from '../api/client';
+import apiClient, { limpiarCredencialesLocales } from '../api/client';
 import InFrameModal from '../components/InFrameModal';
 import {
   STORAGE_KEYS,
@@ -51,16 +51,27 @@ export default function SupervisorDashboard({ navigation }) {
   const [activeTab, setActiveTab] = useState('inicio'); // 'inicio' | 'cartera'
   const [menuVisible, setMenuVisible] = useState(false);
 
+  // Estado del Modal de Confirmación de Cierre de Sesión (Estándar Corporativo)
+  const [showLogoutModal, setShowLogoutModal] = useState(false);
+
   // Estados de datos maestros
   const [creditos, setCreditos] = useState([]);
   const [abonos, setAbonos] = useState([]);
   const [resumen, setResumen] = useState(null);
+  const [cobradores, setCobradores] = useState([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
+
+  // Estados para asignación operativa de cobrador (Fase 1)
+  const [creditoParaAsignar, setCreditoParaAsignar] = useState(null);
+  const [modalAsignarVisible, setModalAsignarVisible] = useState(false);
+  const [busquedaCobrador, setBusquedaCobrador] = useState('');
+  const [isSavingCobrador, setIsSavingCobrador] = useState(false);
 
   // Estados de filtros para la pestaña Cartera
   const [filtroCartera, setFiltroCartera] = useState('todos'); // 'todos' | 'mora' | 'al_dia'
   const [busquedaCartera, setBusquedaCartera] = useState('');
+  const [expandedCarteraIndex, setExpandedCarteraIndex] = useState(0);
 
   // Estados de Marca Blanca y Empresa
   const [empresaNombre, setEmpresaNombre] = useState("Remundial Arte's");
@@ -76,10 +87,11 @@ export default function SupervisorDashboard({ navigation }) {
     }
 
     try {
-      const [resResumen, resCreditos, resAbonos] = await Promise.allSettled([
+      const [resResumen, resCreditos, resAbonos, resCobradores] = await Promise.allSettled([
         apiClient.get('/reportes/resumen-gerencial'),
         apiClient.get('/creditos'),
         apiClient.get('/abonos'),
+        apiClient.get('/usuarios?rol=cobrador'),
       ]);
 
       if (resResumen.status === 'fulfilled' && resResumen.value?.data) {
@@ -104,6 +116,17 @@ export default function SupervisorDashboard({ navigation }) {
         if (Array.isArray(cachedAbonos)) {
           setAbonos(cachedAbonos);
         }
+      }
+
+      if (resCobradores.status === 'fulfilled' && Array.isArray(resCobradores.value?.data)) {
+        setCobradores(resCobradores.value.data);
+      } else {
+        try {
+          const resUsers = await apiClient.get('/usuarios');
+          if (Array.isArray(resUsers.data)) {
+            setCobradores(resUsers.data.filter((u) => u.rol === 'cobrador'));
+          }
+        } catch (_) {}
       }
     } catch (err) {
       console.warn('[SupervisorDashboard] Error consultando métricas:', err);
@@ -293,21 +316,40 @@ export default function SupervisorDashboard({ navigation }) {
     });
   }, [creditos, filtroCartera, busquedaCartera]);
 
+  // ==========================================
+  // GESTIÓN DE CIERRE DE SESIÓN SEGURO Y CONFIRMACIÓN PERSONALIZADA
+  // ==========================================
   const handleCerrarSesion = () => {
     setMenuVisible(false);
-    if (Platform.OS === 'web') {
-      if (window.confirm('¿Está seguro de cerrar sesión en la aplicación móvil?')) {
-        logout();
-      }
-    } else {
-      Alert.alert(
-        'Cerrar Sesión',
-        '¿Está seguro de que desea salir del panel de supervisión?',
-        [
-          { text: 'Cancelar', style: 'cancel' },
-          { text: 'Salir', style: 'destructive', onPress: logout },
-        ]
-      );
+    setShowLogoutModal(true);
+  };
+
+  const handleConfirmLogout = async () => {
+    try {
+      setShowLogoutModal(false);
+      // 1. Limpieza profunda y exhaustiva en AsyncStorage, localStorage/sessionStorage y Axios
+      await limpiarCredencialesLocales();
+      // 2. Destruir sesión en el contexto global
+      await logout();
+      // 3. Redirección forzosa e inmediata a la pantalla de Login
+      try {
+        if (navigation?.reset) {
+          navigation.reset({
+            index: 0,
+            routes: [{ name: 'Login' }],
+          });
+        } else if (navigation?.navigate) {
+          navigation.navigate('Login');
+        }
+      } catch (_) {}
+    } catch (error) {
+      console.error('[SupervisorDashboard] Error al destruir sesión:', error);
+      await logout();
+      try {
+        if (navigation?.navigate) {
+          navigation.navigate('Login');
+        }
+      } catch (_) {}
     }
   };
 
@@ -329,9 +371,88 @@ export default function SupervisorDashboard({ navigation }) {
   };
 
   // =========================================================================
-  // COMPONENTE TARJETA DE CARTERA (VERTICAL, RESILIENTE A MÓVIL)
+  // GESTIÓN DE ASIGNACIÓN OPERATIVA DE COBRADOR (FASE 1)
   // =========================================================================
-  const renderCarteraCard = ({ item }) => {
+  const cobradoresFiltrados = useMemo(() => {
+    if (!busquedaCobrador.trim()) return cobradores;
+    const q = busquedaCobrador.trim().toLowerCase();
+    return cobradores.filter(
+      (c) =>
+        (c.nombre || '').toLowerCase().includes(q) ||
+        (c.cedula || '').toLowerCase().includes(q) ||
+        (c.telefono || '').toLowerCase().includes(q)
+    );
+  }, [cobradores, busquedaCobrador]);
+
+  const handleAbrirAsignacion = (item) => {
+    setCreditoParaAsignar(item);
+    setBusquedaCobrador('');
+    setModalAsignarVisible(true);
+  };
+
+  const handleEjecutarAsignacion = async (cobradorSeleccionado) => {
+    if (!creditoParaAsignar) return;
+    setIsSavingCobrador(true);
+    try {
+      const targetCobradorId = cobradorSeleccionado ? cobradorSeleccionado.id : null;
+      await apiClient.patch(`/creditos/${creditoParaAsignar.id_contrato}`, {
+        cobrador_id: targetCobradorId,
+      });
+
+      const cobradorActualizado = cobradorSeleccionado
+        ? {
+            id: cobradorSeleccionado.id,
+            nombre: cobradorSeleccionado.nombre,
+            telefono: cobradorSeleccionado.telefono,
+            rol: cobradorSeleccionado.rol,
+          }
+        : null;
+
+      // Actualizar estado local reactivamente
+      setCreditos((prev) => {
+        const updated = prev.map((c) => {
+          if (c.id_contrato === creditoParaAsignar.id_contrato) {
+            return {
+              ...c,
+              cobrador_id: targetCobradorId,
+              cobrador: cobradorActualizado,
+              cobrador_nombre: cobradorActualizado ? cobradorActualizado.nombre : null,
+            };
+          }
+          return c;
+        });
+        guardarEnCache(STORAGE_KEYS.CACHE_CREDITOS, updated);
+        return updated;
+      });
+
+      setModalAsignarVisible(false);
+      setCreditoParaAsignar(null);
+      if (Platform.OS === 'web') {
+        alert(`Cobrador ${cobradorSeleccionado ? `"${cobradorSeleccionado.nombre}" asignado` : 'removido'} correctamente.`);
+      } else {
+        Alert.alert(
+          'Asignación Exitosa',
+          `Cobrador ${cobradorSeleccionado ? `"${cobradorSeleccionado.nombre}" asignado` : 'removido'} a la ruta del contrato.`
+        );
+      }
+    } catch (error) {
+      console.error('Error asignando cobrador:', error);
+      const msg = error.response?.data?.detail || error.message || 'Error al asignar cobrador';
+      if (Platform.OS === 'web') {
+        alert('Error: ' + msg);
+      } else {
+        Alert.alert('Error', msg);
+      }
+    } finally {
+      setIsSavingCobrador(false);
+    }
+  };
+
+  // =========================================================================
+  // COMPONENTE TARJETA DE CARTERA (PATRÓN ACORDEÓN INTERACTIVO)
+  // =========================================================================
+  const renderCarteraCard = ({ item, index }) => {
+    const isExpanded = index === expandedCarteraIndex;
     const contratoCodigo = item.id_contrato
       ? `CTR-${String(item.id_contrato).slice(0, 8).toUpperCase()}`
       : 'CTR-ACTIVO';
@@ -340,89 +461,142 @@ export default function SupervisorDashboard({ navigation }) {
     const cuotasVencidas = Number(item.cuotas_vencidas_count || 0);
     const esMora = cuotasVencidas > 0 || item.es_cartera_critica;
     const telefono = item.cliente?.telefono;
+    const cobradorNombreActual = item.cobrador?.nombre || item.cobrador_nombre;
 
     return (
-      <View style={styles.carteraCardItem}>
-        {/* Encabezado de la Tarjeta */}
-        <View style={styles.carteraCardHeader}>
-          <View style={styles.contratoBadge}>
-            <Text style={styles.contratoBadgeText}>{contratoCodigo}</Text>
-          </View>
+      <View style={[styles.carteraCardItem, isExpanded && styles.carteraCardItemExpanded]}>
+        {/* Cabecera Interactiva del Acordeón */}
+        <TouchableOpacity
+          style={styles.carteraHeaderTouchable}
+          onPress={() => setExpandedCarteraIndex(isExpanded ? -1 : index)}
+          activeOpacity={0.7}
+        >
+          <View style={styles.carteraCardHeader}>
+            <View style={styles.contratoBadge}>
+              <Text style={styles.contratoBadgeText}>{contratoCodigo}</Text>
+            </View>
 
-          {esMora ? (
-            <View style={styles.moraBadge}>
-              <Text style={styles.moraBadgeText}>
-                ⚠️ Mora ({cuotasVencidas} {cuotasVencidas === 1 ? 'cuota' : 'cuotas'})
+            <View style={styles.carteraHeaderRightGroup}>
+              {esMora ? (
+                <View style={styles.moraBadge}>
+                  <Text style={styles.moraBadgeText}>
+                    ⚠️ Mora ({cuotasVencidas})
+                  </Text>
+                </View>
+              ) : (
+                <View style={styles.alDiaBadge}>
+                  <Text style={styles.alDiaBadgeText}>✓ Al Día</Text>
+                </View>
+              )}
+              <Text style={styles.carteraChevronText}>
+                {isExpanded ? '▲' : '▼'}
               </Text>
             </View>
-          ) : (
-            <View style={styles.alDiaBadge}>
-              <Text style={styles.alDiaBadgeText}>✓ Al Día</Text>
-            </View>
-          )}
-        </View>
-
-        {/* Información Principal: Cliente y Ciudad */}
-        <View style={styles.carteraCardBody}>
-          <Text style={styles.carteraClienteNombre}>{clienteNombre}</Text>
-          <View style={styles.carteraCiudadRow}>
-            <Text style={styles.carteraPinIcon}>📍</Text>
-            <Text style={styles.carteraCiudadText}>{sectorCiudad}</Text>
-            {item.cliente?.cedula ? (
-              <Text style={styles.carteraCedulaText}>• CC {item.cliente.cedula}</Text>
-            ) : null}
           </View>
-        </View>
 
-        {/* Desglose Financiero (Monto y Cuotas) */}
-        <View style={styles.carteraFinanzasRow}>
-          <View style={styles.carteraFinanzaCol}>
-            <Text style={styles.carteraFinanzaLabel}>SALDO PENDIENTE</Text>
+          {/* Resumen Permanente en Cabecera: Cliente y Saldo */}
+          <View style={styles.carteraSummaryRow}>
+            <Text style={styles.carteraClienteNombre} numberOfLines={1}>
+              {clienteNombre}
+            </Text>
             <Text
               style={[
-                styles.carteraFinanzaValor,
+                styles.carteraSummarySaldo,
                 esMora ? styles.carteraFinanzaValorMora : styles.carteraFinanzaValorOk,
               ]}
             >
               {formatCOP(item.saldo_pendiente)}
             </Text>
           </View>
+        </TouchableOpacity>
 
-          <View style={styles.carteraFinanzaCol}>
-            <Text style={styles.carteraFinanzaLabel}>VALOR CUOTA</Text>
-            <Text style={styles.carteraFinanzaValorSec}>
-              {formatCOP(item.valor_cuota)}
-            </Text>
-          </View>
+        {/* Cuerpo Expandido del Acordeón (index === expandedCarteraIndex) */}
+        {isExpanded ? (
+          <View style={styles.carteraExpandedContent}>
+            {/* Ubicación y Documento */}
+            <View style={styles.carteraCiudadRow}>
+              <Text style={styles.carteraPinIcon}>📍</Text>
+              <Text style={styles.carteraCiudadText}>{sectorCiudad}</Text>
+              {item.cliente?.cedula ? (
+                <Text style={styles.carteraCedulaText}>• CC {item.cliente.cedula}</Text>
+              ) : null}
+            </View>
 
-          <View style={styles.carteraFinanzaCol}>
-            <Text style={styles.carteraFinanzaLabel}>PLAZO</Text>
-            <Text style={styles.carteraFinanzaValorSec}>
-              {item.numero_cuotas || 4} cuotas
-            </Text>
-          </View>
-        </View>
+            {/* Indicador de Cobrador Asignado y Botón de Asignación Operativa */}
+            <View style={styles.carteraCobradorRow}>
+              <View style={styles.carteraCobradorLeft}>
+                <Text style={styles.carteraCobradorLabel}>COBRADOR EN RUTA</Text>
+                <View style={styles.carteraCobradorBadge}>
+                  <Text style={styles.carteraCobradorIcon}>🛵</Text>
+                  <Text style={styles.carteraCobradorNombre} numberOfLines={1}>
+                    {cobradorNombreActual || 'Sin Asignar'}
+                  </Text>
+                </View>
+              </View>
 
-        {/* Acciones Rápidas */}
-        {telefono ? (
-          <View style={styles.carteraCardFooter}>
-            <TouchableOpacity
-              style={styles.carteraActionBtn}
-              onPress={() => handleLlamarCliente(telefono)}
-              activeOpacity={0.75}
-            >
-              <Text style={styles.carteraActionBtnIcon}>📞</Text>
-              <Text style={styles.carteraActionBtnText}>Llamar ({telefono})</Text>
-            </TouchableOpacity>
+              <TouchableOpacity
+                style={styles.carteraAsignarBtn}
+                onPress={() => handleAbrirAsignacion(item)}
+                activeOpacity={0.8}
+              >
+                <Text style={styles.carteraAsignarBtnIcon}>⇄</Text>
+                <Text style={styles.carteraAsignarBtnText}>
+                  {cobradorNombreActual || item.cobrador_id ? 'Reasignar' : 'Asignar'}
+                </Text>
+              </TouchableOpacity>
+            </View>
 
-            <TouchableOpacity
-              style={[styles.carteraActionBtn, styles.carteraActionBtnWs]}
-              onPress={() => Linking.openURL(`https://wa.me/57${telefono}`)}
-              activeOpacity={0.75}
-            >
-              <Text style={styles.carteraActionBtnIcon}>💬</Text>
-              <Text style={styles.carteraActionBtnText}>WhatsApp</Text>
-            </TouchableOpacity>
+            {/* Desglose Financiero (Monto y Cuotas) */}
+            <View style={styles.carteraFinanzasRow}>
+              <View style={styles.carteraFinanzaCol}>
+                <Text style={styles.carteraFinanzaLabel}>SALDO PENDIENTE</Text>
+                <Text
+                  style={[
+                    styles.carteraFinanzaValor,
+                    esMora ? styles.carteraFinanzaValorMora : styles.carteraFinanzaValorOk,
+                  ]}
+                >
+                  {formatCOP(item.saldo_pendiente)}
+                </Text>
+              </View>
+
+              <View style={styles.carteraFinanzaCol}>
+                <Text style={styles.carteraFinanzaLabel}>VALOR CUOTA</Text>
+                <Text style={styles.carteraFinanzaValorSec}>
+                  {formatCOP(item.valor_cuota)}
+                </Text>
+              </View>
+
+              <View style={styles.carteraFinanzaCol}>
+                <Text style={styles.carteraFinanzaLabel}>PLAZO</Text>
+                <Text style={styles.carteraFinanzaValorSec}>
+                  {item.numero_cuotas || 4} cuotas
+                </Text>
+              </View>
+            </View>
+
+            {/* Acciones Rápidas */}
+            {telefono ? (
+              <View style={styles.carteraCardFooter}>
+                <TouchableOpacity
+                  style={styles.carteraActionBtn}
+                  onPress={() => handleLlamarCliente(telefono)}
+                  activeOpacity={0.75}
+                >
+                  <Text style={styles.carteraActionBtnIcon}>📞</Text>
+                  <Text style={styles.carteraActionBtnText}>Llamar ({telefono})</Text>
+                </TouchableOpacity>
+
+                <TouchableOpacity
+                  style={[styles.carteraActionBtn, styles.carteraActionBtnWs]}
+                  onPress={() => Linking.openURL(`https://wa.me/57${telefono}`)}
+                  activeOpacity={0.75}
+                >
+                  <Text style={styles.carteraActionBtnIcon}>💬</Text>
+                  <Text style={styles.carteraActionBtnText}>WhatsApp</Text>
+                </TouchableOpacity>
+              </View>
+            ) : null}
           </View>
         ) : null}
       </View>
@@ -994,7 +1168,23 @@ export default function SupervisorDashboard({ navigation }) {
                   <Text style={styles.menuGridSub}>Recibos y compartir</Text>
                 </TouchableOpacity>
 
-                {/* Opción 7: Reportes Gerenciales */}
+                {/* Opción 7: Arqueo de Caja (Conciliación de Rutas) */}
+                <TouchableOpacity
+                  style={styles.menuGridItem}
+                  onPress={() => {
+                    setMenuVisible(false);
+                    navigation.navigate('ArqueoScreen');
+                  }}
+                  activeOpacity={0.75}
+                >
+                  <View style={[styles.menuGridIconCircle, { backgroundColor: '#ECFDF5' }]}>
+                    <Text style={styles.menuGridIconText}>⚖️</Text>
+                  </View>
+                  <Text style={styles.menuGridTitle}>Arqueo de Caja</Text>
+                  <Text style={styles.menuGridSub}>Conciliación de rutas</Text>
+                </TouchableOpacity>
+
+                {/* Opción 8: Reportes Gerenciales */}
                 <TouchableOpacity
                   style={styles.menuGridItem}
                   onPress={() => {
@@ -1007,10 +1197,10 @@ export default function SupervisorDashboard({ navigation }) {
                     <Text style={styles.menuGridIconText}>📈</Text>
                   </View>
                   <Text style={styles.menuGridTitle}>Reportes</Text>
-                  <Text style={styles.menuGridSub}>Arqueo y balances</Text>
+                  <Text style={styles.menuGridSub}>Balances y métricas</Text>
                 </TouchableOpacity>
 
-                {/* Opción 8: POS Móvil */}
+                {/* Opción 9: POS Móvil */}
                 <TouchableOpacity
                   style={styles.menuGridItem}
                   onPress={() => {
@@ -1026,7 +1216,7 @@ export default function SupervisorDashboard({ navigation }) {
                   <Text style={styles.menuGridSub}>Radicación directa</Text>
                 </TouchableOpacity>
 
-                {/* Opción 9: Acerca de */}
+                {/* Opción 10: Acerca de */}
                 <TouchableOpacity
                   style={styles.menuGridItem}
                   onPress={() => {
@@ -1053,6 +1243,207 @@ export default function SupervisorDashboard({ navigation }) {
               >
                 <Text style={styles.menuLogoutIcon}>🚪</Text>
                 <Text style={styles.menuLogoutText}>Cerrar Sesión Segura</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </InFrameModal>
+
+      {/* MODAL IN-FRAME DE ASIGNACIÓN OPERATIVA DE COBRADOR (FASE 1) */}
+      <InFrameModal
+        visible={modalAsignarVisible}
+        transparent={true}
+        animationType="fade"
+        onRequestClose={() => !isSavingCobrador && setModalAsignarVisible(false)}
+      >
+        <View style={styles.modalBackdrop}>
+          <TouchableOpacity
+            style={styles.modalDismissArea}
+            activeOpacity={1}
+            onPress={() => !isSavingCobrador && setModalAsignarVisible(false)}
+          />
+
+          <View style={styles.asignarSheet}>
+            <View style={styles.menuHandleBar} />
+
+            <View style={styles.asignarHeaderRow}>
+              <View style={{ flex: 1, marginRight: 8 }}>
+                <Text style={styles.asignarSheetTitle}>Asignar Cobrador</Text>
+                <Text style={styles.asignarSheetSubtitle} numberOfLines={1}>
+                  {creditoParaAsignar
+                    ? `${creditoParaAsignar.codigo_contrato || `CTR-${String(creditoParaAsignar.id_contrato).slice(0, 8).toUpperCase()}`} • ${creditoParaAsignar.cliente?.nombres || creditoParaAsignar.cliente?.nombre_completo || 'Cliente'}`
+                    : 'Seleccione el cobrador en ruta'}
+                </Text>
+              </View>
+              <TouchableOpacity
+                style={styles.menuCloseBtn}
+                onPress={() => !isSavingCobrador && setModalAsignarVisible(false)}
+                disabled={isSavingCobrador}
+              >
+                <Text style={styles.menuCloseBtnText}>✕</Text>
+              </TouchableOpacity>
+            </View>
+
+            {/* Buscador de Cobradores */}
+            <View style={styles.asignarSearchBar}>
+              <Text style={styles.searchIcon}>🔍</Text>
+              <TextInput
+                style={styles.asignarSearchInput}
+                placeholder="Buscar cobrador por nombre o teléfono..."
+                placeholderTextColor="#94A3B8"
+                value={busquedaCobrador}
+                onChangeText={setBusquedaCobrador}
+                clearButtonMode="while-editing"
+                editable={!isSavingCobrador}
+              />
+              {busquedaCobrador.length > 0 ? (
+                <TouchableOpacity onPress={() => setBusquedaCobrador('')}>
+                  <Text style={styles.searchClearBtn}>✕</Text>
+                </TouchableOpacity>
+              ) : null}
+            </View>
+
+            {/* Listado de Cobradores */}
+            {isSavingCobrador ? (
+              <View style={styles.asignarLoadingBox}>
+                <ActivityIndicator size="small" color="#059669" />
+                <Text style={styles.asignarLoadingText}>Actualizando cobrador asignado...</Text>
+              </View>
+            ) : (
+              <ScrollView style={{ maxHeight: 320 }} showsVerticalScrollIndicator={false}>
+                {/* Opción para Desasignar si el contrato ya tiene cobrador */}
+                {(creditoParaAsignar?.cobrador_id || creditoParaAsignar?.cobrador) ? (
+                  <TouchableOpacity
+                    style={styles.cobradorItemRowUnassign}
+                    onPress={() => handleEjecutarAsignacion(null)}
+                    activeOpacity={0.7}
+                  >
+                    <View style={styles.cobradorIconCircleGray}>
+                      <Text style={{ fontSize: 14 }}>🚫</Text>
+                    </View>
+                    <View style={{ flex: 1 }}>
+                      <Text style={styles.cobradorUnassignText}>Dejar sin cobrador asignado</Text>
+                      <Text style={styles.cobradorItemSub}>Remueve la asignación actual de la ruta</Text>
+                    </View>
+                    <Text style={styles.cobradorSelectArrow}>→</Text>
+                  </TouchableOpacity>
+                ) : null}
+
+                {cobradoresFiltrados.length === 0 ? (
+                  <View style={styles.asignarEmptyBox}>
+                    <Text style={styles.asignarEmptyText}>
+                      {cobradores.length === 0
+                        ? 'No hay cobradores activos registrados en el sistema.'
+                        : `No se encontraron cobradores para "${busquedaCobrador}".`}
+                    </Text>
+                  </View>
+                ) : (
+                  cobradoresFiltrados.map((cob) => {
+                    const esActual =
+                      creditoParaAsignar?.cobrador_id === cob.id ||
+                      creditoParaAsignar?.cobrador?.id === cob.id;
+                    return (
+                      <TouchableOpacity
+                        key={cob.id}
+                        style={[
+                          styles.cobradorItemRow,
+                          esActual && styles.cobradorItemRowSelected,
+                        ]}
+                        onPress={() => handleEjecutarAsignacion(cob)}
+                        activeOpacity={0.75}
+                      >
+                        <View
+                          style={[
+                            styles.cobradorIconCircle,
+                            esActual && { backgroundColor: '#059669' },
+                          ]}
+                        >
+                          <Text
+                            style={[
+                              styles.cobradorIconText,
+                              esActual && { color: '#FFFFFF' },
+                            ]}
+                          >
+                            🛵
+                          </Text>
+                        </View>
+
+                        <View style={{ flex: 1 }}>
+                          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                            <Text style={styles.cobradorItemNombre}>{cob.nombre}</Text>
+                            {esActual ? (
+                              <View style={styles.cobradorActualBadge}>
+                                <Text style={styles.cobradorActualBadgeText}>ACTUAL</Text>
+                              </View>
+                            ) : null}
+                          </View>
+                          <Text style={styles.cobradorItemSub}>
+                            {cob.telefono ? `📞 ${cob.telefono}` : 'Sin teléfono'} • {cob.zona || 'Ruta activa'}
+                          </Text>
+                        </View>
+
+                        <View
+                          style={[
+                            styles.cobradorRadio,
+                            esActual && styles.cobradorRadioSelected,
+                          ]}
+                        >
+                          {esActual ? <View style={styles.cobradorRadioInner} /> : null}
+                        </View>
+                      </TouchableOpacity>
+                    );
+                  })
+                )}
+              </ScrollView>
+            )}
+          </View>
+        </View>
+      </InFrameModal>
+
+      {/* ========================================================================= */}
+      {/* MODAL DE CONFIRMACIÓN DE CIERRE DE SESIÓN (ESTÁNDAR CORPORATIVO)          */}
+      {/* ========================================================================= */}
+      <InFrameModal
+        visible={showLogoutModal}
+        transparent={true}
+        animationType="fade"
+        onRequestClose={() => setShowLogoutModal(false)}
+      >
+        <View style={styles.modalBackdropCenter}>
+          <View style={styles.logoutModalCard}>
+            <View style={styles.logoutModalHeader}>
+              <View style={styles.logoutIconBadge}>
+                <Text style={styles.logoutIconText}>⎋</Text>
+              </View>
+              <View style={styles.logoutModalTitleCol}>
+                <Text style={styles.logoutBadgeText}>CONFIRMACIÓN DE SALIDA</Text>
+                <Text style={styles.logoutModalQuestion}>
+                  ¿Estás seguro de que deseas cerrar sesión?
+                </Text>
+              </View>
+            </View>
+
+            <Text style={styles.logoutModalMessage}>
+              Tu sesión de supervisor será finalizada de forma segura. Tendrás que ingresar nuevamente con tus credenciales corporativas para acceder a la plataforma.
+            </Text>
+
+            <View style={styles.logoutModalActions}>
+              <TouchableOpacity
+                style={styles.logoutCancelBtn}
+                onPress={() => setShowLogoutModal(false)}
+                accessibilityRole="button"
+                accessibilityLabel="Cancelar cierre de sesión"
+              >
+                <Text style={styles.logoutCancelBtnText}>Cancelar</Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={styles.logoutConfirmBtn}
+                onPress={handleConfirmLogout}
+                accessibilityRole="button"
+                accessibilityLabel="Confirmar salida y cerrar sesión"
+              >
+                <Text style={styles.logoutConfirmBtnText}>Sí, Salir</Text>
               </TouchableOpacity>
             </View>
           </View>
@@ -1582,6 +1973,38 @@ const styles = StyleSheet.create({
     shadowRadius: 8,
     elevation: 2,
   },
+  carteraCardItemExpanded: {
+    borderColor: '#059669',
+    shadowOpacity: 0.08,
+    shadowRadius: 10,
+  },
+  carteraHeaderTouchable: {
+    paddingVertical: 2,
+  },
+  carteraHeaderRightGroup: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  carteraChevronText: {
+    fontSize: 12,
+    color: '#059669',
+    fontWeight: '800',
+    paddingHorizontal: 4,
+  },
+  carteraSummaryRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginTop: 4,
+  },
+  carteraSummarySaldo: {
+    fontSize: 15,
+    fontWeight: '900',
+  },
+  carteraExpandedContent: {
+    marginTop: 12,
+  },
   carteraCardHeader: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -1920,5 +2343,321 @@ const styles = StyleSheet.create({
     color: '#DC2626',
     fontWeight: '700',
     fontSize: 13,
+  },
+  // ESTILOS DE ASIGNACIÓN OPERATIVA DE COBRADOR (FASE 1)
+  carteraCobradorRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    backgroundColor: '#F8FAFC',
+    borderRadius: 12,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    marginBottom: 10,
+    gap: 8,
+  },
+  carteraCobradorLeft: {
+    flex: 1,
+  },
+  carteraCobradorLabel: {
+    fontSize: 9,
+    fontWeight: '800',
+    color: '#64748B',
+    letterSpacing: 0.5,
+    marginBottom: 2,
+  },
+  carteraCobradorBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+  },
+  carteraCobradorIcon: {
+    fontSize: 12,
+  },
+  carteraCobradorNombre: {
+    fontSize: 12,
+    fontWeight: '800',
+    color: '#0F172A',
+  },
+  carteraAsignarBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    backgroundColor: '#0F172A',
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 8,
+  },
+  carteraAsignarBtnIcon: {
+    color: '#34D399',
+    fontSize: 12,
+    fontWeight: '800',
+  },
+  carteraAsignarBtnText: {
+    color: '#FFFFFF',
+    fontSize: 11,
+    fontWeight: '700',
+  },
+  asignarSheet: {
+    backgroundColor: '#FFFFFF',
+    borderTopLeftRadius: 24,
+    borderTopRightRadius: 24,
+    paddingHorizontal: 20,
+    paddingTop: 12,
+    paddingBottom: Platform.OS === 'ios' ? 36 : 24,
+    maxHeight: '85%',
+  },
+  asignarHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 14,
+  },
+  asignarSheetTitle: {
+    fontSize: 18,
+    fontWeight: '800',
+    color: '#0F172A',
+  },
+  asignarSheetSubtitle: {
+    fontSize: 12,
+    color: '#64748B',
+    marginTop: 2,
+    fontWeight: '600',
+  },
+  asignarSearchBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#F1F5F9',
+    borderRadius: 12,
+    paddingHorizontal: 12,
+    height: 40,
+    gap: 8,
+    marginBottom: 14,
+  },
+  asignarSearchInput: {
+    flex: 1,
+    fontSize: 13,
+    color: '#0F172A',
+    fontWeight: '600',
+    paddingVertical: 0,
+  },
+  cobradorItemRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    marginBottom: 8,
+    backgroundColor: '#FFFFFF',
+    gap: 12,
+  },
+  cobradorItemRowSelected: {
+    borderColor: '#059669',
+    backgroundColor: '#ECFDF5',
+  },
+  cobradorIconCircle: {
+    width: 36,
+    height: 36,
+    borderRadius: 12,
+    backgroundColor: '#F1F5F9',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  cobradorIconText: {
+    fontSize: 16,
+  },
+  cobradorItemNombre: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#0F172A',
+  },
+  cobradorActualBadge: {
+    backgroundColor: '#059669',
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 4,
+  },
+  cobradorActualBadgeText: {
+    color: '#FFFFFF',
+    fontSize: 8,
+    fontWeight: '800',
+    letterSpacing: 0.5,
+  },
+  cobradorItemSub: {
+    fontSize: 11,
+    color: '#64748B',
+    marginTop: 2,
+  },
+  cobradorRadio: {
+    width: 20,
+    height: 20,
+    borderRadius: 10,
+    borderWidth: 2,
+    borderColor: '#CBD5E1',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  cobradorRadioSelected: {
+    borderColor: '#059669',
+  },
+  cobradorRadioInner: {
+    width: 10,
+    height: 10,
+    borderRadius: 5,
+    backgroundColor: '#059669',
+  },
+  cobradorItemRowUnassign: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: '#FECDD3',
+    marginBottom: 10,
+    backgroundColor: '#FFF1F2',
+    gap: 12,
+  },
+  cobradorIconCircleGray: {
+    width: 36,
+    height: 36,
+    borderRadius: 12,
+    backgroundColor: '#FFE4E6',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  cobradorUnassignText: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#BE123C',
+  },
+  cobradorSelectArrow: {
+    fontSize: 16,
+    fontWeight: '800',
+    color: '#BE123C',
+  },
+  asignarEmptyBox: {
+    padding: 24,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  asignarEmptyText: {
+    fontSize: 12,
+    color: '#64748B',
+    textAlign: 'center',
+  },
+  asignarLoadingBox: {
+    padding: 30,
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+  },
+  asignarLoadingText: {
+    fontSize: 12,
+    color: '#059669',
+    fontWeight: '600',
+  },
+  // ESTILOS DE CONFIRMACIÓN DE SALIDA (ESTÁNDAR CORPORATIVO)
+  modalBackdropCenter: {
+    flex: 1,
+    width: '100%',
+    height: '100%',
+    backgroundColor: 'rgba(15, 23, 42, 0.65)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingHorizontal: 20,
+  },
+  logoutModalCard: {
+    backgroundColor: '#FFFFFF',
+    width: '100%',
+    maxWidth: 380,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    padding: 20,
+    shadowColor: '#000000',
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.15,
+    shadowRadius: 14,
+    elevation: 6,
+  },
+  logoutModalHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    marginBottom: 12,
+  },
+  logoutIconBadge: {
+    width: 40,
+    height: 40,
+    borderRadius: 10,
+    backgroundColor: '#FFF1F2',
+    borderWidth: 1,
+    borderColor: '#FECDD3',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  logoutIconText: {
+    fontSize: 18,
+    color: '#E11D48',
+    fontWeight: 'bold',
+  },
+  logoutModalTitleCol: {
+    flex: 1,
+  },
+  logoutBadgeText: {
+    fontSize: 9,
+    fontWeight: '800',
+    color: '#E11D48',
+    letterSpacing: 0.8,
+    marginBottom: 2,
+  },
+  logoutModalQuestion: {
+    fontSize: 15,
+    fontWeight: '700',
+    color: '#0F172A',
+    lineHeight: 20,
+  },
+  logoutModalMessage: {
+    fontSize: 12,
+    color: '#64748B',
+    lineHeight: 18,
+    marginBottom: 16,
+  },
+  logoutModalActions: {
+    flexDirection: 'row',
+    justifyContent: 'flex-end',
+    gap: 8,
+    borderTopWidth: 1,
+    borderTopColor: '#F1F5F9',
+    paddingTop: 12,
+  },
+  logoutCancelBtn: {
+    paddingVertical: 8,
+    paddingHorizontal: 14,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#CBD5E1',
+    backgroundColor: '#F8FAFC',
+  },
+  logoutCancelBtnText: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#475569',
+  },
+  logoutConfirmBtn: {
+    paddingVertical: 8,
+    paddingHorizontal: 16,
+    borderRadius: 8,
+    backgroundColor: '#E11D48',
+  },
+  logoutConfirmBtnText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#FFFFFF',
   },
 });

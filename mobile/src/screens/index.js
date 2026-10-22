@@ -13,3 +13,4 @@ export { default as CarteraCriticaScreen } from './CarteraCriticaScreen';
 export { default as PersonalScreen } from './PersonalScreen';
 export { default as ComprobantesScreen } from './ComprobantesScreen';
 export { default as ReportesScreen } from './ReportesScreen';
+export { default as ArqueoScreen } from './ArqueoScreen';

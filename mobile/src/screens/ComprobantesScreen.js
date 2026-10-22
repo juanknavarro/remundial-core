@@ -44,6 +44,7 @@ export default function ComprobantesScreen({ navigation }) {
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [busqueda, setBusqueda] = useState('');
   const [filtroTipo, setFiltroTipo] = useState('todos'); // 'todos' | 'abono' | 'venta'
+  const [expandedIndex, setExpandedIndex] = useState(0);
 
   // Cargar historial reciente de transacciones (Abonos + Ventas)
   const cargarHistorial = useCallback(async (isPullRefresh = false) => {
@@ -207,70 +208,105 @@ export default function ComprobantesScreen({ navigation }) {
     }
   };
 
-  const renderComprobanteCard = ({ item }) => {
+  const renderComprobanteCard = ({ item, index }) => {
+    const isExpanded = expandedIndex === index;
     const esAbono = item.tipoCodigo === 'abono';
 
     return (
-      <View style={styles.card}>
-        {/* Cabecera de Comprobante: Folio y Badge de Tipo */}
-        <View style={styles.cardHeader}>
-          <View style={styles.folioBadge}>
-            <Text style={styles.folioText}>{item.folio}</Text>
+      <View style={[styles.card, isExpanded && styles.cardExpanded]}>
+        {/* Cabecera Interactiva del Acordeón */}
+        <TouchableOpacity
+          style={styles.accordionHeaderTouchable}
+          onPress={() => setExpandedIndex(isExpanded ? -1 : index)}
+          activeOpacity={0.7}
+        >
+          <View style={styles.cardHeader}>
+            <View style={styles.folioBadge}>
+              <Text style={styles.folioText}>{item.folio}</Text>
+            </View>
+
+            <View style={styles.headerRightGroup}>
+              <View
+                style={[
+                  styles.tipoBadge,
+                  esAbono ? styles.tipoBadgeAbono : styles.tipoBadgeVenta,
+                ]}
+              >
+                <Text
+                  style={[
+                    styles.tipoBadgeText,
+                    esAbono ? styles.tipoTextAbono : styles.tipoTextVenta,
+                  ]}
+                >
+                  {esAbono ? '💵 Abono / Cuota' : '🛍️ Venta Originada'}
+                </Text>
+              </View>
+
+              <Text style={styles.accordionChevronText}>
+                {isExpanded ? '▲' : '▼'}
+              </Text>
+            </View>
           </View>
 
-          <View
-            style={[
-              styles.tipoBadge,
-              esAbono ? styles.tipoBadgeAbono : styles.tipoBadgeVenta,
-            ]}
-          >
-            <Text
-              style={[
-                styles.tipoBadgeText,
-                esAbono ? styles.tipoTextAbono : styles.tipoTextVenta,
-              ]}
-            >
-              {esAbono ? '💵 Abono / Cuota' : '🛍️ Venta Originada'}
+          {/* Resumen Permanente en Cabecera */}
+          <View style={styles.accordionSummaryRow}>
+            <Text style={styles.clienteNombre} numberOfLines={1}>
+              {item.cliente}
             </Text>
-          </View>
-        </View>
-
-        {/* Cliente y Responsable */}
-        <View style={styles.cardBody}>
-          <Text style={styles.clienteNombre} numberOfLines={1}>
-            {item.cliente}
-          </Text>
-          <View style={styles.infoRow}>
-            <Text style={styles.sectorText}>📍 {item.sector}</Text>
-            <Text style={styles.dotSeparator}>•</Text>
-            <Text style={styles.responsableText}>{item.responsable}</Text>
-          </View>
-          <Text style={styles.fechaText}>🕒 {item.fechaTexto}</Text>
-        </View>
-
-        {/* Monto y Botón de Compartir */}
-        <View style={styles.cardFooter}>
-          <View style={styles.montoBox}>
-            <Text style={styles.montoLabel}>TOTAL OPERACIÓN</Text>
             <Text
               style={[
-                styles.montoValue,
+                styles.summaryMonto,
                 esAbono ? styles.montoAbono : styles.montoVenta,
               ]}
             >
               {esAbono ? `+${formatCOP(item.monto)}` : formatCOP(item.monto)}
             </Text>
           </View>
+        </TouchableOpacity>
 
-          <TouchableOpacity
-            style={styles.btnCompartir}
-            onPress={() => handleCompartir(item)}
-            activeOpacity={0.8}
-          >
-            <Text style={styles.btnCompartirIcon}>📤</Text>
-            <Text style={styles.btnCompartirText}>Compartir</Text>
-          </TouchableOpacity>
-        </View>
+        {/* Cuerpo Expandido del Acordeón (index === expandedIndex) */}
+        {isExpanded ? (
+          <View style={styles.accordionExpandedContent}>
+            <View style={styles.cardBody}>
+              <View style={styles.infoRow}>
+                <Text style={styles.sectorText}>📍 {item.sector}</Text>
+                <Text style={styles.dotSeparator}>•</Text>
+                <Text style={styles.responsableText}>{item.responsable}</Text>
+              </View>
+              {item.cedula ? (
+                <Text style={styles.docText}>CC / NIT: {item.cedula}</Text>
+              ) : null}
+              {item.contratoReferencia ? (
+                <Text style={styles.refText}>Contrato: {item.contratoReferencia}</Text>
+              ) : null}
+              <Text style={styles.fechaText}>🕒 {item.fechaTexto}</Text>
+            </View>
+
+            {/* Monto detallado y Botón de Compartir */}
+            <View style={styles.cardFooter}>
+              <View style={styles.montoBox}>
+                <Text style={styles.montoLabel}>TOTAL OPERACIÓN</Text>
+                <Text
+                  style={[
+                    styles.montoValue,
+                    esAbono ? styles.montoAbono : styles.montoVenta,
+                  ]}
+                >
+                  {esAbono ? `+${formatCOP(item.monto)}` : formatCOP(item.monto)}
+                </Text>
+              </View>
+
+              <TouchableOpacity
+                style={styles.btnCompartir}
+                onPress={() => handleCompartir(item)}
+                activeOpacity={0.8}
+              >
+                <Text style={styles.btnCompartirIcon}>📤</Text>
+                <Text style={styles.btnCompartirText}>Compartir</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        ) : null}
       </View>
     );
   };
@@ -557,6 +593,50 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.04,
     shadowRadius: 8,
     elevation: 2,
+  },
+  cardExpanded: {
+    borderColor: '#059669',
+    shadowOpacity: 0.1,
+    shadowRadius: 10,
+  },
+  accordionHeaderTouchable: {
+    paddingVertical: 2,
+  },
+  headerRightGroup: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  accordionChevronText: {
+    fontSize: 12,
+    color: '#059669',
+    fontWeight: '800',
+    paddingHorizontal: 4,
+  },
+  accordionSummaryRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginTop: 4,
+  },
+  summaryMonto: {
+    fontSize: 15,
+    fontWeight: '900',
+  },
+  accordionExpandedContent: {
+    marginTop: 10,
+  },
+  docText: {
+    fontSize: 11,
+    color: '#64748B',
+    fontWeight: '600',
+    marginBottom: 2,
+  },
+  refText: {
+    fontSize: 11,
+    color: '#2563EB',
+    fontWeight: '700',
+    marginBottom: 2,
   },
   cardHeader: {
     flexDirection: 'row',
