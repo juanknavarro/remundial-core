@@ -1,11 +1,12 @@
 import enum
 import uuid
-from datetime import datetime
+from datetime import date, datetime
 from decimal import Decimal
 from typing import Dict, Optional
 
 from sqlalchemy import (
     CheckConstraint,
+    Date,
     DateTime,
     ForeignKey,
     Integer,
@@ -103,6 +104,10 @@ class Abono(Base):
     )
     referencia_pago: Mapped[Optional[str]] = mapped_column(
         String(255),
+        nullable=True,
+    )
+    fecha_siguiente_visita: Mapped[Optional[date]] = mapped_column(
+        Date,
         nullable=True,
     )
     creado_en: Mapped[datetime] = mapped_column(

@@ -27,7 +27,8 @@
     "umbral_mora_critica": 3,
     "descripcion_mora_critica": "Se clasifica en Cartera Crítica a partir de 3 cuotas vencidas (excluyendo créditos de 2 cuotas).",
     "cuota_inicial_minima": 0.0,
-    "tasa_interes_incluida": true
+    "tasa_interes_incluida": true,
+    "modalidad_proyeccion": "dinamica"
   },
   "sistema": {
     "version": "1.2.0",

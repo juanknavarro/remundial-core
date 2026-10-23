@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import date, datetime
 from decimal import Decimal
 from typing import Any, Optional
 from uuid import UUID
@@ -58,6 +58,10 @@ class AbonoBase(BaseModel):
     cobrador_nombre: Optional[str] = Field(
         default=None,
         description="Nombre real del cobrador en ruta que registra el recaudo",
+    )
+    fecha_siguiente_visita: Optional[date] = Field(
+        default=None,
+        description="Fecha agendada para la siguiente visita en modalidad dinámica",
     )
 
 
@@ -183,6 +187,10 @@ class AbonoResponse(BaseModel):
         default=None,
         description="Ciudad del cliente o donde se celebró la venta para contexto geográfico",
     )
+    fecha_siguiente_visita: Optional[date] = Field(
+        default=None,
+        description="Fecha agendada para la siguiente visita en modalidad dinámica",
+    )
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -220,6 +228,10 @@ class ReciboOfflinePdfRequest(BaseModel):
     nombre_archivo_pdf: Optional[str] = None
     firma_cliente: Optional[str] = None
     firma_cobrador: Optional[str] = None
+    fecha_siguiente_visita: Optional[date | str] = Field(
+        default=None,
+        description="Fecha pactada para la próxima visita de cobro en modalidad dinámica",
+    )
 
 
 class ConciliacionRutaRequest(BaseModel):

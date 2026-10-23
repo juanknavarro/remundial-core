@@ -168,6 +168,7 @@ export default function NuevaVentaScreen({ route, navigation }) {
   const [cuotaInicialInput, setCuotaInicialInput] = useState('0');
   const [numeroCuotas, setNumeroCuotas] = useState(4);
   const [plazosPermitidos, setPlazosPermitidos] = useState([2, 4, 6, 9]);
+  const [modalidadProyeccion, setModalidadProyeccion] = useState('fija');
   // Estados para Personalización de Fecha de Primer Cobro
   const [fechasManuales, setFechasManuales] = useState(false);
   const [fechaPrimeraCuotaManual, setFechaPrimeraCuotaManual] = useState(() =>
@@ -269,7 +270,7 @@ export default function NuevaVentaScreen({ route, navigation }) {
     setNumeroCuotas(4);
     setFechasManuales(false);
     setFechaPrimeraCuotaManual(getFechaPrimerCobroSugerida(new Date(), true));
-    setFechaPrimeraCuota(getFechaPrimerCobroSugerida());
+    setFechaPrimeraCuota(modalidadProyeccion === 'dinamica' ? getFechaPrimerCobroSugerida(new Date(), true) : getFechaPrimerCobroSugerida());
     setCodeudorNombre('');
     setCodeudorCedula('');
     setCodeudorTelefono('');
@@ -429,6 +430,8 @@ export default function NuevaVentaScreen({ route, navigation }) {
                 setNumeroCuotas((prev) => (clean.includes(prev) ? prev : clean[0]));
               }
             }
+            const modProy = parsedConfig?.reglas_credito?.modalidad_proyeccion;
+            if (modProy) setModalidadProyeccion(modProy);
           }
 
           // Refresco silencioso si hay red disponible
@@ -446,6 +449,8 @@ export default function NuevaVentaScreen({ route, navigation }) {
                     setNumeroCuotas((prev) => (clean.includes(prev) ? prev : clean[0]));
                   }
                 }
+                const modProy = resConf.data?.reglas_credito?.modalidad_proyeccion;
+                if (modProy) setModalidadProyeccion(modProy);
               }
             })
             .catch(() => {});
@@ -657,15 +662,19 @@ export default function NuevaVentaScreen({ route, navigation }) {
     return Math.round(montoFinanciado / numeroCuotas);
   }, [modalidad, montoFinanciado, numeroCuotas]);
 
-  // Sincronización reactiva de fechaPrimeraCuota según la modalidad manual o automática
+  // Sincronización reactiva de fechaPrimeraCuota según la modalidad manual, automática o dinámica
   useEffect(() => {
-    if (fechasManuales) {
+    if (modalidadProyeccion === 'dinamica') {
+      if (!fechaPrimeraCuota) {
+        setFechaPrimeraCuota(getFechaPrimerCobroSugerida(new Date(), true));
+      }
+    } else if (fechasManuales) {
       const fManual = formatDateISO(fechaPrimeraCuotaManual) || getFechaPrimerCobroSugerida(new Date(), true);
       setFechaPrimeraCuota(fManual);
     } else {
       setFechaPrimeraCuota(getFechaPrimerCobroSugerida());
     }
-  }, [fechasManuales, fechaPrimeraCuotaManual]);
+  }, [modalidadProyeccion, fechasManuales, fechaPrimeraCuotaManual]);
 
   // Cronograma de amortización proyectado en tiempo real
   const cronogramaProyectado = useMemo(() => {
@@ -862,9 +871,20 @@ export default function NuevaVentaScreen({ route, navigation }) {
     try {
       setIsSubmitting(true);
 
-      // Fecha de primera cuota según configuración manual o cálculo automático a fin de mes
+      // Fecha de primera cuota según configuración manual, dinámica o cálculo automático a fin de mes
       let fPrimera;
-      if (fechasManuales) {
+      if (modalidadProyeccion === 'dinamica') {
+        const fDynStr = formatDateISO(fechaPrimeraCuota);
+        if (!fDynStr || !/^\d{4}-\d{2}-\d{2}$/.test(fDynStr)) {
+          Alert.alert(
+            'Fecha de Primer Pago Requerida',
+            'En modalidad dinámica es obligatorio seleccionar la fecha del primer cobro.'
+          );
+          setIsSubmitting(false);
+          return;
+        }
+        fPrimera = fDynStr;
+      } else if (fechasManuales) {
         const fManualStr = formatDateISO(fechaPrimeraCuotaManual);
         fPrimera = (fManualStr && /^\d{4}-\d{2}-\d{2}$/.test(fManualStr))
           ? fManualStr
@@ -941,6 +961,7 @@ export default function NuevaVentaScreen({ route, navigation }) {
         firma_titular: firmaTitular || null,
         firma_vendedor: firmaVendedor || null,
         firma_codeudor: firmaCodeudor || null,
+        modalidad_proyeccion: modalidadProyeccion || 'fija',
       };
 
       const meta = {
@@ -967,6 +988,7 @@ export default function NuevaVentaScreen({ route, navigation }) {
         firma_titular: firmaTitular || null,
         firma_vendedor: firmaVendedor || null,
         firma_codeudor: firmaCodeudor || null,
+        modalidad_proyeccion: modalidadProyeccion || 'fija',
       };
 
       // Encolado resiliente (Persiste localmente y envía inmediatamente si hay red)
@@ -1738,47 +1760,21 @@ export default function NuevaVentaScreen({ route, navigation }) {
                 </Text>
               </View>
 
-              {/* Personalización de Fecha de Primer Cobro (Switch y Selector) */}
-              <View style={styles.fechaManualContainer}>
-                <View style={styles.fechaManualSwitchRow}>
-                  <View style={{ flex: 1, marginRight: 8 }}>
-                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-                      <Text style={styles.fechaManualSwitchTitle}>Personalizar fecha de primer pago</Text>
-                      <View style={[styles.badgePill, fechasManuales ? styles.badgePillManual : styles.badgePillAuto]}>
-                        <Text style={[styles.badgePillText, fechasManuales ? styles.badgePillTextManual : styles.badgePillTextAuto]}>
-                          {fechasManuales ? 'MANUAL' : 'AUTO'}
-                        </Text>
+              {/* Personalización de Fecha de Primer Cobro (Modalidad Dinámica vs Fija) */}
+              {modalidadProyeccion === 'dinamica' ? (
+                <View style={styles.fechaManualContainer}>
+                  <View style={styles.fechaManualInputBox}>
+                    <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4 }}>
+                      <Text style={styles.fieldLabel}>FECHA DEL PRIMER PAGO *</Text>
+                      <View style={[styles.badgePill, { backgroundColor: '#EEF2FF', borderColor: '#818CF8' }]}>
+                        <Text style={[styles.badgePillText, { color: '#4F46E5', fontWeight: '800' }]}>DINÁMICA</Text>
                       </View>
                     </View>
-                    <Text style={styles.fechaManualSwitchSub}>
-                      {fechasManuales
-                        ? 'El sistema proyectará las demás cuotas a partir de este día.'
-                        : `Vencimiento fijado a fin de mes (${getFechaPrimerCobroSugerida()})`}
-                    </Text>
-                  </View>
-                  <Switch
-                    value={fechasManuales}
-                    onValueChange={(val) => {
-                      setFechasManuales(val);
-                      if (val && !fechaPrimeraCuotaManual) {
-                        setFechaPrimeraCuotaManual(getFechaPrimerCobroSugerida(new Date(), true));
-                      }
-                    }}
-                    trackColor={{ false: '#CBD5E1', true: '#4F46E5' }}
-                    thumbColor="#FFFFFF"
-                    ios_backgroundColor="#CBD5E1"
-                  />
-                </View>
-
-                {/* Renderizado Condicional: Si fechasManuales es true, muestra el selector de fecha */}
-                {fechasManuales && (
-                  <View style={styles.fechaManualInputBox}>
-                    <Text style={styles.fieldLabel}>FECHA DE PRIMER PAGO SELECCIONADA *</Text>
                     {Platform.OS === 'web' ? (
                       React.createElement('input', {
                         type: 'date',
-                        value: fechaPrimeraCuotaManual,
-                        onChange: (e) => setFechaPrimeraCuotaManual(e.target.value),
+                        value: fechaPrimeraCuota,
+                        onChange: (e) => setFechaPrimeraCuota(e.target.value),
                         style: {
                           height: 44,
                           borderRadius: 10,
@@ -1799,17 +1795,90 @@ export default function NuevaVentaScreen({ route, navigation }) {
                     ) : (
                       <TextInput
                         style={[styles.fieldInput, styles.fieldInputManualFecha]}
-                        value={fechaPrimeraCuotaManual}
-                        onChangeText={setFechaPrimeraCuotaManual}
+                        value={fechaPrimeraCuota}
+                        onChangeText={setFechaPrimeraCuota}
                         placeholder="YYYY-MM-DD"
+                        placeholderTextColor="#94A3B8"
                       />
                     )}
-                    <Text style={styles.fieldHelpText}>
-                      El sistema proyectará las demás cuotas a partir de este día.
+                    <Text style={[styles.fieldHelpText, { color: '#4F46E5', fontWeight: '600', marginTop: 4 }]}>
+                      Modalidad Dinámica: Las cuotas subsiguientes se agendarán en ruta.
                     </Text>
                   </View>
-                )}
-              </View>
+                </View>
+              ) : (
+                <View style={styles.fechaManualContainer}>
+                  <View style={styles.fechaManualSwitchRow}>
+                    <View style={{ flex: 1, marginRight: 8 }}>
+                      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                        <Text style={styles.fechaManualSwitchTitle}>Personalizar fecha de primer pago</Text>
+                        <View style={[styles.badgePill, fechasManuales ? styles.badgePillManual : styles.badgePillAuto]}>
+                          <Text style={[styles.badgePillText, fechasManuales ? styles.badgePillTextManual : styles.badgePillTextAuto]}>
+                            {fechasManuales ? 'MANUAL' : 'AUTO'}
+                          </Text>
+                        </View>
+                      </View>
+                      <Text style={styles.fechaManualSwitchSub}>
+                        {fechasManuales
+                          ? 'El sistema proyectará las demás cuotas a partir de este día.'
+                          : `Vencimiento fijado a fin de mes (${getFechaPrimerCobroSugerida()})`}
+                      </Text>
+                    </View>
+                    <Switch
+                      value={fechasManuales}
+                      onValueChange={(val) => {
+                        setFechasManuales(val);
+                        if (val && !fechaPrimeraCuotaManual) {
+                          setFechaPrimeraCuotaManual(getFechaPrimerCobroSugerida(new Date(), true));
+                        }
+                      }}
+                      trackColor={{ false: '#CBD5E1', true: '#4F46E5' }}
+                      thumbColor="#FFFFFF"
+                      ios_backgroundColor="#CBD5E1"
+                    />
+                  </View>
+
+                  {/* Renderizado Condicional: Si fechasManuales es true, muestra el selector de fecha */}
+                  {fechasManuales && (
+                    <View style={styles.fechaManualInputBox}>
+                      <Text style={styles.fieldLabel}>FECHA DE PRIMER PAGO SELECCIONADA *</Text>
+                      {Platform.OS === 'web' ? (
+                        React.createElement('input', {
+                          type: 'date',
+                          value: fechaPrimeraCuotaManual,
+                          onChange: (e) => setFechaPrimeraCuotaManual(e.target.value),
+                          style: {
+                            height: 44,
+                            borderRadius: 10,
+                            border: '1.5px solid #6366F1',
+                            padding: '0 12px',
+                            fontSize: 14,
+                            fontWeight: '600',
+                            fontFamily: 'inherit',
+                            backgroundColor: '#EEF2FF',
+                            color: '#1E1B4B',
+                            outline: 'none',
+                            width: '100%',
+                            boxSizing: 'border-box',
+                            marginTop: 6,
+                            cursor: 'pointer',
+                          },
+                        })
+                      ) : (
+                        <TextInput
+                          style={[styles.fieldInput, styles.fieldInputManualFecha]}
+                          value={fechaPrimeraCuotaManual}
+                          onChangeText={setFechaPrimeraCuotaManual}
+                          placeholder="YYYY-MM-DD"
+                        />
+                      )}
+                      <Text style={styles.fieldHelpText}>
+                        El sistema proyectará las demás cuotas a partir de este día.
+                      </Text>
+                    </View>
+                  )}
+                </View>
+              )}
 
               {renderSelectorMetodoPago()}
 
@@ -1909,29 +1978,43 @@ export default function NuevaVentaScreen({ route, navigation }) {
                     </View>
                   </View>
 
-                  {/* TABLA / CRONOGRAMA DE VENCIMIENTO DE CUOTAS */}
-                  <View style={styles.cronogramaSection}>
-                    <View style={styles.cronogramaHeaderRow}>
-                      <Text style={styles.cronogramaTitle}>
-                        CRONOGRAMA DE VENCIMIENTO DE CUOTAS (MENSUAL)
-                      </Text>
-                      <Text style={styles.cronogramaBadge}>
-                        {numeroCuotas} cuotas de {formatCOP(valorCuota)}
-                      </Text>
-                    </View>
+                  {/* TABLA / CRONOGRAMA DE VENCIMIENTO DE CUOTAS (Oculto en Modalidad Dinámica) */}
+                  {modalidadProyeccion !== 'dinamica' ? (
+                    <View style={styles.cronogramaSection}>
+                      <View style={styles.cronogramaHeaderRow}>
+                        <Text style={styles.cronogramaTitle}>
+                          CRONOGRAMA DE VENCIMIENTO DE CUOTAS (MENSUAL)
+                        </Text>
+                        <Text style={styles.cronogramaBadge}>
+                          {numeroCuotas} cuotas de {formatCOP(valorCuota)}
+                        </Text>
+                      </View>
 
-                    <View style={styles.cronogramaGrid}>
-                      {cronogramaProyectado.map((cItem) => (
-                        <View key={cItem.numero} style={styles.cronogramaCard}>
-                          <View style={styles.cronogramaCardHeader}>
-                            <Text style={styles.cronogramaCardNumber}>Cuota {cItem.numero}</Text>
-                            <Text style={styles.cronogramaCardAmount}>{formatCOP(cItem.valor)}</Text>
+                      <View style={styles.cronogramaGrid}>
+                        {cronogramaProyectado.map((cItem) => (
+                          <View key={cItem.numero} style={styles.cronogramaCard}>
+                            <View style={styles.cronogramaCardHeader}>
+                              <Text style={styles.cronogramaCardNumber}>Cuota {cItem.numero}</Text>
+                              <Text style={styles.cronogramaCardAmount}>{formatCOP(cItem.valor)}</Text>
+                            </View>
+                            <Text style={styles.cronogramaCardDate}>📅 {cItem.fecha}</Text>
                           </View>
-                          <Text style={styles.cronogramaCardDate}>📅 {cItem.fecha}</Text>
-                        </View>
-                      ))}
+                        ))}
+                      </View>
                     </View>
-                  </View>
+                  ) : (
+                    <View style={[styles.cronogramaSection, { backgroundColor: '#F8FAFC', borderColor: '#E2E8F0', padding: 14, borderRadius: 12 }]}>
+                      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 4 }}>
+                        <Text style={{ fontSize: 16 }}>⚡</Text>
+                        <Text style={{ fontSize: 13, fontWeight: '700', color: '#1E293B' }}>
+                          CRONOGRAMA DINÁMICO EN RUTA
+                        </Text>
+                      </View>
+                      <Text style={{ fontSize: 12, color: '#475569', lineHeight: 18 }}>
+                        Modalidad Dinámica: Las cuotas subsiguientes se agendarán en ruta. La primera cuota vence el <Text style={{ fontWeight: '700', color: '#4F46E5' }}>{fechaPrimeraCuota || 'día indicado'}</Text>.
+                      </Text>
+                    </View>
+                  )}
 
                   {/* NOTA OPERATIVA: ASIGNACIÓN POSTERIOR DE RUTA Y COBRADOR */}
                   <View style={styles.operationalNoticeBox}>

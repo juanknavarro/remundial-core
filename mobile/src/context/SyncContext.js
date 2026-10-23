@@ -150,6 +150,9 @@ export function SyncProvider({ children }) {
             if (nomCobradorCola) {
               payloadCola.cobrador_nombre = nomCobradorCola;
             }
+            if (rawP.fecha_siguiente_visita || item.meta?.fecha_siguiente_visita) {
+              payloadCola.fecha_siguiente_visita = rawP.fecha_siguiente_visita || item.meta?.fecha_siguiente_visita;
+            }
 
             console.log(`[SyncContext] Sincronizando abono ${item.id} con el servidor...`, payloadCola);
             const resPost = await apiClient.post('/abonos', payloadCola);
@@ -462,6 +465,9 @@ export function SyncProvider({ children }) {
     }
     if (payload.cobrador_nombre || meta?.cobrador_nombre || meta?.cobrador) {
       payloadAbono.cobrador_nombre = payload.cobrador_nombre || meta?.cobrador_nombre || meta?.cobrador;
+    }
+    if (payload.fecha_siguiente_visita) {
+      payloadAbono.fecha_siguiente_visita = payload.fecha_siguiente_visita;
     }
 
     console.log("👉 [DEBUG ENCOLAR 2 - PAYLOAD LISTO] Objeto estructurado para SQLite:", payloadAbono);

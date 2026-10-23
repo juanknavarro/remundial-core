@@ -85,6 +85,7 @@ interface ParametrosData {
     descripcion_mora_critica: string;
     cuota_inicial_minima: number;
     tasa_interes_incluida: boolean;
+    modalidad_proyeccion?: 'fija' | 'dinamica';
   };
   sistema: {
     version: string;
@@ -150,6 +151,7 @@ export default function ConfiguracionPage() {
   // Estados Formulario Reglas Financieras y Plazos de Crédito Dinámicos
   const [plazosPermitidos, setPlazosPermitidos] = useState<number[]>([9, 6, 4, 2]);
   const [descripcionMoraCritica, setDescripcionMoraCritica] = useState<string>('');
+  const [modalidadProyeccion, setModalidadProyeccion] = useState<'fija' | 'dinamica'>('fija');
   const [nuevoPlazoInput, setNuevoPlazoInput] = useState<string>('');
   const [isSavingReglas, setIsSavingReglas] = useState<boolean>(false);
   const [reglasFeedback, setReglasFeedback] = useState<{
@@ -287,6 +289,9 @@ export default function ConfiguracionPage() {
       }
       if (res.data?.reglas_credito?.descripcion_mora_critica) {
         setDescripcionMoraCritica(res.data.reglas_credito.descripcion_mora_critica);
+      }
+      if (res.data?.reglas_credito?.modalidad_proyeccion) {
+        setModalidadProyeccion(res.data.reglas_credito.modalidad_proyeccion);
       }
       // Cargar catálogo de ciudades estructurado (Córdoba y Sucre)
       try {
@@ -658,6 +663,7 @@ export default function ConfiguracionPage() {
         reglas_credito: {
           plazos_permitidos: plazosPermitidos,
           descripcion_mora_critica: descripcionMoraCritica,
+          modalidad_proyeccion: modalidadProyeccion,
         },
       });
       if (res.data?.parametros) {
@@ -1363,6 +1369,97 @@ export default function ConfiguracionPage() {
                     <span>{isSavingReglas ? 'Guardando...' : 'Guardar Política'}</span>
                   </button>
                 </div>
+              </div>
+            </div>
+
+            {/* Modalidad de Proyección de Cuotas */}
+            <div className="p-5 rounded-xl bg-slate-50 border border-slate-200/80 space-y-4">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                <div>
+                  <span className="text-xs font-bold text-slate-800 uppercase tracking-wider block">
+                    Modalidad de Proyección de Cuotas (Parámetro Global)
+                  </span>
+                  <p className="text-xs text-slate-600 mt-0.5">
+                    Define la estrategia con la que se generan las fechas de cobro en ventas y cómo interactúa el cobrador en ruta.
+                  </p>
+                </div>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={handleGuardarReglasCredito}
+                    disabled={isSavingReglas}
+                    className="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold transition-all shadow-xs cursor-pointer flex items-center gap-2 disabled:opacity-50"
+                  >
+                    {isSavingReglas ? (
+                      <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                    ) : (
+                      <Check className="w-3.5 h-3.5" />
+                    )}
+                    <span>{isSavingReglas ? 'Guardando...' : 'Aplicar Modalidad'}</span>
+                  </button>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pt-1">
+                <button
+                  type="button"
+                  onClick={() => setModalidadProyeccion('fija')}
+                  className={cn(
+                    'p-4 rounded-xl border text-left transition-all cursor-pointer flex flex-col justify-between',
+                    modalidadProyeccion === 'fija'
+                      ? 'bg-white border-emerald-500 ring-2 ring-emerald-500/20 shadow-xs'
+                      : 'bg-white/60 border-slate-200 hover:border-slate-300 text-slate-600'
+                  )}
+                >
+                  <div>
+                    <div className="flex items-center justify-between mb-2">
+                      <span className="text-xs font-bold text-slate-900 flex items-center gap-1.5">
+                        <span>📅</span> Modalidad Fija (Tradicional)
+                      </span>
+                      {modalidadProyeccion === 'fija' && (
+                        <span className="text-[10px] font-extrabold px-2 py-0.5 rounded bg-emerald-100 text-emerald-800">
+                          ACTIVA
+                        </span>
+                      )}
+                    </div>
+                    <p className="text-xs text-slate-600 leading-relaxed">
+                      Genera el cronograma completo de 1 a N cuotas con fechas de vencimiento fijas y estrictas precalculadas desde el momento de la venta.
+                    </p>
+                  </div>
+                  <div className="mt-3 pt-2 border-t border-slate-100 text-[11px] text-slate-500 font-medium">
+                    ✓ Calendario visible en POS • Cuotas con fecha fija
+                  </div>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setModalidadProyeccion('dinamica')}
+                  className={cn(
+                    'p-4 rounded-xl border text-left transition-all cursor-pointer flex flex-col justify-between',
+                    modalidadProyeccion === 'dinamica'
+                      ? 'bg-white border-indigo-500 ring-2 ring-indigo-500/20 shadow-xs'
+                      : 'bg-white/60 border-slate-200 hover:border-slate-300 text-slate-600'
+                  )}
+                >
+                  <div>
+                    <div className="flex items-center justify-between mb-2">
+                      <span className="text-xs font-bold text-slate-900 flex items-center gap-1.5">
+                        <span>⚡</span> Modalidad Dinámica (Agendamiento en Ruta)
+                      </span>
+                      {modalidadProyeccion === 'dinamica' && (
+                        <span className="text-[10px] font-extrabold px-2 py-0.5 rounded bg-indigo-100 text-indigo-800">
+                          ACTIVA
+                        </span>
+                      )}
+                    </div>
+                    <p className="text-xs text-slate-600 leading-relaxed">
+                      Solo fija la fecha del primer cobro al crear la venta. Las cuotas subsiguientes se agendan dinámicamente en ruta por el cobrador en cada recaudo.
+                    </p>
+                  </div>
+                  <div className="mt-3 pt-2 border-t border-slate-100 text-[11px] text-indigo-600 font-medium">
+                    ✓ Flexibilidad de cartera • Agendamiento en terreno
+                  </div>
+                </button>
               </div>
             </div>
 

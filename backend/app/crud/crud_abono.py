@@ -57,6 +57,8 @@ def _enriquecer_abono_con_cronograma(a: Optional[Abono]) -> Optional[Abono]:
             saldo_pendiente=a.credito.saldo_pendiente,
             valor_cuota_base=a.credito.valor_cuota,
             tipo_pago=a.credito.tipo_pago,
+            modalidad_proyeccion=getattr(a.credito, "modalidad_proyeccion", "fija") or "fija",
+            fecha_siguiente_visita=getattr(a.credito, "fecha_siguiente_visita", None),
         )
         cronograma = cron_data["cronograma"]
         cuota_parcial = next((q for q in cronograma if q.es_parcial), None)
@@ -389,12 +391,15 @@ async def create_abono(db: AsyncSession, abono_in: AbonoCreate) -> Abono:
             monto_transferencia=m_transf,
             referencia_pago=ref_pago,
             estado=EstadoAbono.REGISTRADO,
+            fecha_siguiente_visita=abono_in.fecha_siguiente_visita,
         )
         db.add(db_abono)
 
         # B. Amortizar el saldo pendiente del contrato de crédito
         nuevo_saldo = round(credito.saldo_pendiente - monto_abono, 2)
         credito.saldo_pendiente = nuevo_saldo
+        if abono_in.fecha_siguiente_visita:
+            credito.fecha_siguiente_visita = abono_in.fecha_siguiente_visita
 
         # C. Transición de estados del crédito y asignación permanente del cobrador
         if credito.cobrador_id is None:
@@ -435,6 +440,8 @@ async def create_abono(db: AsyncSession, abono_in: AbonoCreate) -> Abono:
         saldo_pendiente=nuevo_saldo,
         valor_cuota_base=credito.valor_cuota,
         tipo_pago=credito.tipo_pago,
+        modalidad_proyeccion=getattr(credito, "modalidad_proyeccion", "fija") or "fija",
+        fecha_siguiente_visita=getattr(credito, "fecha_siguiente_visita", None),
     )
     cronograma = cron_data["cronograma"]
     cuota_parcial = next((q for q in cronograma if q.es_parcial), None)

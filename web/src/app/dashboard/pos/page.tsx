@@ -221,6 +221,7 @@ export default function PosOriginacionCreditoPage() {
   const [numeroCuotas, setNumeroCuotas] = useState<number>(4);
   const [fechaPrimeraCuota, setFechaPrimeraCuota] = useState<string>(() => getFechaPrimerVencimientoFinMes());
   const [fechasManuales, setFechasManuales] = useState<boolean>(false);
+  const [modalidadProyeccion, setModalidadProyeccion] = useState<'fija' | 'dinamica'>('fija');
 
   const handleToggleFechasManuales = () => {
     const nuevo = !fechasManuales;
@@ -334,6 +335,9 @@ export default function PosOriginacionCreditoPage() {
     const fetchParametros = async () => {
       try {
         const res = await api.get('/configuracion/parametros');
+        if (res.data?.reglas_credito?.modalidad_proyeccion) {
+          setModalidadProyeccion(res.data.reglas_credito.modalidad_proyeccion);
+        }
         if (res.data?.reglas_credito?.plazos_permitidos && Array.isArray(res.data.reglas_credito.plazos_permitidos)) {
           const plazos = res.data.reglas_credito.plazos_permitidos
             .map((p: any) => parseInt(p, 10))
@@ -674,6 +678,12 @@ export default function PosOriginacionCreditoPage() {
     const inicialEsperada = Number(Number(esContado ? totalVenta : cuotaInicial).toFixed(2));
     const conceptoTexto = esContado ? 'Total de la Venta' : 'la cuota inicial';
 
+    if (!esContado && modalidadProyeccion === 'dinamica' && !fechaPrimeraCuota) {
+      alert('La Fecha del Primer Pago es obligatoria para originar la venta a crédito en modalidad dinámica.');
+      setIsSubmitting(false);
+      return;
+    }
+
     if (inicialEsperada > 0 && metodoPagoInicial === 'Transferencia' && !referenciaPagoInicial.trim()) {
       alert(`Debe ingresar el número de referencia o aprobación para el pago por transferencia ${esContado ? 'del Total de la Venta' : 'de la cuota inicial'}.`);
       setIsSubmitting(false);
@@ -719,6 +729,7 @@ export default function PosOriginacionCreditoPage() {
       cobrador_id: null, // Los créditos nacen estrictamente limpios de ruta y cobrador
       estado: esContado ? 'terminado' : 'pendiente',
       tipo_pago: esContado ? 'mensual' : tipoPago,
+      modalidad_proyeccion: esContado ? 'fija' : modalidadProyeccion,
       cuota_inicial: cuotaInicialEfectiva,
       metodo_pago_inicial: finalMetodoPagoInicial,
       referencia_pago_inicial: finalReferenciaPagoInicial,
@@ -2074,48 +2085,62 @@ export default function PosOriginacionCreditoPage() {
                   <div>
                     <div className="flex items-center justify-between mb-1">
                       <label className="block text-xs font-semibold text-slate-700">
-                        FECHA PRIMER COBRO
+                        FECHA PRIMER COBRO {modalidadProyeccion === 'dinamica' ? '*' : ''}
                       </label>
-                      <div className="flex items-center gap-2">
-                        <button
-                          type="button"
-                          role="switch"
-                          aria-checked={fechasManuales}
-                          onClick={handleToggleFechasManuales}
-                          className={cn(
-                            'relative inline-flex h-4 w-7 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-hidden focus:ring-2 focus:ring-emerald-500',
-                            fechasManuales ? 'bg-emerald-600' : 'bg-slate-300'
-                          )}
-                        >
-                          <span className="sr-only">Modo Fecha Manual</span>
-                          <span
-                            aria-hidden="true"
-                            className={cn(
-                              'pointer-events-none inline-block h-3 w-3 transform rounded-full bg-white shadow-sm ring-0 transition duration-200 ease-in-out',
-                              fechasManuales ? 'translate-x-3' : 'translate-x-0'
-                            )}
-                          />
-                        </button>
-                        <span
-                          onClick={handleToggleFechasManuales}
-                          className={cn(
-                            'text-[10px] font-bold cursor-pointer select-none transition-colors',
-                            fechasManuales ? 'text-emerald-700' : 'text-slate-500'
-                          )}
-                        >
-                          Manual
+                      {modalidadProyeccion === 'dinamica' ? (
+                        <span className="text-[10px] font-bold text-amber-700 bg-amber-50 px-2 py-0.5 rounded-md border border-amber-200">
+                          Obligatorio (Modalidad Dinámica)
                         </span>
-                      </div>
+                      ) : (
+                        <div className="flex items-center gap-2">
+                          <button
+                            type="button"
+                            role="switch"
+                            aria-checked={fechasManuales}
+                            onClick={handleToggleFechasManuales}
+                            className={cn(
+                              'relative inline-flex h-4 w-7 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-hidden focus:ring-2 focus:ring-emerald-500',
+                              fechasManuales ? 'bg-emerald-600' : 'bg-slate-300'
+                            )}
+                          >
+                            <span className="sr-only">Modo Fecha Manual</span>
+                            <span
+                              aria-hidden="true"
+                              className={cn(
+                                'pointer-events-none inline-block h-3 w-3 transform rounded-full bg-white shadow-sm ring-0 transition duration-200 ease-in-out',
+                                fechasManuales ? 'translate-x-3' : 'translate-x-0'
+                              )}
+                            />
+                          </button>
+                          <span
+                            onClick={handleToggleFechasManuales}
+                            className={cn(
+                              'text-[10px] font-bold cursor-pointer select-none transition-colors',
+                              fechasManuales ? 'text-emerald-700' : 'text-slate-500'
+                            )}
+                          >
+                            Manual
+                          </span>
+                        </div>
+                      )}
                     </div>
                     <input
                       type="date"
-                      disabled={!fechasManuales}
+                      disabled={modalidadProyeccion !== 'dinamica' && !fechasManuales}
+                      required={modalidadProyeccion === 'dinamica'}
                       value={fechaPrimeraCuota}
                       onChange={(e) => setFechaPrimeraCuota(e.target.value)}
-                      className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 text-xs font-semibold text-slate-900 focus:outline-hidden focus:ring-2 focus:ring-emerald-500 bg-slate-50/50 focus:bg-white disabled:opacity-60 disabled:bg-slate-200 disabled:cursor-not-allowed transition-colors"
+                      className={cn(
+                        "w-full px-3.5 py-2.5 rounded-xl border text-xs font-semibold text-slate-900 focus:outline-hidden focus:ring-2 focus:ring-emerald-500 transition-colors",
+                        modalidadProyeccion === 'dinamica'
+                          ? "border-amber-300 bg-amber-50/30 focus:bg-white"
+                          : "border-slate-200 bg-slate-50/50 focus:bg-white disabled:opacity-60 disabled:bg-slate-200 disabled:cursor-not-allowed"
+                      )}
                     />
                     <span className="text-[11px] text-slate-500 mt-1 block">
-                      {fechasManuales ? 'Fecha de primer vencimiento personalizada' : 'Primer vencimiento automático en fin de mes'}
+                      {modalidadProyeccion === 'dinamica'
+                        ? 'Fecha pactada para la primera visita en terreno (Obligatoria para originar)'
+                        : (fechasManuales ? 'Fecha de primer vencimiento personalizada' : 'Primer vencimiento automático en fin de mes')}
                     </span>
                   </div>
                 </div>
@@ -2219,7 +2244,9 @@ export default function PosOriginacionCreditoPage() {
                       <div className="p-2.5 rounded-lg bg-white border border-slate-200/60 shadow-2xs">
                         <span className="text-[10px] text-slate-600 block uppercase font-semibold">Plazo Pactado</span>
                         <span className="font-mono font-bold text-slate-900 block mt-0.5">{numeroCuotas} Cuotas</span>
-                        <span className="text-[10px] text-slate-500 block capitalize">{tipoPago}</span>
+                        <span className="text-[10px] text-slate-500 block capitalize">
+                          {modalidadProyeccion === 'dinamica' ? 'Dinámica' : tipoPago}
+                        </span>
                       </div>
                       <div className="p-2.5 rounded-lg bg-emerald-50/80 border border-emerald-200 shadow-2xs">
                         <span className="text-[10px] text-emerald-800 block uppercase font-bold">Valor Cuota Periódica</span>
@@ -2227,54 +2254,73 @@ export default function PosOriginacionCreditoPage() {
                         <span className="text-[10px] text-emerald-700 block">Cobro periódico</span>
                       </div>
                       <div className="p-2.5 rounded-lg bg-white border border-slate-200/60 shadow-2xs">
-                        <span className="text-[10px] text-slate-600 block uppercase font-semibold">1ª Cuota en Ruta</span>
+                        <span className="text-[10px] text-slate-600 block uppercase font-semibold">
+                          {modalidadProyeccion === 'dinamica' ? '1ª Visita Pactada' : '1ª Cuota en Ruta'}
+                        </span>
                         <span className="font-mono font-bold text-slate-900 block mt-0.5">{formatCOP(valorCuotaCalculado)}</span>
                         <span className="text-[10px] text-slate-500 block truncate">{fechaPrimeraCuota}</span>
                       </div>
                     </div>
 
                     {/* Cronograma Proyectado de Vencimientos por Cuota */}
-                    <div className="pt-3 border-t border-slate-200/60">
-                      <div className="flex items-center justify-between mb-2">
-                        <span className="text-[11px] font-bold text-slate-800 uppercase tracking-wider flex items-center gap-1.5">
-                          <span>Cronograma de Vencimiento de Cuotas ({tipoPago.toUpperCase()})</span>
-                        </span>
-                        <span className="text-[10px] text-slate-500 font-mono">
-                          {numeroCuotas} cuotas de {formatCOP(valorCuotaCalculado)}
-                        </span>
+                    {modalidadProyeccion === 'dinamica' ? (
+                      <div className="pt-3 border-t border-slate-200/60">
+                        <div className="p-3.5 rounded-xl bg-amber-50/80 border border-amber-200 shadow-2xs">
+                          <div className="flex items-center gap-2">
+                            <span className="text-sm">🗓️</span>
+                            <span className="text-xs font-bold text-amber-900 uppercase tracking-wide">
+                              Modalidad Dinámica Activa
+                            </span>
+                          </div>
+                          <p className="text-[11px] text-amber-800 mt-1.5 leading-relaxed">
+                            No se proyecta un cronograma rígido con fechas de vencimiento predefinidas. La 1ª visita queda pactada para el{' '}
+                            <span className="font-bold text-amber-950 font-mono">{fechaPrimeraCuota || 'Día a acordar'}</span> y las cuotas subsiguientes se agendarán dinámicamente en terreno durante la cobranza.
+                          </p>
+                        </div>
                       </div>
-                      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-                        {Array.from({ length: numeroCuotas }).map((_, idx) => {
-                          let fechaVencStr = fechaPrimeraCuota;
-                          if (idx > 0 && fechaPrimeraCuota) {
-                            const parts = fechaPrimeraCuota.split('-');
-                            const year0 = parseInt(parts[0], 10);
-                            const month0 = parseInt(parts[1], 10);
-                            const d = new Date(year0, month0 + idx, 0);
-                            const yyyy = d.getFullYear();
-                            const mm = String(d.getMonth() + 1).padStart(2, '0');
-                            const dd = String(d.getDate()).padStart(2, '0');
-                            fechaVencStr = `${yyyy}-${mm}-${dd}`;
-                          }
-                          return (
-                            <div
-                              key={idx}
-                              className="p-2 rounded-lg bg-white border border-slate-200/80 shadow-2xs flex flex-col justify-between"
-                            >
-                              <div className="flex items-center justify-between text-[10px]">
-                                <span className="font-bold text-slate-700">Cuota {idx + 1}</span>
-                                <span className="font-mono font-bold text-emerald-700">
-                                  {formatCOP(valorCuotaCalculado)}
+                    ) : (
+                      <div className="pt-3 border-t border-slate-200/60">
+                        <div className="flex items-center justify-between mb-2">
+                          <span className="text-[11px] font-bold text-slate-800 uppercase tracking-wider flex items-center gap-1.5">
+                            <span>Cronograma de Vencimiento de Cuotas ({tipoPago.toUpperCase()})</span>
+                          </span>
+                          <span className="text-[10px] text-slate-500 font-mono">
+                            {numeroCuotas} cuotas de {formatCOP(valorCuotaCalculado)}
+                          </span>
+                        </div>
+                        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                          {Array.from({ length: numeroCuotas }).map((_, idx) => {
+                            let fechaVencStr = fechaPrimeraCuota;
+                            if (idx > 0 && fechaPrimeraCuota) {
+                              const parts = fechaPrimeraCuota.split('-');
+                              const year0 = parseInt(parts[0], 10);
+                              const month0 = parseInt(parts[1], 10);
+                              const d = new Date(year0, month0 + idx, 0);
+                              const yyyy = d.getFullYear();
+                              const mm = String(d.getMonth() + 1).padStart(2, '0');
+                              const dd = String(d.getDate()).padStart(2, '0');
+                              fechaVencStr = `${yyyy}-${mm}-${dd}`;
+                            }
+                            return (
+                              <div
+                                key={idx}
+                                className="p-2 rounded-lg bg-white border border-slate-200/80 shadow-2xs flex flex-col justify-between"
+                              >
+                                <div className="flex items-center justify-between text-[10px]">
+                                  <span className="font-bold text-slate-700">Cuota {idx + 1}</span>
+                                  <span className="font-mono font-bold text-emerald-700">
+                                    {formatCOP(valorCuotaCalculado)}
+                                  </span>
+                                </div>
+                                <span className="text-[11px] font-mono font-bold text-slate-900 mt-1 block">
+                                  {fechaVencStr}
                                 </span>
                               </div>
-                              <span className="text-[11px] font-mono font-bold text-slate-900 mt-1 block">
-                                {fechaVencStr}
-                              </span>
-                            </div>
-                          );
-                        })}
+                            );
+                          })}
+                        </div>
                       </div>
-                    </div>
+                    )}
                   </div>
                 )}
 

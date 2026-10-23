@@ -710,6 +710,7 @@ export default function CobradorDashboard({ navigation }) {
   // Estados dinámicos de Marca Blanca y Versión de la Aplicación
   const [empresaNombre, setEmpresaNombre] = useState('');
   const [footerDinamico, setFooterDinamico] = useState(`v${appVersion} • Operaciones de Campo`);
+  const [modalidadProyeccionGlobal, setModalidadProyeccionGlobal] = useState('fija');
 
   useEffect(() => {
     let isMounted = true;
@@ -722,6 +723,9 @@ export default function CobradorDashboard({ navigation }) {
           if (emp) {
             setEmpresaNombre(emp);
           }
+          if (cfg.reglas_credito?.modalidad_proyeccion) {
+            setModalidadProyeccionGlobal(cfg.reglas_credito.modalidad_proyeccion);
+          }
           const rawPie = cfg.identidad_visual?.pie_mobile;
           if (rawPie && !rawPie.includes('v1.2.0')) {
             setFooterDinamico(rawPie);
@@ -731,6 +735,15 @@ export default function CobradorDashboard({ navigation }) {
             );
           }
         }
+        // Consulta fresca de parámetros del servidor
+        try {
+          const resConf = await apiClient.get('/configuracion/parametros');
+          if (resConf.data && isMounted) {
+            if (resConf.data.reglas_credito?.modalidad_proyeccion) {
+              setModalidadProyeccionGlobal(resConf.data.reglas_credito.modalidad_proyeccion);
+            }
+          }
+        } catch (_) {}
       } catch (e) {}
     };
     cargarMarcaBlanca();
@@ -796,6 +809,7 @@ export default function CobradorDashboard({ navigation }) {
   const isSubmittingAbonoRef = useRef(false);
   const [firmaCliente, setFirmaCliente] = useState(null);
   const [firmaCobrador, setFirmaCobrador] = useState(null);
+  const [fechaSiguienteVisita, setFechaSiguienteVisita] = useState('');
 
   // Estados del Modal de Comprobante / Recibo
   const [reciboExitoso, setReciboExitoso] = useState(null);
@@ -1724,6 +1738,7 @@ export default function CobradorDashboard({ navigation }) {
     setCreditoSeleccionado(credito);
     setFirmaCliente(null);
     setFirmaCobrador(null);
+    setFechaSiguienteVisita('');
     const cuotas = obtenerCuotasConChulos(credito);
     const cuotaPendiente = cuotas.find((q) => !q.pagada);
     const cuotaSugerida = cuotaPendiente
@@ -1885,6 +1900,33 @@ export default function CobradorDashboard({ navigation }) {
       }
     }
 
+    // Validación de Modalidad Dinámica: Agendar Siguiente Visita
+    const saldoResultante = Math.max(0, Math.round((saldoPendienteActual - valor) * 100) / 100);
+    const esModalidadDinamica = (creditoSeleccionado?.modalidad_proyeccion || modalidadProyeccionGlobal) === 'dinamica';
+
+    if (esModalidadDinamica && saldoResultante > 0) {
+      if (!fechaSiguienteVisita || !String(fechaSiguienteVisita).trim()) {
+        console.warn('❌ [DEBUG 4ca - VISITA REQUERIDA] Debe agendar la siguiente visita en modalidad dinámica.');
+        Alert.alert(
+          'Agendar Siguiente Visita Requerida',
+          'En modalidad dinámica, es obligatorio definir la fecha de la próxima visita de cobro para el saldo pendiente restante.'
+        );
+        return;
+      }
+
+      const fVisitaStr = getFechaLocal(fechaSiguienteVisita);
+      const hoyStr = getFechaLocal(new Date());
+
+      if (!fVisitaStr || !/^\d{4}-\d{2}-\d{2}$/.test(fVisitaStr) || fVisitaStr <= hoyStr) {
+        console.warn('❌ [DEBUG 4cb - FECHA VISITA INVALIDA] La fecha debe ser posterior al día actual:', { fVisitaStr, hoyStr });
+        Alert.alert(
+          'Fecha de Visita Inválida',
+          'La fecha para la siguiente visita debe ser posterior al día actual (a partir de mañana).'
+        );
+        return;
+      }
+    }
+
     // Validación preventiva obligatoria de la firma manuscrita del cliente titular
     if (!firmaCliente) {
       console.warn('❌ [DEBUG 4d - FIRMA REQUERIDA] No se ha capturado la firma del cliente titular.');
@@ -1991,6 +2033,7 @@ export default function CobradorDashboard({ navigation }) {
         monto_efectivo: finalMontoEfectivo,
         monto_transferencia: finalMontoTransferencia,
         referencia_pago: finalReferenciaPago,
+        fecha_siguiente_visita: (esModalidadDinamica && saldoResultante > 0) ? getFechaLocal(fechaSiguienteVisita) : null,
         notas: `Abono en ruta (${cuotaTexto}) - Cobrador ${nombreCobradorReal}`,
         firma_cliente: firmaCliente,
         firma_cobrador: firmaCobrador,
@@ -2008,6 +2051,7 @@ export default function CobradorDashboard({ navigation }) {
         monto_efectivo: finalMontoEfectivo,
         monto_transferencia: finalMontoTransferencia,
         referencia_pago: finalReferenciaPago,
+        fecha_siguiente_visita: (esModalidadDinamica && saldoResultante > 0) ? getFechaLocal(fechaSiguienteVisita) : null,
         credito_id: targetCreditoId,
         cobrador_id: targetCobradorId,
         cobrador_nombre: nombreCobradorReal,
@@ -2055,6 +2099,7 @@ export default function CobradorDashboard({ navigation }) {
               ...c,
               saldo_pendiente: nuevoSaldoConfirmado,
               cobradoHoy: true,
+              fecha_siguiente_visita: (esModalidadDinamica && saldoResultante > 0) ? getFechaLocal(fechaSiguienteVisita) : c.fecha_siguiente_visita,
             };
           }
           return c;
@@ -2213,6 +2258,7 @@ export default function CobradorDashboard({ navigation }) {
             nombre_archivo_pdf: filename,
             firma_cliente: reciboExitoso.firma_cliente || null,
             firma_cobrador: reciboExitoso.firma_cobrador || firmaCobrador || null,
+            fecha_siguiente_visita: reciboExitoso.fecha_siguiente_visita || null,
           };
 
           const resPdf = await fetch(`${baseURL}/abonos/recibo-offline-pdf`, {
@@ -2309,6 +2355,7 @@ export default function CobradorDashboard({ navigation }) {
                 nombre_archivo_pdf: filename,
                 firma_cliente: reciboExitoso.firma_cliente || null,
                 firma_cobrador: reciboExitoso.firma_cobrador || firmaCobrador || null,
+                fecha_siguiente_visita: reciboExitoso.fecha_siguiente_visita || null,
               };
               const resPost = await fetch(`${baseURL}/abonos/recibo-offline-pdf`, {
                 method: 'POST',
@@ -2472,6 +2519,150 @@ export default function CobradorDashboard({ navigation }) {
         Alert.alert('Correo', 'No se pudo abrir la aplicación de correo electrónico.');
       });
     }
+  };
+
+  // Renderizador unificado del cronograma de cuotas (Soporte Fijo vs Dinámico)
+  const renderCuotasTimeline = (item) => {
+    const cuotas = item.cuotasDesglose || obtenerCuotasConChulos(item) || [];
+    if (!cuotas || cuotas.length === 0) return null;
+
+    const esDinamica = (item.modalidad_proyeccion || modalidadProyeccionGlobal) === 'dinamica';
+    const cuotasPagadasTotal = cuotas.filter((q) => q.pagada).length;
+    const saldo = Number(item.saldo_pendiente || 0);
+
+    // Identificar la primera cuota pendiente o no pagada
+    const proximaCuota = cuotas.find((q) => !q.pagada);
+
+    // Fecha pactada para la próxima visita (prioridad: fecha_siguiente_visita -> fecha_proxima_visita -> fecha_primera_cuota -> fecha de la cuota)
+    const fechaPactadaRaw =
+      item.fecha_siguiente_visita ||
+      item.fecha_proxima_visita ||
+      item.fecha_primera_cuota ||
+      proximaCuota?.fecha ||
+      '';
+    const fechaPactadaStr = fechaPactadaRaw ? getFechaLocal(fechaPactadaRaw) : '';
+
+    return (
+      <View style={styles.cuotasTimelineWrapper}>
+        <View style={styles.cuotasTimelineHeadingRow}>
+          <Text style={styles.cuotasTimelineHeading}>
+            CRONOGRAMA DE CUOTAS ({cuotasPagadasTotal}/{cuotas.length} PAGADAS):
+          </Text>
+          {esDinamica && (
+            <View style={styles.badgeDinamicaMini}>
+              <Text style={styles.badgeDinamicaMiniText}>DINÁMICA</Text>
+            </View>
+          )}
+        </View>
+
+        <ScrollView
+          horizontal={true}
+          showsHorizontalScrollIndicator={true}
+          nestedScrollEnabled={true}
+          keyboardShouldPersistTaps="handled"
+          style={[
+            styles.cuotasChipsScroll,
+            Platform.OS === 'web' ? { overflowX: 'auto', WebkitOverflowScrolling: 'touch' } : {}
+          ]}
+          contentContainerStyle={[styles.cuotasChipsRow, { paddingRight: 20 }]}
+        >
+          {esDinamica ? (
+            <>
+              {/* 1. Únicamente las cuotas ya pagadas */}
+              {cuotas
+                .filter((q) => q.pagada)
+                .map((q) => (
+                  <View key={`pagada-${q.numero}`} style={[styles.cuotaChip, styles.cuotaChipPagada]}>
+                    <Text style={[styles.cuotaChipText, styles.cuotaChipTextPagada]} numberOfLines={1}>
+                      ✓ C{q.numero} Pagada
+                    </Text>
+                    {q.fecha ? (
+                      <Text style={[styles.cuotaChipDate, styles.cuotaChipDatePagada]} numberOfLines={1}>
+                        {q.fecha}
+                      </Text>
+                    ) : null}
+                  </View>
+                ))}
+
+              {/* 2. Pastilla resaltada para la 'Próxima Visita' (usando la fecha pactada) */}
+              {saldo > 0 && (
+                <View style={[styles.cuotaChip, styles.cuotaChipProximaVisita]}>
+                  <Text style={[styles.cuotaChipText, styles.cuotaChipTextProximaVisita]} numberOfLines={1}>
+                    📍 Próx. Visita{proximaCuota ? ` (C${proximaCuota.numero})` : ''}
+                  </Text>
+                  <Text style={[styles.cuotaChipDate, styles.cuotaChipDateProximaVisita]} numberOfLines={1}>
+                    {fechaPactadaStr ? `📅 ${fechaPactadaStr}` : 'Por acordar'}
+                  </Text>
+                </View>
+              )}
+
+              {/* Si ya liquidó el crédito por completo */}
+              {saldo <= 0 && cuotasPagadasTotal === cuotas.length && (
+                <View style={[styles.cuotaChip, styles.cuotaChipPagada]}>
+                  <Text style={[styles.cuotaChipText, styles.cuotaChipTextPagada]} numberOfLines={1}>
+                    🎉 Liquidado
+                  </Text>
+                </View>
+              )}
+            </>
+          ) : (
+            /* Modalidad Fija: renderiza todas las cuotas proyectadas 1..N */
+            cuotas.map((q) => {
+              const isPagada = Boolean(q.pagada);
+              const isParcial = Boolean(q.es_parcial);
+              const hasArrastre = !isPagada && Number(q.monto_arrastrado || 0) > 0;
+
+              let chipStyle = styles.cuotaChipPendiente;
+              let textStyle = styles.cuotaChipTextPendiente;
+              let dateStyle = styles.cuotaChipDatePendiente;
+
+              if (isPagada) {
+                chipStyle = styles.cuotaChipPagada;
+                textStyle = styles.cuotaChipTextPagada;
+                dateStyle = styles.cuotaChipDatePagada;
+              } else if (isParcial) {
+                chipStyle = styles.cuotaChipParcial;
+                textStyle = styles.cuotaChipTextParcial;
+                dateStyle = styles.cuotaChipDateParcial;
+              } else if (hasArrastre) {
+                chipStyle = styles.cuotaChipArrastre;
+                textStyle = styles.cuotaChipTextArrastre;
+                dateStyle = styles.cuotaChipDateArrastre;
+              }
+
+              let tituloTexto = `⏳ C${q.numero}: ${formatCOP(q.monto)}`;
+              if (isPagada) {
+                tituloTexto = `✓ C${q.numero} Pagada`;
+              } else if (isParcial) {
+                tituloTexto = `🟡 C${q.numero} Parcial: ${formatCOP(q.valor_pagado || 0)}`;
+              } else if (hasArrastre) {
+                tituloTexto = `⚠️ C${q.numero}: ${formatCOP(q.valor_exigible || q.monto)}`;
+              }
+
+              let subTexto = q.fecha;
+              if (isParcial) {
+                subTexto = `Faltan: ${formatCOP(q.saldo_cuota || 0)}`;
+              } else if (hasArrastre) {
+                subTexto = `(+${formatCOP(q.monto_arrastrado)} arrastre)`;
+              }
+
+              return (
+                <View key={q.numero} style={[styles.cuotaChip, chipStyle]}>
+                  <Text style={[styles.cuotaChipText, textStyle]} numberOfLines={1}>
+                    {tituloTexto}
+                  </Text>
+                  {subTexto ? (
+                    <Text style={[styles.cuotaChipDate, dateStyle]} numberOfLines={1}>
+                      {subTexto}
+                    </Text>
+                  ) : null}
+                </View>
+              );
+            })
+          )}
+        </ScrollView>
+      </View>
+    );
   };
 
   return (
@@ -3397,6 +3588,9 @@ export default function CobradorDashboard({ navigation }) {
                                     </View>
                                   </View>
 
+                                  {/* CRONOGRAMA DE CUOTAS */}
+                                  {renderCuotasTimeline(item)}
+
                                   {/* Botón de Pago Individual Aislado para este Contrato */}
                                   {yaCobrado ? (
                                     <View style={styles.contractSubDoneBanner}>
@@ -3675,76 +3869,8 @@ export default function CobradorDashboard({ navigation }) {
                             </View>
                           </View>
 
-                          {/* DESGLOSE DE CUOTAS CON CHULOS DE VERIFICACIÓN */}
-                          <View style={styles.cuotasTimelineWrapper}>
-                            <Text style={styles.cuotasTimelineHeading}>
-                              CRONOGRAMA DE CUOTAS ({cuotasPagadasTotal}/{cuotas.length} PAGADAS):
-                            </Text>
-                            <ScrollView
-                              horizontal={true}
-                              showsHorizontalScrollIndicator={true}
-                              nestedScrollEnabled={true}
-                              keyboardShouldPersistTaps="handled"
-                              style={[
-                                styles.cuotasChipsScroll,
-                                Platform.OS === 'web' ? { overflowX: 'auto', WebkitOverflowScrolling: 'touch' } : {}
-                              ]}
-                              contentContainerStyle={[styles.cuotasChipsRow, { paddingRight: 20 }]}
-                            >
-                              {cuotas.map((q) => {
-                                const isPagada = Boolean(q.pagada);
-                                const isParcial = Boolean(q.es_parcial);
-                                const hasArrastre = !isPagada && Number(q.monto_arrastrado || 0) > 0;
-
-                                let chipStyle = styles.cuotaChipPendiente;
-                                let textStyle = styles.cuotaChipTextPendiente;
-                                let dateStyle = styles.cuotaChipDatePendiente;
-
-                                if (isPagada) {
-                                  chipStyle = styles.cuotaChipPagada;
-                                  textStyle = styles.cuotaChipTextPagada;
-                                  dateStyle = styles.cuotaChipDatePagada;
-                                } else if (isParcial) {
-                                  chipStyle = styles.cuotaChipParcial;
-                                  textStyle = styles.cuotaChipTextParcial;
-                                  dateStyle = styles.cuotaChipDateParcial;
-                                } else if (hasArrastre) {
-                                  chipStyle = styles.cuotaChipArrastre;
-                                  textStyle = styles.cuotaChipTextArrastre;
-                                  dateStyle = styles.cuotaChipDateArrastre;
-                                }
-
-                                let tituloTexto = `⏳ C${q.numero}: ${formatCOP(q.monto)}`;
-                                if (isPagada) {
-                                  tituloTexto = `✓ C${q.numero} Pagada`;
-                                } else if (isParcial) {
-                                  tituloTexto = `🟡 C${q.numero} Parcial: ${formatCOP(q.valor_pagado || 0)}`;
-                                } else if (hasArrastre) {
-                                  tituloTexto = `⚠️ C${q.numero}: ${formatCOP(q.valor_exigible || q.monto)}`;
-                                }
-
-                                let subTexto = q.fecha;
-                                if (isParcial) {
-                                  subTexto = `Faltan: ${formatCOP(q.saldo_cuota || 0)}`;
-                                } else if (hasArrastre) {
-                                  subTexto = `(+${formatCOP(q.monto_arrastrado)} arrastre)`;
-                                }
-
-                                return (
-                                  <View key={q.numero} style={[styles.cuotaChip, chipStyle]}>
-                                    <Text style={[styles.cuotaChipText, textStyle]} numberOfLines={1}>
-                                      {tituloTexto}
-                                    </Text>
-                                    {subTexto ? (
-                                      <Text style={[styles.cuotaChipDate, dateStyle]} numberOfLines={1}>
-                                        {subTexto}
-                                      </Text>
-                                    ) : null}
-                                  </View>
-                                );
-                              })}
-                            </ScrollView>
-                          </View>
+                          {/* DESGLOSE DE CUOTAS / CRONOGRAMA */}
+                          {renderCuotasTimeline(item)}
 
                           {/* ACCIONES DEL COBRADOR */}
                           <View style={styles.proyeccionActionsRow}>
@@ -4299,6 +4425,74 @@ export default function CobradorDashboard({ navigation }) {
                         </View>
                       </View>
                     )}
+                  </View>
+                );
+              })()}
+
+              {/* Selector de Agendar Siguiente Visita (Exclusivo Modalidad Dinámica con saldo pendiente) */}
+              {(() => {
+                const sPendiente = Number(creditoSeleccionado?.saldo_pendiente || 0);
+                const valorAbonoNum = parseFloat(String(montoAbono).replace(/[^0-9.-]+/g, '')) || 0;
+                const saldoResultante = Math.max(0, Math.round((sPendiente - valorAbonoNum) * 100) / 100);
+                const esModalidadDinamica = (creditoSeleccionado?.modalidad_proyeccion || modalidadProyeccionGlobal) === 'dinamica';
+
+                if (!esModalidadDinamica || saldoResultante <= 0) {
+                  return null;
+                }
+
+                const dHoy = new Date();
+                const dManana = new Date(dHoy);
+                dManana.setDate(dManana.getDate() + 1);
+                const minFechaStr = getFechaLocal(dManana);
+
+                return (
+                  <View style={[styles.metodoDetalleBox, { borderColor: '#818CF8', backgroundColor: '#F5F3FF', marginTop: 12 }]}>
+                    <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 2 }}>
+                      <Text style={[styles.fieldLabel, { color: '#4338CA', fontWeight: '800' }]}>
+                        AGENDAR SIGUIENTE VISITA *
+                      </Text>
+                      <View style={{ backgroundColor: '#EDE9FE', paddingHorizontal: 6, paddingVertical: 2, borderRadius: 4, borderWidth: 1, borderColor: '#C4B5FD' }}>
+                        <Text style={{ fontSize: 9, fontWeight: '800', color: '#6D28D9' }}>MODALIDAD DINÁMICA</Text>
+                      </View>
+                    </View>
+
+                    {Platform.OS === 'web' ? (
+                      React.createElement('input', {
+                        type: 'date',
+                        min: minFechaStr,
+                        value: fechaSiguienteVisita,
+                        onChange: (e) => setFechaSiguienteVisita(e.target.value),
+                        style: {
+                          height: 42,
+                          borderRadius: 8,
+                          border: '1.5px solid #818CF8',
+                          padding: '0 10px',
+                          fontSize: 14,
+                          fontWeight: '700',
+                          fontFamily: 'inherit',
+                          backgroundColor: '#FFFFFF',
+                          color: '#1E1B4B',
+                          outline: 'none',
+                          width: '100%',
+                          boxSizing: 'border-box',
+                          marginTop: 4,
+                          cursor: 'pointer',
+                        },
+                      })
+                    ) : (
+                      <TextInput
+                        style={[styles.fieldInput, { borderColor: '#818CF8', backgroundColor: '#FFFFFF', fontWeight: '700' }]}
+                        value={fechaSiguienteVisita}
+                        onChangeText={setFechaSiguienteVisita}
+                        placeholder="YYYY-MM-DD (a partir de mañana)"
+                        placeholderTextColor="#94A3B8"
+                        editable={!isSubmittingAbono}
+                      />
+                    )}
+
+                    <Text style={[styles.fieldHelpText, { color: '#6D28D9', fontWeight: '600', marginTop: 4 }]}>
+                      ⚠️ Saldo pendiente restante: {formatCOP(saldoResultante)}. Defina la fecha de la próxima visita en ruta.
+                    </Text>
                   </View>
                 );
               })()}
@@ -7882,6 +8076,38 @@ const styles = StyleSheet.create({
   },
   cuotaChipDatePendiente: {
     color: '#94A3B8',
+  },
+  cuotaChipProximaVisita: {
+    backgroundColor: '#F5F3FF',
+    borderColor: '#8B5CF6',
+    borderWidth: 1.5,
+  },
+  cuotaChipTextProximaVisita: {
+    color: '#6D28D9',
+    fontWeight: '900',
+  },
+  cuotaChipDateProximaVisita: {
+    color: '#7C3AED',
+    fontWeight: '700',
+  },
+  cuotasTimelineHeadingRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 8,
+  },
+  badgeDinamicaMini: {
+    backgroundColor: '#EDE9FE',
+    borderColor: '#C4B5FD',
+    borderWidth: 1,
+    borderRadius: 4,
+    paddingHorizontal: 6,
+    paddingVertical: 1,
+  },
+  badgeDinamicaMiniText: {
+    fontSize: 9,
+    fontWeight: '800',
+    color: '#6D28D9',
   },
   proyeccionActionsRow: {
     flexDirection: 'row',

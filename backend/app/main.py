@@ -49,11 +49,27 @@ async def ensure_master_user() -> None:
         print(f"[SEGURIDAD] Advertencia al verificar Master en arranque: {exc}")
 
 
+async def ensure_db_schema() -> None:
+    """Asegura la presencia de columnas recientes en la base de datos PostgreSQL."""
+    from sqlalchemy import text
+    from app.core.database import AsyncSessionLocal
+    try:
+        async with AsyncSessionLocal() as session:
+            await session.execute(text("ALTER TABLE creditos ADD COLUMN IF NOT EXISTS modalidad_proyeccion VARCHAR(20) DEFAULT 'fija';"))
+            await session.execute(text("ALTER TABLE creditos ADD COLUMN IF NOT EXISTS fecha_siguiente_visita DATE;"))
+            await session.execute(text("ALTER TABLE abonos ADD COLUMN IF NOT EXISTS fecha_siguiente_visita DATE;"))
+            await session.commit()
+            print("[SCHEMA] Columnas modalidad_proyeccion y fecha_siguiente_visita aseguradas en base de datos.")
+    except Exception as exc:
+        print(f"[SCHEMA] Advertencia al verificar columnas en arranque: {exc}")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     """Ciclo de vida de la aplicación: gestión de inicio y detención de recursos."""
     print(f"Iniciando {settings.PROJECT_NAME} v{settings.VERSION} con Autenticación JWT y RBAC...")
     await ensure_master_user()
+    await ensure_db_schema()
     yield
     print(f"Cerrando {settings.PROJECT_NAME}...")
 

@@ -190,6 +190,8 @@ async def get_creditos(
                 saldo_pendiente=c.saldo_pendiente or Decimal("0.00"),
                 valor_cuota_base=c.valor_cuota or Decimal("0.00"),
                 tipo_pago=c.tipo_pago or TipoPago.MENSUAL,
+                modalidad_proyeccion=getattr(c, "modalidad_proyeccion", "fija") or "fija",
+                fecha_siguiente_visita=getattr(c, "fecha_siguiente_visita", None),
             )
             if res.get("cuotas_vencidas_count", 0) >= 3:
                 criticos.append(c)
@@ -357,6 +359,8 @@ async def create_credito(db: AsyncSession, credito_in: CreditoCreate) -> Credito
             valor_cuota=credito_in.valor_cuota,
             fecha_primera_cuota=credito_in.fecha_primera_cuota,
             saldo_pendiente=saldo_inicial,
+            modalidad_proyeccion=getattr(credito_in, "modalidad_proyeccion", "fija") or "fija",
+            fecha_siguiente_visita=getattr(credito_in, "fecha_siguiente_visita", None),
         )
         db.add(db_credito)
         # Flush para obtener db_credito.id_contrato sin comprometer la transacción

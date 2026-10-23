@@ -481,6 +481,8 @@ async def _obtener_datos_reporte_cartera(
             valor_cuota_base=val_c,
             tipo_pago=c.tipo_pago,
             hoy=hoy,
+            modalidad_proyeccion=getattr(c, "modalidad_proyeccion", "fija") or "fija",
+            fecha_siguiente_visita=getattr(c, "fecha_siguiente_visita", None),
         )
         cron_objs = cron_info["cronograma"]
         cronograma = [co.model_dump() if hasattr(co, "model_dump") else co.dict() for co in cron_objs]
@@ -843,6 +845,8 @@ async def resumen_gerencial(
                 valor_cuota_base=c.valor_cuota or Decimal("0.00"),
                 tipo_pago=c.tipo_pago,
                 hoy=hoy,
+                modalidad_proyeccion=getattr(c, "modalidad_proyeccion", "fija") or "fija",
+                fecha_siguiente_visita=getattr(c, "fecha_siguiente_visita", None),
             )
             cuotas_venc = [q for q in cron_info["cronograma"] if q.estado == "vencida"]
             if cuotas_venc:

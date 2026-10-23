@@ -36,7 +36,7 @@ def calcular_fecha_vencimiento(fecha_inicial: date, cuota_idx: int, tipo_pago: T
 class CuotaCronograma(BaseModel):
     """Representación de cada cuota individual dentro del plan de pagos proyectado."""
     numero: int = Field(..., description="Número ordinal de la cuota (1..N)")
-    fecha_vencimiento: date = Field(..., description="Fecha de exigibilidad/vencimiento de la cuota")
+    fecha_vencimiento: Optional[date] = Field(None, description="Fecha de exigibilidad/vencimiento de la cuota")
     valor_cuota: Decimal = Field(..., description="Monto exigible de cobro para esta cuota (base + arrastre)")
     valor_base: Decimal = Field(default=Decimal("0.00"), description="Valor contractual base de la cuota")
     valor_exigible: Decimal = Field(default=Decimal("0.00"), description="Monto total exigible a cobrar (base + arrastre)")
@@ -56,6 +56,8 @@ def generar_cronograma_con_arrastre(
     valor_cuota_base: Decimal,
     tipo_pago: TipoPago,
     hoy: Optional[date] = None,
+    modalidad_proyeccion: str = "fija",
+    fecha_siguiente_visita: Optional[date] = None,
 ) -> dict:
     """Genera el cronograma de cuotas escalonado aplicando amortización por abonos parciales y arrastre de saldos insolutos."""
     if hoy is None:
@@ -75,7 +77,6 @@ def generar_cronograma_con_arrastre(
 
     for i in range(numero_cuotas):
         num_cuota = i + 1
-        venc = calcular_fecha_vencimiento(fecha_primera_cuota, i, tipo_pago)
 
         valor_base = val_c
         monto_arrastrado = arrastre_siguiente
@@ -93,6 +94,10 @@ def generar_cronograma_con_arrastre(
             es_parcial = False
             st = "pagada"
             cuotas_pagadas_count += 1
+            if modalidad_proyeccion == "dinamica":
+                venc = fecha_primera_cuota if i == 0 else None
+            else:
+                venc = calcular_fecha_vencimiento(fecha_primera_cuota, i, tipo_pago)
         elif monto_disponible > Decimal("0.00"):
             # Abono parcial: cubre parte de la cuota
             valor_pagado = monto_disponible
@@ -107,17 +112,34 @@ def generar_cronograma_con_arrastre(
             if not encontro_proxima:
                 proxima_cuota_numero = num_cuota
                 encontro_proxima = True
+            if modalidad_proyeccion == "dinamica":
+                venc = fecha_primera_cuota if i == 0 else fecha_siguiente_visita
+            else:
+                venc = calcular_fecha_vencimiento(fecha_primera_cuota, i, tipo_pago)
         else:
             # Sin abonos aplicados a esta cuota
             valor_pagado = Decimal("0.00")
             saldo_cuota = valor_exigible
             pagada = False
             es_parcial = False
+            is_first_pending = not encontro_proxima
             if not encontro_proxima:
                 proxima_cuota_numero = num_cuota
                 encontro_proxima = True
 
-            if venc < hoy:
+            if modalidad_proyeccion == "dinamica":
+                if i == 0:
+                    venc = fecha_primera_cuota
+                elif is_first_pending and fecha_siguiente_visita:
+                    venc = fecha_siguiente_visita
+                else:
+                    venc = None
+            else:
+                venc = calcular_fecha_vencimiento(fecha_primera_cuota, i, tipo_pago)
+
+            if venc is None:
+                st = "pendiente"
+            elif venc < hoy:
                 st = "vencida"
             elif venc == hoy:
                 st = "exigible_hoy"
@@ -151,7 +173,11 @@ def generar_cronograma_con_arrastre(
         cuota_actual_num = proxima_cuota_numero
         cuota_act = cuotas[proxima_cuota_numero - 1]
         proximo_vencimiento = cuota_act.fecha_vencimiento
-        if proximo_vencimiento < hoy:
+        if proximo_vencimiento is None:
+            esta_vencido = False
+            exigible_hoy = False
+            dias_mora = 0
+        elif proximo_vencimiento < hoy:
             esta_vencido = True
             exigible_hoy = True
             dias_mora = (hoy - proximo_vencimiento).days
@@ -264,6 +290,14 @@ class CreditoBase(BaseModel):
         None,
         ge=0,
         description="Saldo pendiente inicial (si no se envía, toma el monto financiado)",
+    )
+    modalidad_proyeccion: Optional[str] = Field(
+        default="fija",
+        description="Modalidad de proyección de cuotas: fija o dinamica",
+    )
+    fecha_siguiente_visita: Optional[date] = Field(
+        default=None,
+        description="Fecha agendada para la siguiente visita en modalidad dinámica",
     )
 
 
@@ -417,6 +451,8 @@ class CreditoUpdate(BaseModel):
     monto_inicial_transferencia: Optional[Decimal] = None
     codeudor: Optional[CodeudorCreate] = None
     referencia: Optional[ReferenciaFamiliarCreate] = None
+    modalidad_proyeccion: Optional[str] = None
+    fecha_siguiente_visita: Optional[date] = None
 
     @field_validator("estado", mode="before")
     @classmethod
@@ -490,6 +526,8 @@ class CreditoResponse(CreditoBase):
                 saldo_pendiente=self.saldo_pendiente,
                 valor_cuota_base=self.valor_cuota,
                 tipo_pago=self.tipo_pago,
+                modalidad_proyeccion=getattr(self, "modalidad_proyeccion", "fija") or "fija",
+                fecha_siguiente_visita=getattr(self, "fecha_siguiente_visita", None),
             )
             self.cronograma_cuotas = res["cronograma"]
             self.cuotas_pagadas_count = res["cuotas_pagadas_count"]

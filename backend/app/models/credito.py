@@ -156,6 +156,16 @@ class Credito(Base):
         default=Decimal("0.00"),
         server_default="0.00",
     )
+    modalidad_proyeccion: Mapped[str] = mapped_column(
+        String(20),
+        default="fija",
+        server_default="fija",
+        nullable=False,
+    )
+    fecha_siguiente_visita: Mapped[Optional[date]] = mapped_column(
+        Date,
+        nullable=True,
+    )
     creado_en: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         server_default=func.now(),

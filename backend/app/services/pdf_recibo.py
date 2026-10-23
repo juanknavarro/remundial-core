@@ -1014,6 +1014,8 @@ def generar_pdf_recibo_venta(credito: Credito) -> bytes:
             saldo_pendiente=credito.saldo_pendiente,
             valor_cuota_base=valor_cuota_val,
             tipo_pago=credito.tipo_pago or TipoPago.MENSUAL,
+            modalidad_proyeccion=getattr(credito, "modalidad_proyeccion", "fija") or "fija",
+            fecha_siguiente_visita=getattr(credito, "fecha_siguiente_visita", None),
         )
         cuotas_cron = cronograma_res.get("cronograma", [])
 
@@ -1045,7 +1047,7 @@ def generar_pdf_recibo_venta(credito: Credito) -> bytes:
         ]
 
         for q in cuotas_cron:
-            fecha_venc_str = q.fecha_vencimiento.strftime("%d/%m/%Y")
+            fecha_venc_str = q.fecha_vencimiento.strftime("%d/%m/%Y") if q.fecha_vencimiento else "Agendamiento en ruta"
             st_text = "Pendiente"
             if q.pagada:
                 st_text = "PAGADA"
@@ -1055,7 +1057,7 @@ def generar_pdf_recibo_venta(credito: Credito) -> bytes:
             cron_rows.append(
                 [
                     Paragraph(f"Cuota {q.numero} de {credito.numero_cuotas}", style_table_cell),
-                    Paragraph(f"<b>{fecha_venc_str}</b> (Último día)", style_table_cell),
+                    Paragraph(f"<b>{fecha_venc_str}</b>" if q.fecha_vencimiento else "<i>En ruta</i>", style_table_cell),
                     Paragraph(format_cop(q.valor_base), style_table_cell),
                     Paragraph(format_cop(q.valor_exigible), style_table_cell_bold),
                     Paragraph(st_text, style_table_cell),
@@ -1409,6 +1411,33 @@ def generar_pdf_recibo_abono(
     total_cuotas_str = str(getattr(credito, "numero_cuotas", "-")) if credito else "-"
     valor_cuota_val = Decimal(str(getattr(credito, "valor_cuota", 0) or 0)) if credito else Decimal("0.00")
 
+    # Extracción y formateo de la Fecha de Próxima Visita (Modalidad Dinámica)
+    fecha_prox_raw = (
+        getattr(abono, "fecha_siguiente_visita", None)
+        or (getattr(credito, "fecha_siguiente_visita", None) if credito else None)
+        or (getattr(credito, "fecha_proxima_visita", None) if credito else None)
+    )
+    fecha_prox_visita_str = ""
+    if fecha_prox_raw:
+        if isinstance(fecha_prox_raw, (date, datetime)):
+            fecha_prox_visita_str = fecha_prox_raw.strftime("%d/%m/%Y")
+        elif isinstance(fecha_prox_raw, str):
+            f_str = fecha_prox_raw.strip()
+            if f_str:
+                try:
+                    if "T" in f_str:
+                        dt_p = datetime.fromisoformat(f_str)
+                        fecha_prox_visita_str = dt_p.strftime("%d/%m/%Y")
+                    elif re.match(r"^\d{4}-\d{2}-\d{2}$", f_str):
+                        partes = f_str.split("-")
+                        fecha_prox_visita_str = f"{partes[2]}/{partes[1]}/{partes[0]}"
+                    elif re.match(r"^\d{2}/\d{2}/\d{4}$", f_str):
+                        fecha_prox_visita_str = f_str
+                    else:
+                        fecha_prox_visita_str = f_str
+                except Exception:
+                    fecha_prox_visita_str = f_str
+
     # 2. CÁLCULO PRECISO: PAGO TOTAL DE CUOTA VS ABONO PARCIAL Y SALDO INSOLUTO
     es_abono_parcial = getattr(abono, "es_abono_parcial", None)
     if es_abono_parcial is None:
@@ -1449,19 +1478,20 @@ def generar_pdf_recibo_abono(
         ),
     ]
 
+    meta_header_lines = [
+        f"<b>Contrato Asociado:</b> {codigo_ctr}",
+        f"<b>Modalidad de Recaudo:</b> <font color='{tipo_badge_color}'><b>{tipo_recibo_badge}</b></font>",
+        f"<b>Fecha de Recaudo:</b> {fecha_abono_str}",
+        f"<b>Cobrador en Ruta:</b> {cobrador_nombre}",
+        f"<b>Medio de Pago:</b> {metodo_pago_str}",
+        f"<b>Estado Caja:</b> <font color='{estado_color}'><b>{estado_label}</b></font>",
+    ]
+
     header_col_der = [
         Paragraph(voucher_main_title, style_voucher_title),
         Paragraph(codigo_rec, style_voucher_code),
         Spacer(1, 2),
-        Paragraph(
-            f"<b>Contrato Asociado:</b> {codigo_ctr}<br/>"
-            f"<b>Modalidad de Recaudo:</b> <font color='{tipo_badge_color}'><b>{tipo_recibo_badge}</b></font><br/>"
-            f"<b>Fecha de Recaudo:</b> {fecha_abono_str}<br/>"
-            f"<b>Cobrador en Ruta:</b> {cobrador_nombre}<br/>"
-            f"<b>Medio de Pago:</b> {metodo_pago_str}<br/>"
-            f"<b>Estado Caja:</b> <font color='{estado_color}'><b>{estado_label}</b></font>",
-            style_voucher_meta,
-        ),
+        Paragraph("<br/>".join(meta_header_lines), style_voucher_meta),
     ]
 
     header_table = Table(
@@ -1662,7 +1692,43 @@ def generar_pdf_recibo_abono(
             )
         )
     story.append(callout_table)
-    story.append(Spacer(1, 8))
+
+    # Fila Resaltada de Próxima Visita Programada (Modalidad Dinámica)
+    if fecha_prox_visita_str and saldo_restante_val > Decimal("0.00"):
+        story.append(Spacer(1, 4))
+        prox_visita_content = [
+            Paragraph(
+                f"<b><font size='8.5' color='#3730A3'>📅 Próxima Visita Programada:</font></b> "
+                f"&nbsp;<b><font size='8.5' color='#1E1B4B'>{fecha_prox_visita_str}</font></b> "
+                f"&nbsp;&nbsp;<font size='7' color='#4F46E5'>• Agendamiento pactado en terreno para continuidad de recaudo (Modalidad Dinámica)</font>",
+                ParagraphStyle(
+                    "AbonoProxVisitaBanner",
+                    parent=base_styles["Normal"],
+                    fontName="Helvetica",
+                    fontSize=8,
+                    leading=10,
+                    textColor=colors.HexColor("#1E1B4B"),
+                ),
+            )
+        ]
+        prox_visita_table = Table([[prox_visita_content]], colWidths=[548])
+        prox_visita_table.setStyle(
+            TableStyle(
+                [
+                    ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#EEF2FF")),
+                    ("BOX", (0, 0), (-1, -1), 1, colors.HexColor("#C7D2FE")),
+                    ("LEFTPADDING", (0, 0), (-1, -1), 8),
+                    ("RIGHTPADDING", (0, 0), (-1, -1), 8),
+                    ("TOPPADDING", (0, 0), (-1, -1), 4),
+                    ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+                    ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+                ]
+            )
+        )
+        story.append(prox_visita_table)
+        story.append(Spacer(1, 6))
+    else:
+        story.append(Spacer(1, 8))
 
     # 7. TABLA DE RESUMEN DE APLICACIÓN DEL PAGO
     resumen_heading = Table(
@@ -2039,6 +2105,8 @@ def generar_pdf_acta_restitucion(
             saldo_pendiente=credito.saldo_pendiente or Decimal("0.00"),
             valor_cuota_base=credito.valor_cuota or Decimal("0.00"),
             tipo_pago=credito.tipo_pago or TipoPago.MENSUAL,
+            modalidad_proyeccion=getattr(credito, "modalidad_proyeccion", "fija") or "fija",
+            fecha_siguiente_visita=getattr(credito, "fecha_siguiente_visita", None),
         )
         cuotas_vencidas_num = res_cron.get("cuotas_vencidas_count", 3)
 

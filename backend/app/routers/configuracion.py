@@ -46,6 +46,7 @@ class ReglasCreditoUpdateRequest(BaseModel):
     cuota_inicial_minima: Optional[float] = Field(None, ge=0)
     tasa_interes_incluida: Optional[bool] = None
     descripcion_mora_critica: Optional[str] = Field(None, description="Texto explicativo de la política de cartera crítica")
+    modalidad_proyeccion: Optional[str] = Field(None, pattern="^(fija|dinamica)$", description="Modalidad de proyección de cuotas: fija o dinamica")
 
 
 class ActualizarEmpresaRequest(BaseModel):
@@ -270,6 +271,7 @@ def _obtener_parametros_locales() -> Dict[str, Any]:
             "descripcion_mora_critica": "Se clasifica en Cartera Crítica a partir de 3 cuotas vencidas (excluyendo créditos de 2 cuotas).",
             "cuota_inicial_minima": 0.0,
             "tasa_interes_incluida": True,
+            "modalidad_proyeccion": "fija",
         },
         "sistema": {
             "version": "1.2.0",

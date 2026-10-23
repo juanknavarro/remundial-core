@@ -200,6 +200,7 @@ async def descargar_recibo_abono_pdf(
                 valor_cuota_siguiente=Decimal("0.00"),
                 firma_cliente=firma_guardada,
                 firma_cobrador=obtener_firma_almacenada(id_recibo, "cobrador"),
+                fecha_siguiente_visita=None,
             )
         else:
             raise HTTPException(
@@ -394,6 +395,7 @@ async def generar_recibo_offline_pdf(
         valor_cuota_siguiente=valor_cuota_sig,
         firma_cliente=datos.firma_cliente,
         firma_cobrador=datos.firma_cobrador,
+        fecha_siguiente_visita=datos.fecha_siguiente_visita,
     )
 
     pdf_bytes = generar_pdf_recibo_abono(
