@@ -28,6 +28,7 @@ import {
   CalendarDays,
   FolderArchive,
   AlertTriangle,
+  RotateCcw,
   Wifi,
   WifiOff,
   Info,
@@ -62,6 +63,7 @@ const allNavSections: NavSection[] = [
       { name: 'Cartera de Créditos', href: '/dashboard/creditos', icon: CreditCard, roles: ['master', 'supervisor', 'vendedor'] },
       { name: 'Control de Rutas & Arqueo', href: '/dashboard/supervisor/rutas', icon: CheckCircle2, roles: ['master', 'supervisor'] },
       { name: 'Cartera Crítica & Retiros', href: '/dashboard/cartera-critica', icon: AlertTriangle, badge: 'Riesgo', badgeVariant: 'warning', roles: ['master', 'supervisor'] },
+      { name: 'Devoluciones', href: '/dashboard/ventas-anuladas', icon: RotateCcw, roles: ['master', 'supervisor'] },
     ],
   },
   {

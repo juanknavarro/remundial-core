@@ -11,12 +11,14 @@ import {
   Alert,
   Linking,
   Platform,
+  TextInput,
 } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useAuth } from '../context/AuthContext';
 import { useSync } from '../context/SyncContext';
 import apiClient, { STORAGE_KEYS, limpiarCredencialesLocales } from '../api/client';
 import InFrameModal from '../components/InFrameModal';
+import SignatureCanvas from '../components/SignatureCanvas';
 import { version as appVersion } from '../../package.json';
 import { CACHE_CONFIG } from '../storage/database';
 
@@ -27,7 +29,17 @@ const formatCOP = (val) => {
 
 export default function VendedorDashboard({ navigation }) {
   const { user, logout } = useAuth();
-  const { obtenerVentasLocalesPendientes, forzarSincronizacion, pendingCount, isOnline } = useSync();
+  const {
+    obtenerVentasLocalesPendientes,
+    obtenerVentasEnConflicto,
+    eliminarVentaDeCola,
+    inyectarVentaCuarentena,
+    refrescarContador,
+    forzarSincronizacion,
+    pendingCount,
+    isOnline,
+    bancos,
+  } = useSync();
 
   // Estados de navegación interna (Tabs)
   const [activeTab, setActiveTab] = useState('ventas'); // 'ventas' | 'acciones'
@@ -36,6 +48,22 @@ export default function VendedorDashboard({ navigation }) {
   const [ventas, setVentas] = useState([]);
   const [isLoadingVentas, setIsLoadingVentas] = useState(false);
   const [isRefreshing, setIsRefreshing] = useState(false);
+
+  // HITO 2: Estados para ventas en conflicto de stock y resolución de devolución
+  const [ventasConflicto, setVentasConflicto] = useState([]);
+  const [modalConflictoVisible, setModalConflictoVisible] = useState(false);
+  const [ventaConflictoSeleccionada, setVentaConflictoSeleccionada] = useState(null);
+  const [isProcesandoAnulacion, setIsProcesandoAnulacion] = useState(false);
+  const [bancoDestino, setBancoDestino] = useState('');
+  const [cuentaDestino, setCuentaDestino] = useState('');
+  const [notasAnulacion, setNotasAnulacion] = useState('');
+
+  // FASE 1: Firmas táctiles para el proceso de anulación/devolución
+  const [firmaCliente, setFirmaCliente] = useState(null);
+  const [firmaVendedor, setFirmaVendedor] = useState(null);
+
+  // FASE 3: Modal de comprobante de anulación exitosa y Deep Link a WhatsApp
+  const [modalExitoAnulacion, setModalExitoAnulacion] = useState(null);
 
   // Estado del Modal de Confirmación de Cierre de Sesión
   const [showLogoutModal, setShowLogoutModal] = useState(false);
@@ -191,13 +219,23 @@ export default function VendedorDashboard({ navigation }) {
 
       // Combinar primero las offline para feedback instantáneo y luego las del servidor
       setVentas([...ventasLocales, ...ventasServidor]);
+
+      // Consultar ventas en cuarentena por conflicto de inventario (HITO 2)
+      if (obtenerVentasEnConflicto) {
+        try {
+          const colConflicto = await obtenerVentasEnConflicto();
+          setVentasConflicto(colConflicto || []);
+        } catch (cErr) {
+          console.warn('[VendedorDashboard] Error al consultar ventas en conflicto:', cErr);
+        }
+      }
     } catch (error) {
       console.warn('[VendedorDashboard] Error cargando ventas:', error);
     } finally {
       setIsLoadingVentas(false);
       setIsRefreshing(false);
     }
-  }, [obtenerVentasLocalesPendientes]);
+  }, [obtenerVentasLocalesPendientes, obtenerVentasEnConflicto]);
 
   useEffect(() => {
     cargarVentas();
@@ -323,11 +361,8 @@ export default function VendedorDashboard({ navigation }) {
   const handleConfirmLogout = async () => {
     try {
       setShowLogoutModal(false);
-      // 1. Limpieza profunda y exhaustiva en AsyncStorage, localStorage/sessionStorage y Axios
       await limpiarCredencialesLocales();
-      // 2. Destruir sesión en el contexto global (token = null desmonta el dashboard de inmediato)
       await logout();
-      // 3. Redirección forzosa e inmediata a la pantalla de Login
       try {
         if (navigation?.reset) {
           navigation.reset({
@@ -349,6 +384,227 @@ export default function VendedorDashboard({ navigation }) {
     }
   };
 
+  // ==========================================
+  // GESTIÓN DE ACCIONES PARA HITO 2: ANULACIONES & DEVOLUCIONES
+  // ==========================================
+  const mostrarNotificacionVendedor = (titulo, mensaje) => {
+    if (Platform.OS === 'web' && typeof window !== 'undefined') {
+      window.alert(`${titulo}\n\n${mensaje}`);
+    } else {
+      Alert.alert(titulo, mensaje);
+    }
+  };
+
+  // ==========================================
+  // INYECCIÓN TEMPORAL: SIMULACIÓN DE CUARENTENA (TESTING UI)
+  // ==========================================
+  const handleSimularCuarentena = async () => {
+    try {
+      if (inyectarVentaCuarentena) {
+        await inyectarVentaCuarentena();
+      } else {
+        const raw = await AsyncStorage.getItem(STORAGE_KEYS.SYNC_QUEUE || '@remundial_sync_queue');
+        const cola = raw ? JSON.parse(raw) : [];
+        const idSimulado = `VENTA-OFF-TEST-${Date.now()}`;
+        const nuevoItemCuarentena = {
+          id: idSimulado,
+          type: 'venta',
+          status: 'conflicto_stock',
+          createdAt: new Date().toISOString(),
+          retryCount: 1,
+          lastError: 'HTTP 400 Bad Request: Stock insuficiente en almacén (Simulación de cuarentena).',
+          payload: {
+            monto_total: 100000,
+            cuota_inicial: 100000,
+            monto_financiado: 100000,
+            metodo_pago_inicial: 'Mixto',
+            monto_efectivo: 50000,
+            monto_transferencia: 50000,
+            banco_transferencia: 'Bancolombia',
+            referencia_pago_inicial: 'TRANSF-MOCK-9988',
+            detalles: [
+              {
+                producto_id: 888,
+                nombre: 'Juego de Sala Imperial 3 Puestos (Ficticio)',
+                cantidad: 1,
+                valor_unitario_acordado: 100000,
+              },
+            ],
+            cliente: {
+              nombres: 'Prueba Mock',
+              cedula: '1098765432',
+              telefono: '3001234567',
+              direccion: 'Carrera 15 # 45-20',
+              barrio: 'Centro',
+            },
+          },
+          meta: {
+            cliente_nombre: 'Prueba Mock',
+            cliente_cedula: '1098765432',
+            cliente_telefono: '3001234567',
+            articulos_resumen: '1x Juego de Sala Imperial 3 Puestos (Ficticio)',
+            tipo_pago: 'Mixto ($50.000 Efectivo, $50.000 Transferencia)',
+            banco: 'Bancolombia',
+            valor_cuota: 100000,
+            cuotas: 1,
+          },
+        };
+        await AsyncStorage.setItem(
+          STORAGE_KEYS.SYNC_QUEUE || '@remundial_sync_queue',
+          JSON.stringify([nuevoItemCuarentena, ...cola])
+        );
+      }
+
+      // Refrescar inmediatamente ventas y contadores en la UI
+      await cargarVentas();
+      if (refrescarContador) await refrescarContador();
+
+      mostrarNotificacionVendedor(
+        '🧪 Cuarentena Inyectada',
+        'Se inyectó una venta simulada en cuarentena con Pago Mixto ($50.000 Efectivo, $50.000 Transferencia), Cliente "Prueba Mock". Revisa el buzón rojo en pantalla.'
+      );
+    } catch (err) {
+      console.error('[VendedorDashboard] Error al inyectar simulación:', err);
+      mostrarNotificacionVendedor('Error de Simulación', err.message || 'No se pudo inyectar el registro');
+    }
+  };
+
+  const abrirGestionConflicto = (item) => {
+    setVentaConflictoSeleccionada(item);
+    const p = item.payload || {};
+    const meta = item.meta || {};
+    setBancoDestino(p.banco_transferencia || meta.banco || '');
+    setCuentaDestino(p.referencia_pago_inicial || '');
+    setNotasAnulacion('');
+    setFirmaCliente(null);
+    setFirmaVendedor(null);
+    setModalConflictoVisible(true);
+  };
+
+  const handleEjecutarAnulacion = async (estadoDevolucion) => {
+    if (!ventaConflictoSeleccionada) return;
+
+    const p = ventaConflictoSeleccionada.payload || {};
+    const meta = ventaConflictoSeleccionada.meta || {};
+    const monto = Number(p.cuota_inicial ?? p.monto_total ?? 0) || Number(p.monto_financiado ?? 0);
+
+    if (estadoDevolucion === 'PENDIENTE_REEMBOLSO_TRANSFERENCIA') {
+      if (!bancoDestino.trim() || !cuentaDestino.trim()) {
+        mostrarNotificacionVendedor(
+          'Datos Incompletos',
+          'Por favor ingresa el Banco de Destino y el Número de Cuenta del cliente para tramitar el reembolso administrativo.'
+        );
+        return;
+      }
+    }
+
+    // FASE 1: Validación estricta de doble firma digital
+    if (!firmaCliente) {
+      mostrarNotificacionVendedor(
+        'Firma del Cliente Requerida',
+        'Debe capturar la firma del cliente como comprobante de recibido / anulación a satisfacción.'
+      );
+      return;
+    }
+
+    if (!firmaVendedor) {
+      mostrarNotificacionVendedor(
+        'Firma del Vendedor Requerida',
+        'Debe estampar su firma como asesor comercial para certificar el egreso de caja y la anulación en ruta.'
+      );
+      return;
+    }
+
+    try {
+      setIsProcesandoAnulacion(true);
+
+      const payloadAnulacion = {
+        vendedor_id: user?.id,
+        fecha: ventaConflictoSeleccionada.createdAt || new Date().toISOString(),
+        monto_total: monto,
+        metodo_pago_original: p.metodo_pago_inicial || meta.tipo_pago || (estadoDevolucion === 'EFECTIVO_DEVUELTO_EN_RUTA' ? 'Efectivo' : 'Transferencia'),
+        referencia_original: p.referencia_pago_inicial || null,
+        articulos_json: p.detalles || [],
+        estado_devolucion: estadoDevolucion,
+        banco_destino_cliente: estadoDevolucion === 'PENDIENTE_REEMBOLSO_TRANSFERENCIA' ? bancoDestino.trim() : null,
+        cuenta_destino_cliente: estadoDevolucion === 'PENDIENTE_REEMBOLSO_TRANSFERENCIA' ? cuentaDestino.trim() : null,
+        notas_vendedor: notasAnulacion.trim() || (
+          estadoDevolucion === 'EFECTIVO_DEVUELTO_EN_RUTA'
+            ? `Devolución de efectivo en terreno por falta de stock. Venta local ${ventaConflictoSeleccionada.id}`
+            : `Solicitud de reembolso por quiebre de inventario. Venta local ${ventaConflictoSeleccionada.id}`
+        ),
+        firma_vendedor: firmaVendedor,
+        firma_cliente: firmaCliente,
+      };
+
+      const res = await apiClient.post('/auditoria/anuladas', payloadAnulacion);
+      if (res.status === 200 || res.status === 201) {
+        const idVenta = ventaConflictoSeleccionada.id;
+        const nomCliente = meta.cliente_nombre || p.cliente?.nombres || 'Cliente';
+        const telCliente = meta.cliente_telefono || p.cliente?.telefono || '';
+
+        // Eliminar registro local en SQLite / AsyncStorage
+        await eliminarVentaDeCola(idVenta);
+
+        // Actualizar estado local
+        setVentasConflicto((prev) => prev.filter((v) => v.id !== idVenta));
+        setModalConflictoVisible(false);
+        setVentaConflictoSeleccionada(null);
+        setFirmaCliente(null);
+        setFirmaVendedor(null);
+        setBancoDestino('');
+        setCuentaDestino('');
+        setNotasAnulacion('');
+
+        // FASE 3: Abrir modal de comprobante y deep link de WhatsApp
+        setModalExitoAnulacion({
+          clienteNombre: nomCliente,
+          clienteTelefono: telCliente,
+          asesorNombre: user?.nombre || 'Asesor Comercial',
+          monto: monto,
+          idOrden: idVenta,
+          estadoDevolucion: estadoDevolucion,
+        });
+      }
+    } catch (err) {
+      console.error('[VendedorDashboard] Error al radicar anulación de venta:', err);
+      const detail = err.response?.data?.detail || err.message || 'Error de conexión';
+      mostrarNotificacionVendedor('Error al Anular Venta', typeof detail === 'string' ? detail : JSON.stringify(detail));
+    } finally {
+      setIsProcesandoAnulacion(false);
+    }
+  };
+
+  // FASE 3: Manejador de Deep Link a WhatsApp
+  const handleEnviarComprobanteWhatsApp = async () => {
+    if (!modalExitoAnulacion) return;
+    const { clienteNombre, clienteTelefono, asesorNombre, monto } = modalExitoAnulacion;
+    let tel = String(clienteTelefono || '').replace(/\D/g, '');
+    if (tel.length === 10 && !tel.startsWith('57')) {
+      tel = '57' + tel;
+    }
+
+    const nombreCliente = clienteNombre || 'Cliente';
+    const nombreAsesor = asesorNombre || user?.nombre || 'Asesor Comercial';
+    const montoFormateado = formatCOP(monto);
+    const mensaje = `Hola ${nombreCliente}, desde Remundial Arte's el asesor ${nombreAsesor} le confirma la anulación oficial de su compra por 'Falta de inventario'. Le confirmamos la devolución de ${montoFormateado} COP. Su cuenta queda saldada.`;
+
+    const waUrl = tel
+      ? `https://wa.me/${tel}?text=${encodeURIComponent(mensaje)}`
+      : `https://wa.me/?text=${encodeURIComponent(mensaje)}`;
+
+    try {
+      if (Platform.OS === 'web' && typeof window !== 'undefined') {
+        window.open(waUrl, '_blank');
+      } else {
+        await Linking.openURL(waUrl);
+      }
+    } catch (err) {
+      console.warn('[VendedorDashboard] Error al abrir WhatsApp:', err);
+      mostrarNotificacionVendedor('WhatsApp', 'No se pudo abrir WhatsApp en este dispositivo.');
+    }
+  };
+
   return (
     <SafeAreaView style={styles.safeArea}>
       {/* BARRA SUPERIOR CORPORATIVA SAAS */}
@@ -364,6 +620,28 @@ export default function VendedorDashboard({ navigation }) {
         </View>
 
         <View style={styles.topHeaderRightActions}>
+          {/* BOTÓN TEMPORAL DE SIMULACIÓN DE CUARENTENA (TESTING UI) */}
+          <TouchableOpacity
+            style={styles.simularCuarentenaBtn}
+            onPress={handleSimularCuarentena}
+            activeOpacity={0.75}
+            accessibilityRole="button"
+            accessibilityLabel="Simular Cuarentena"
+          >
+            <Text style={styles.simularCuarentenaBtnText}>🧪 Simular Cuarentena</Text>
+          </TouchableOpacity>
+
+          {/* FASE 2: GLOBO / BADGE ROJO INDICADOR DE VENTAS EN CUARENTENA */}
+          {ventasConflicto.length > 0 && (
+            <View style={styles.headerCuarentenaBadge}>
+              <Text style={styles.headerCuarentenaIcon}>🚨</Text>
+              <Text style={styles.headerCuarentenaText}>Cuarentena</Text>
+              <View style={styles.headerCuarentenaCounter}>
+                <Text style={styles.headerCuarentenaCounterText}>{ventasConflicto.length}</Text>
+              </View>
+            </View>
+          )}
+
           <TouchableOpacity
             style={styles.infoBtn}
             onPress={() => navigation?.navigate('AcercaDe')}
@@ -414,11 +692,81 @@ export default function VendedorDashboard({ navigation }) {
             <Text style={styles.operatorName}>{user?.nombre || 'Juan Vendedor'}</Text>
             <Text style={styles.operatorPhone}>Tel: {user?.telefono || '3151234567'}</Text>
           </View>
-          <View style={styles.onlineBadge}>
-            <View style={styles.onlineDot} />
-            <Text style={styles.onlineText}>Comercial</Text>
-          </View>
+          {/* FASE 2: INDICADOR VISUAL EN CABECERA DE OPERADOR */}
+          {ventasConflicto.length > 0 ? (
+            <View style={styles.operatorCuarentenaAlert}>
+              <View style={styles.cuarentenaDotPulse} />
+              <Text style={styles.operatorCuarentenaText}>
+                {ventasConflicto.length} en cuarentena
+              </Text>
+            </View>
+          ) : (
+            <View style={styles.onlineBadge}>
+              <View style={styles.onlineDot} />
+              <Text style={styles.onlineText}>Comercial</Text>
+            </View>
+          )}
         </View>
+
+        {/* ALERTA ROJA FIJA DE VENTAS EN CONFLICTO DE STOCK (HITO 2) */}
+        {ventasConflicto.length > 0 && (
+          <View style={styles.alertaStockContainer}>
+            <View style={styles.alertaStockHeader}>
+              <Text style={styles.alertaStockIcon}>🚨</Text>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.alertaStockTitulo}>
+                  VENTAS EN CONFLICTO DE STOCK ({ventasConflicto.length})
+                </Text>
+                <Text style={styles.alertaStockSub}>
+                  El servidor rechazó estas órdenes por agotamiento de existencias. Gestiona la devolución correspondiente para no descuadrar tu balance.
+                </Text>
+              </View>
+            </View>
+
+            {ventasConflicto.map((item) => {
+              const meta = item.meta || {};
+              const p = item.payload || {};
+              const rawMetodo = (p.metodo_pago_inicial || meta.tipo_pago || 'efectivo').toLowerCase();
+              const esEfectivo = rawMetodo.includes('efectivo');
+              const monto = Number(p.cuota_inicial ?? p.monto_total ?? 0) || Number(p.monto_financiado ?? 0);
+
+              return (
+                <View key={item.id} style={styles.conflictoItemCard}>
+                  <View style={styles.conflictoItemHeaderRow}>
+                    <View style={{ flex: 1 }}>
+                      <Text style={styles.conflictoItemCliente}>
+                        {meta.cliente_nombre || 'Cliente en Terreno'}
+                      </Text>
+                      <Text style={styles.conflictoItemArticulos}>
+                        📦 {meta.articulos_resumen || 'Artículos de la orden'}
+                      </Text>
+                    </View>
+                    <View style={{ alignItems: 'flex-end', marginLeft: 8 }}>
+                      <Text style={styles.conflictoItemMonto}>{formatCOP(monto)}</Text>
+                      <View style={[styles.conflictoBadgeMetodo, esEfectivo ? styles.badgeEfectivo : styles.badgeTransferencia]}>
+                        <Text style={styles.conflictoBadgeText}>{esEfectivo ? '💵 EFECTIVO' : '🏦 TRANSFERENCIA'}</Text>
+                      </View>
+                    </View>
+                  </View>
+
+                  <Text style={styles.conflictoItemError} numberOfLines={2}>
+                    ⚠️ Motivo servidor: {item.lastError || 'Stock insuficiente'}
+                  </Text>
+
+                  <TouchableOpacity
+                    style={styles.conflictoGestionarBtn}
+                    onPress={() => abrirGestionConflicto(item)}
+                    activeOpacity={0.8}
+                  >
+                    <Text style={styles.conflictoGestionarBtnText}>
+                      ⚙️ Gestionar Devolución & Anulación
+                    </Text>
+                  </TouchableOpacity>
+                </View>
+              );
+            })}
+          </View>
+        )}
 
         {/* RESUMEN DE VENTAS DE HOY (TOTAL HOY) */}
         <View style={styles.kpiRow}>
@@ -1021,6 +1369,280 @@ export default function VendedorDashboard({ navigation }) {
               </TouchableOpacity>
             </View>
 
+          </View>
+        </View>
+      </InFrameModal>
+
+      {/* ============================================================== */}
+      {/* MODAL HITO 2: GESTIÓN DE ANULACIÓN Y DEVOLUCIÓN DE VENTAS */}
+      {/* ============================================================== */}
+      <InFrameModal
+        visible={modalConflictoVisible}
+        onRequestClose={() => !isProcesandoAnulacion && setModalConflictoVisible(false)}
+      >
+        <View style={styles.conflictoModalOverlay}>
+          <View style={styles.conflictoModalCard}>
+            {/* Cabecera */}
+            <View style={styles.conflictoModalHeader}>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.conflictoModalTitle}>Anulación & Devolución</Text>
+                <Text style={styles.conflictoModalSub}>
+                  Resolución de venta en conflicto de inventario
+                </Text>
+              </View>
+              <TouchableOpacity
+                onPress={() => !isProcesandoAnulacion && setModalConflictoVisible(false)}
+                style={styles.conflictoModalCloseBtn}
+              >
+                <Text style={styles.conflictoModalCloseBtnText}>✕</Text>
+              </TouchableOpacity>
+            </View>
+
+            <ScrollView style={styles.conflictoModalBody} showsVerticalScrollIndicator={false}>
+              {ventaConflictoSeleccionada && (() => {
+                const p = ventaConflictoSeleccionada.payload || {};
+                const meta = ventaConflictoSeleccionada.meta || {};
+                const rawMetodo = (p.metodo_pago_inicial || meta.tipo_pago || 'efectivo').toLowerCase();
+                const esEfectivo = rawMetodo.includes('efectivo');
+                const monto = Number(p.cuota_inicial ?? p.monto_total ?? 0) || Number(p.monto_financiado ?? 0);
+
+                return (
+                  <>
+                    {/* Tarjeta de Resumen de la Orden */}
+                    <View style={styles.conflictoResumenBox}>
+                      <Text style={styles.conflictoResumenTitulo}>DATOS DE LA VENTA RECHAZADA</Text>
+                      <View style={styles.conflictoDataRow}>
+                        <Text style={styles.conflictoDataLabel}>Cliente:</Text>
+                        <Text style={styles.conflictoDataValBold}>{meta.cliente_nombre || 'Cliente en terreno'}</Text>
+                      </View>
+                      <View style={styles.conflictoDataRow}>
+                        <Text style={styles.conflictoDataLabel}>Monto a Devolver:</Text>
+                        <Text style={styles.conflictoDataValMonto}>{formatCOP(monto)}</Text>
+                      </View>
+                      <View style={styles.conflictoDataRow}>
+                        <Text style={styles.conflictoDataLabel}>Método Original:</Text>
+                        <Text style={styles.conflictoDataVal}>
+                          {esEfectivo ? '💵 Efectivo' : `🏦 Transferencia / Mixto (${p.banco_transferencia || 'Bancario'})`}
+                        </Text>
+                      </View>
+                      <View style={styles.conflictoDataRow}>
+                        <Text style={styles.conflictoDataLabel}>Artículos:</Text>
+                        <Text style={styles.conflictoDataVal}>{meta.articulos_resumen || 'Artículos en orden'}</Text>
+                      </View>
+                    </View>
+
+                    {/* Caso A: Venta en Efectivo */}
+                    {esEfectivo ? (
+                      <View style={styles.casoEfectivoContainer}>
+                        <View style={styles.avisoEfectivoBox}>
+                          <Text style={styles.avisoEfectivoIcon}>💵</Text>
+                          <Text style={styles.avisoEfectivoText}>
+                            Esta venta fue radicada en <Text style={{ fontWeight: '800' }}>EFECTIVO</Text>. Debes reintegrar el dinero físico al cliente en ruta y confirmar la anulación.
+                          </Text>
+                        </View>
+
+                        <Text style={styles.inputLabel}>Notas u observaciones del vendedor (opcional):</Text>
+                        <TextInput
+                          style={styles.textInputArea}
+                          placeholder="Ej: Cliente aceptó devolución completa del dinero en efectivo en su domicilio..."
+                          placeholderTextColor="#94A3B8"
+                          value={notasAnulacion}
+                          onChangeText={setNotasAnulacion}
+                          multiline
+                          numberOfLines={3}
+                        />
+                      </View>
+                    ) : (
+                      /* Caso B: Venta en Transferencia o Mixto */
+                      <View style={styles.casoTransferenciaContainer}>
+                        <View style={styles.avisoTransferenciaBox}>
+                          <Text style={styles.avisoTransferenciaIcon}>🏦</Text>
+                          <Text style={styles.avisoTransferenciaText}>
+                            Esta venta incluye pago por <Text style={{ fontWeight: '800' }}>TRANSFERENCIA</Text>. La oficina administrativa realizará el giro de reembolso al cliente. Ingresa los datos bancarios del beneficiario:
+                          </Text>
+                        </View>
+
+                        <Text style={styles.inputLabel}>Banco de Destino del Cliente (*):</Text>
+                        <TextInput
+                          style={styles.textInputField}
+                          placeholder="Ej: Bancolombia, Nequi, Daviplata..."
+                          placeholderTextColor="#94A3B8"
+                          value={bancoDestino}
+                          onChangeText={setBancoDestino}
+                        />
+
+                        <Text style={styles.inputLabel}>Número de Cuenta / Billetera (*):</Text>
+                        <TextInput
+                          style={styles.textInputField}
+                          placeholder="Ej: 3123456789 o 031-123456-78"
+                          placeholderTextColor="#94A3B8"
+                          value={cuentaDestino}
+                          onChangeText={setCuentaDestino}
+                          keyboardType="numeric"
+                        />
+
+                        <Text style={styles.inputLabel}>Notas u observaciones adicionales (opcional):</Text>
+                        <TextInput
+                          style={styles.textInputArea}
+                          placeholder="Ej: Se acordó reintegro por Nequi antes del mediodía..."
+                          placeholderTextColor="#94A3B8"
+                          value={notasAnulacion}
+                          onChangeText={setNotasAnulacion}
+                          multiline
+                          numberOfLines={3}
+                        />
+                      </View>
+                    )}
+
+                    {/* FASE 1: DOBLE FIRMA DIGITAL OBLIGATORIA (AMBOS CASOS) */}
+                    <View style={styles.seccionFirmasAnulacion}>
+                      <View style={styles.seccionFirmasHeader}>
+                        <Text style={styles.seccionFirmasTitulo}>✍️ SOPORTES Y FIRMAS DIGITALES OBLIGATORIAS</Text>
+                        <Text style={styles.seccionFirmasSub}>
+                          Capture ambas firmas para certificar la devolución del dinero y egreso de caja.
+                        </Text>
+                      </View>
+
+                      {/* 1. Firma del Cliente */}
+                      <SignatureCanvas
+                        label="1. Firma del Cliente (Comprobante de Recibido)"
+                        subtitle="Comprobante de anulación y saldo saldado"
+                        obligatorio={true}
+                        signerName={meta.cliente_nombre || p.cliente?.nombres || 'Cliente'}
+                        signerDoc={meta.cliente_cedula || p.cliente?.cedula || ''}
+                        value={firmaCliente}
+                        onChange={setFirmaCliente}
+                        height={125}
+                      />
+
+                      {/* 2. Firma del Vendedor */}
+                      <SignatureCanvas
+                        label="2. Firma del Vendedor (Soporte de Egreso de Caja)"
+                        subtitle="Soporte de egreso de ruta y autorización de anulación"
+                        obligatorio={true}
+                        signerName={user?.nombre || 'Asesor Comercial'}
+                        signerDoc={user?.cedula || user?.documento || ''}
+                        value={firmaVendedor}
+                        onChange={setFirmaVendedor}
+                        height={125}
+                      />
+                    </View>
+
+                    {/* Botón de Ejecución según método */}
+                    {esEfectivo ? (
+                      <TouchableOpacity
+                        style={[styles.btnAnularEfectivo, isProcesandoAnulacion && styles.btnDisabled]}
+                        onPress={() => handleEjecutarAnulacion('EFECTIVO_DEVUELTO_EN_RUTA')}
+                        disabled={isProcesandoAnulacion}
+                        activeOpacity={0.8}
+                      >
+                        {isProcesandoAnulacion ? (
+                          <ActivityIndicator color="#FFFFFF" size="small" />
+                        ) : (
+                          <Text style={styles.btnAnularEfectivoText}>
+                            ✓ Anular Venta y Devolver Efectivo
+                          </Text>
+                        )}
+                      </TouchableOpacity>
+                    ) : (
+                      <TouchableOpacity
+                        style={[styles.btnAnularTransferencia, isProcesandoAnulacion && styles.btnDisabled]}
+                        onPress={() => handleEjecutarAnulacion('PENDIENTE_REEMBOLSO_TRANSFERENCIA')}
+                        disabled={isProcesandoAnulacion}
+                        activeOpacity={0.8}
+                      >
+                        {isProcesandoAnulacion ? (
+                          <ActivityIndicator color="#FFFFFF" size="small" />
+                        ) : (
+                          <Text style={styles.btnAnularTransferenciaText}>
+                            📤 Anular y Solicitar Reembolso
+                          </Text>
+                        )}
+                      </TouchableOpacity>
+                    )}
+                  </>
+                );
+              })()}
+            </ScrollView>
+          </View>
+        </View>
+      </InFrameModal>
+
+      {/* ============================================================== */}
+      {/* MODAL FASE 3: ÉXITO DE ANULACIÓN Y DEEP LINKING DE WHATSAPP   */}
+      {/* ============================================================== */}
+      <InFrameModal
+        visible={Boolean(modalExitoAnulacion)}
+        transparent={true}
+        animationType="fade"
+        onRequestClose={() => setModalExitoAnulacion(null)}
+      >
+        <View style={styles.modalBackdropCenter}>
+          <View style={styles.exitoModalCard}>
+            <View style={styles.exitoModalHeader}>
+              <View style={styles.exitoIconCircle}>
+                <Text style={styles.exitoIconEmoji}>✓</Text>
+              </View>
+              <Text style={styles.exitoModalTitle}>Anulación Confirmada</Text>
+              <Text style={styles.exitoModalSub}>
+                La venta fue liberada de cuarentena y reportada al servidor
+              </Text>
+            </View>
+
+            <View style={styles.exitoModalBody}>
+              <View style={styles.exitoResumenBox}>
+                <View style={styles.exitoDataRow}>
+                  <Text style={styles.exitoDataLabel}>Cliente:</Text>
+                  <Text style={styles.exitoDataValBold}>{modalExitoAnulacion?.clienteNombre}</Text>
+                </View>
+                <View style={styles.exitoDataRow}>
+                  <Text style={styles.exitoDataLabel}>Monto Reintegrado:</Text>
+                  <Text style={styles.exitoDataValMonto}>{formatCOP(modalExitoAnulacion?.monto)}</Text>
+                </View>
+                <View style={styles.exitoDataRow}>
+                  <Text style={styles.exitoDataLabel}>Estado:</Text>
+                  <Text style={styles.exitoDataVal}>
+                    {modalExitoAnulacion?.estadoDevolucion === 'EFECTIVO_DEVUELTO_EN_RUTA'
+                      ? '💵 Efectivo entregado en ruta'
+                      : '🏦 Solicitud radicada a Tesorería'}
+                  </Text>
+                </View>
+                <View style={styles.exitoDataRow}>
+                  <Text style={styles.exitoDataLabel}>Motivo:</Text>
+                  <Text style={styles.exitoDataVal}>Falta de inventario</Text>
+                </View>
+              </View>
+
+              <Text style={styles.inputLabel}>Teléfono de WhatsApp del Cliente:</Text>
+              <TextInput
+                style={styles.textInputField}
+                placeholder="Ej: 3101234567"
+                placeholderTextColor="#94A3B8"
+                value={modalExitoAnulacion?.clienteTelefono || ''}
+                onChangeText={(txt) =>
+                  setModalExitoAnulacion((prev) => (prev ? { ...prev, clienteTelefono: txt } : null))
+                }
+                keyboardType="phone-pad"
+              />
+
+              {/* FASE 3: BOTÓN VERDE PROMINENTE DE WHATSAPP */}
+              <TouchableOpacity
+                style={styles.btnWhatsAppProminente}
+                onPress={handleEnviarComprobanteWhatsApp}
+                activeOpacity={0.85}
+              >
+                <Text style={styles.btnWhatsAppIcon}>💬</Text>
+                <Text style={styles.btnWhatsAppText}>Enviar Comprobante por WhatsApp</Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={styles.btnCerrarExito}
+                onPress={() => setModalExitoAnulacion(null)}
+                activeOpacity={0.8}
+              >
+                <Text style={styles.btnCerrarExitoText}>Finalizar y Volver al Panel</Text>
+              </TouchableOpacity>
+            </View>
           </View>
         </View>
       </InFrameModal>
@@ -2098,6 +2720,526 @@ const styles = StyleSheet.create({
   },
   garantiasCerrarModalBtnText: {
     color: '#FFFFFF',
+    fontSize: 13,
+    fontWeight: '700',
+  },
+  // ==========================================
+  // ESTILOS HITO 2: BANNER Y MODAL DE ANULACIONES
+  // ==========================================
+  alertaStockContainer: {
+    backgroundColor: '#FEF2F2',
+    borderWidth: 1.5,
+    borderColor: '#F87171',
+    borderRadius: 14,
+    padding: 14,
+    marginBottom: 16,
+    shadowColor: '#EF4444',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.12,
+    shadowRadius: 6,
+    elevation: 3,
+  },
+  alertaStockHeader: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 10,
+    marginBottom: 12,
+  },
+  alertaStockIcon: {
+    fontSize: 22,
+  },
+  alertaStockTitulo: {
+    fontSize: 13,
+    fontWeight: '800',
+    color: '#991B1B',
+    letterSpacing: 0.2,
+  },
+  alertaStockSub: {
+    fontSize: 11,
+    color: '#B91C1C',
+    marginTop: 2,
+    lineHeight: 15,
+  },
+  conflictoItemCard: {
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1,
+    borderColor: '#FECACA',
+    borderRadius: 10,
+    padding: 12,
+    marginTop: 8,
+  },
+  conflictoItemHeaderRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'flex-start',
+  },
+  conflictoItemCliente: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: '#0F172A',
+  },
+  conflictoItemArticulos: {
+    fontSize: 11,
+    color: '#64748B',
+    marginTop: 2,
+  },
+  conflictoItemMonto: {
+    fontSize: 14,
+    fontWeight: '800',
+    color: '#0F172A',
+  },
+  conflictoBadgeMetodo: {
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 4,
+    marginTop: 4,
+  },
+  badgeEfectivo: {
+    backgroundColor: '#DCFCE7',
+  },
+  badgeTransferencia: {
+    backgroundColor: '#DBEAFE',
+  },
+  conflictoBadgeText: {
+    fontSize: 9,
+    fontWeight: '800',
+    color: '#0F172A',
+  },
+  conflictoItemError: {
+    fontSize: 11,
+    color: '#DC2626',
+    backgroundColor: '#FEF2F2',
+    padding: 6,
+    borderRadius: 6,
+    marginTop: 8,
+    fontStyle: 'italic',
+  },
+  conflictoGestionarBtn: {
+    backgroundColor: '#DC2626',
+    borderRadius: 8,
+    paddingVertical: 9,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginTop: 10,
+  },
+  conflictoGestionarBtnText: {
+    color: '#FFFFFF',
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  conflictoModalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(15, 23, 42, 0.75)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 16,
+  },
+  conflictoModalCard: {
+    backgroundColor: '#FFFFFF',
+    width: '100%',
+    maxWidth: 440,
+    maxHeight: '90%',
+    borderRadius: 16,
+    overflow: 'hidden',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.25,
+    shadowRadius: 16,
+    elevation: 8,
+  },
+  conflictoModalHeader: {
+    backgroundColor: '#991B1B',
+    paddingHorizontal: 16,
+    paddingVertical: 14,
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  conflictoModalTitle: {
+    color: '#FFFFFF',
+    fontSize: 16,
+    fontWeight: '800',
+  },
+  conflictoModalSub: {
+    color: '#FEE2E2',
+    fontSize: 11,
+    marginTop: 1,
+  },
+  conflictoModalCloseBtn: {
+    padding: 6,
+  },
+  conflictoModalCloseBtnText: {
+    color: '#FFFFFF',
+    fontSize: 18,
+    fontWeight: '700',
+  },
+  conflictoModalBody: {
+    padding: 16,
+  },
+  conflictoResumenBox: {
+    backgroundColor: '#F8FAFC',
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    borderRadius: 10,
+    padding: 12,
+    marginBottom: 14,
+  },
+  conflictoResumenTitulo: {
+    fontSize: 10,
+    fontWeight: '800',
+    color: '#64748B',
+    letterSpacing: 0.5,
+    marginBottom: 8,
+  },
+  conflictoDataRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    paddingVertical: 3,
+  },
+  conflictoDataLabel: {
+    fontSize: 12,
+    color: '#64748B',
+  },
+  conflictoDataVal: {
+    fontSize: 12,
+    color: '#1E293B',
+    fontWeight: '500',
+  },
+  conflictoDataValBold: {
+    fontSize: 12,
+    color: '#0F172A',
+    fontWeight: '700',
+  },
+  conflictoDataValMonto: {
+    fontSize: 14,
+    color: '#DC2626',
+    fontWeight: '800',
+  },
+  casoEfectivoContainer: {
+    marginTop: 4,
+  },
+  avisoEfectivoBox: {
+    flexDirection: 'row',
+    backgroundColor: '#ECFDF5',
+    borderWidth: 1,
+    borderColor: '#A7F3D0',
+    padding: 10,
+    borderRadius: 8,
+    gap: 8,
+    marginBottom: 12,
+  },
+  avisoEfectivoIcon: {
+    fontSize: 20,
+  },
+  avisoEfectivoText: {
+    flex: 1,
+    fontSize: 12,
+    color: '#065F46',
+    lineHeight: 16,
+  },
+  casoTransferenciaContainer: {
+    marginTop: 4,
+  },
+  avisoTransferenciaBox: {
+    flexDirection: 'row',
+    backgroundColor: '#EFF6FF',
+    borderWidth: 1,
+    borderColor: '#BFDBFE',
+    padding: 10,
+    borderRadius: 8,
+    gap: 8,
+    marginBottom: 12,
+  },
+  avisoTransferenciaIcon: {
+    fontSize: 20,
+  },
+  avisoTransferenciaText: {
+    flex: 1,
+    fontSize: 12,
+    color: '#1E40AF',
+    lineHeight: 16,
+  },
+  inputLabel: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#334155',
+    marginTop: 10,
+    marginBottom: 4,
+  },
+  textInputField: {
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1,
+    borderColor: '#CBD5E1',
+    borderRadius: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 9,
+    fontSize: 13,
+    color: '#0F172A',
+  },
+  textInputArea: {
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1,
+    borderColor: '#CBD5E1',
+    borderRadius: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 9,
+    fontSize: 13,
+    color: '#0F172A',
+    minHeight: 64,
+    textAlignVertical: 'top',
+  },
+  btnAnularEfectivo: {
+    backgroundColor: '#16A34A',
+    borderRadius: 10,
+    paddingVertical: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginTop: 16,
+  },
+  btnAnularEfectivoText: {
+    color: '#FFFFFF',
+    fontSize: 13,
+    fontWeight: '800',
+  },
+  btnAnularTransferencia: {
+    backgroundColor: '#2563EB',
+    borderRadius: 10,
+    paddingVertical: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginTop: 16,
+  },
+  btnAnularTransferenciaText: {
+    color: '#FFFFFF',
+    fontSize: 13,
+    fontWeight: '800',
+  },
+  btnDisabled: {
+    opacity: 0.6,
+  },
+  // Botón Temporal de Testing Cuarentena
+  simularCuarentenaBtn: {
+    backgroundColor: '#F5F3FF',
+    borderWidth: 1,
+    borderColor: '#C4B5FD',
+    paddingHorizontal: 8,
+    paddingVertical: 5,
+    borderRadius: 8,
+    flexDirection: 'row',
+    alignItems: 'center',
+    shadowColor: '#8B5CF6',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.12,
+    shadowRadius: 2,
+    elevation: 1,
+  },
+  simularCuarentenaBtnText: {
+    color: '#6D28D9',
+    fontSize: 11,
+    fontWeight: '800',
+    letterSpacing: -0.2,
+  },
+  // Estilos de Indicadores de Cuarentena (Fase 2)
+  headerCuarentenaBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#FEF2F2',
+    borderWidth: 1.5,
+    borderColor: '#EF4444',
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 20,
+    gap: 4,
+  },
+  headerCuarentenaIcon: {
+    fontSize: 12,
+  },
+  headerCuarentenaText: {
+    fontSize: 11,
+    fontWeight: '800',
+    color: '#DC2626',
+    letterSpacing: -0.2,
+  },
+  headerCuarentenaCounter: {
+    backgroundColor: '#DC2626',
+    borderRadius: 10,
+    minWidth: 18,
+    height: 18,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 4,
+  },
+  headerCuarentenaCounterText: {
+    color: '#FFFFFF',
+    fontSize: 10,
+    fontWeight: '900',
+  },
+  operatorCuarentenaAlert: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#FEE2E2',
+    borderWidth: 1,
+    borderColor: '#F87171',
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 12,
+    gap: 6,
+  },
+  cuarentenaDotPulse: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: '#DC2626',
+  },
+  operatorCuarentenaText: {
+    fontSize: 11,
+    fontWeight: '800',
+    color: '#991B1B',
+  },
+
+  // Estilos de Doble Firma Táctil (Fase 1)
+  seccionFirmasAnulacion: {
+    marginTop: 16,
+    paddingTop: 14,
+    borderTopWidth: 1,
+    borderTopColor: '#E2E8F0',
+  },
+  seccionFirmasHeader: {
+    marginBottom: 10,
+  },
+  seccionFirmasTitulo: {
+    fontSize: 11,
+    fontWeight: '900',
+    color: '#0F172A',
+    letterSpacing: 0.5,
+  },
+  seccionFirmasSub: {
+    fontSize: 11,
+    color: '#64748B',
+    marginTop: 2,
+    lineHeight: 15,
+  },
+
+  // Estilos del Modal de Éxito y WhatsApp (Fase 3)
+  exitoModalCard: {
+    backgroundColor: '#FFFFFF',
+    width: '100%',
+    maxWidth: 420,
+    borderRadius: 20,
+    overflow: 'hidden',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 10 },
+    shadowOpacity: 0.3,
+    shadowRadius: 20,
+    elevation: 10,
+  },
+  exitoModalHeader: {
+    backgroundColor: '#059669',
+    paddingVertical: 20,
+    paddingHorizontal: 20,
+    alignItems: 'center',
+  },
+  exitoIconCircle: {
+    width: 52,
+    height: 52,
+    borderRadius: 26,
+    backgroundColor: '#FFFFFF',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 10,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.15,
+    shadowRadius: 8,
+    elevation: 4,
+  },
+  exitoIconEmoji: {
+    fontSize: 28,
+    color: '#059669',
+    fontWeight: '900',
+  },
+  exitoModalTitle: {
+    fontSize: 18,
+    fontWeight: '900',
+    color: '#FFFFFF',
+    letterSpacing: -0.3,
+  },
+  exitoModalSub: {
+    fontSize: 12,
+    color: '#D1FAE5',
+    textAlign: 'center',
+    marginTop: 4,
+  },
+  exitoModalBody: {
+    padding: 20,
+  },
+  exitoResumenBox: {
+    backgroundColor: '#F0FDF4',
+    borderWidth: 1,
+    borderColor: '#BBF7D0',
+    borderRadius: 12,
+    padding: 14,
+    marginBottom: 16,
+  },
+  exitoDataRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    paddingVertical: 3,
+  },
+  exitoDataLabel: {
+    fontSize: 12,
+    color: '#166534',
+    fontWeight: '600',
+  },
+  exitoDataVal: {
+    fontSize: 12,
+    color: '#14532D',
+  },
+  exitoDataValBold: {
+    fontSize: 12,
+    color: '#0F172A',
+    fontWeight: '800',
+  },
+  exitoDataValMonto: {
+    fontSize: 14,
+    color: '#059669',
+    fontWeight: '900',
+  },
+  btnWhatsAppProminente: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#25D366',
+    borderRadius: 12,
+    paddingVertical: 14,
+    paddingHorizontal: 16,
+    marginTop: 18,
+    gap: 10,
+    shadowColor: '#25D366',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.35,
+    shadowRadius: 8,
+    elevation: 4,
+  },
+  btnWhatsAppIcon: {
+    fontSize: 20,
+  },
+  btnWhatsAppText: {
+    color: '#FFFFFF',
+    fontSize: 14,
+    fontWeight: '900',
+    letterSpacing: 0.2,
+  },
+  btnCerrarExito: {
+    backgroundColor: '#F1F5F9',
+    borderRadius: 10,
+    paddingVertical: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginTop: 10,
+  },
+  btnCerrarExitoText: {
+    color: '#475569',
     fontSize: 13,
     fontWeight: '700',
   },

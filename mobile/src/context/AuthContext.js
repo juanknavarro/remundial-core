@@ -43,7 +43,16 @@ export const AuthProvider = ({ children }) => {
               await AsyncStorage.setItem(CACHE_CONFIG, JSON.stringify(res.data));
             }
           })
-          .catch(() => {});
+          .catch(async (err) => {
+            if (err?.response?.status === 401) {
+              console.warn('[AuthContext] Token almacenado inválido durante inicio silencioso. Purgando sin alarma.');
+              await limpiarCredencialesLocales();
+              setToken(null);
+              setUser(null);
+              setUserRole(null);
+              setAuthError(null);
+            }
+          });
       } else {
         // Si no hay credenciales completas válidas, asegurar almacenamiento limpio
         setToken(null);
@@ -74,10 +83,15 @@ export const AuthProvider = ({ children }) => {
   useEffect(() => {
     setOnUnauthorized(() => {
       console.warn('[AuthContext] Sesión expirada o token revocado (401). Forzando redirección inmediata a Login...');
-      setToken(null);
+      setToken((prevToken) => {
+        // Solo emitir mensaje de sesión expirada si el usuario tenía una sesión activa establecida
+        if (prevToken) {
+          setAuthError('Tu sesión ha expirado o ya no es válida. Inicia sesión nuevamente.');
+        }
+        return null;
+      });
       setUser(null);
       setUserRole(null);
-      setAuthError('Tu sesión ha expirado o ya no es válida. Inicia sesión nuevamente.');
     });
     return () => setOnUnauthorized(null);
   }, []);

@@ -22,8 +22,10 @@ import {
   FileText,
   Clock,
   ArrowRight,
+  RotateCcw,
   Send,
   AlertCircle,
+  AlertTriangle,
   Armchair,
   Palette,
   Check,
@@ -49,6 +51,13 @@ interface ArticuloCatalogo {
   stock?: number;
   maneja_stock?: boolean;
   imagen_url?: string | null;
+}
+
+export interface ComprobanteTransferencia {
+  id: string;
+  entidad_bancaria: string;
+  referencia_pago: string;
+  monto: number;
 }
 
 interface ItemCarrito {
@@ -215,9 +224,18 @@ export default function PosOriginacionCreditoPage() {
   const tipoPago = 'mensual';
   const [cuotaInicial, setCuotaInicial] = useState<number>(0);
   const [metodoPagoInicial, setMetodoPagoInicial] = useState<'Efectivo' | 'Transferencia' | 'Mixto'>('Efectivo');
+  const [listaBancos, setListaBancos] = useState<{ id: number; nombre: string; activa: boolean }[]>([]);
+  const [bancoTransferencia, setBancoTransferencia] = useState<string>('');
   const [montoEfectivo, setMontoEfectivo] = useState<number>(0);
   const [montoTransferencia, setMontoTransferencia] = useState<number>(0);
   const [referenciaPagoInicial, setReferenciaPagoInicial] = useState('');
+  const [comprobantes, setComprobantes] = useState<ComprobanteTransferencia[]>([
+    { id: '1', entidad_bancaria: '', referencia_pago: '', monto: 0 }
+  ]);
+  const [focusedVoucherId, setFocusedVoucherId] = useState<string | null>(null);
+  const [modalEliminarTransfVisible, setModalEliminarTransfVisible] = useState<boolean>(false);
+  const [transfAEliminarId, setTransfAEliminarId] = useState<string | null>(null);
+  const [errorReferenciaDuplicada, setErrorReferenciaDuplicada] = useState<string | null>(null);
   const [numeroCuotas, setNumeroCuotas] = useState<number>(4);
   const [fechaPrimeraCuota, setFechaPrimeraCuota] = useState<string>(() => getFechaPrimerVencimientoFinMes());
   const [fechasManuales, setFechasManuales] = useState<boolean>(false);
@@ -257,6 +275,107 @@ export default function PosOriginacionCreditoPage() {
   const [firmaCodeudor, setFirmaCodeudor] = useState<string | null>(null);
   const [firmaSupervisor, setFirmaSupervisor] = useState<string | null>(null);
 
+  // Sistema Institucional de Notificaciones y Modales de Alerta (Reemplazo de window.alert nativo)
+  const [modalNotificacion, setModalNotificacion] = useState<{
+    titulo: string;
+    mensaje: string;
+    tipo?: 'warning' | 'error' | 'info' | 'success';
+    accionTexto?: string;
+    cancelarTexto?: string;
+    mostrarCancelar?: boolean;
+    onAccion?: () => void;
+    onCancelar?: () => void;
+  } | null>(null);
+
+  const mostrarNotificacion = (
+    titulo: string,
+    mensaje: string,
+    tipo: 'warning' | 'error' | 'info' | 'success' = 'warning',
+    accionTexto: string = 'Entendido',
+    onAccion?: () => void,
+    mostrarCancelar?: boolean,
+    cancelarTexto?: string,
+    onCancelar?: () => void
+  ) => {
+    setModalNotificacion({
+      titulo,
+      mensaje,
+      tipo,
+      accionTexto,
+      mostrarCancelar,
+      cancelarTexto,
+      onAccion,
+      onCancelar,
+    });
+  };
+
+  // Restablecimiento total no destructivo del formulario
+  const ejecutarLimpiezaTotal = () => {
+    setCarrito([]);
+    setCedula('');
+    setNombres('');
+    setTelefono('');
+    setDireccion('');
+    setBarrio('');
+    setCiudad('Montería');
+    setDepartamento('Córdoba');
+    setNumeroContrato('');
+    setContratoAutomatico(true);
+    setCuotaInicial(0);
+    setMetodoPagoInicial('Efectivo');
+    setMontoEfectivo(0);
+    setMontoTransferencia(0);
+    setReferenciaPagoInicial('');
+    setBancoTransferencia('');
+    setComprobantes([{ id: '1', entidad_bancaria: '', referencia_pago: '', monto: 0 }]);
+    setErrorReferenciaDuplicada(null);
+    setClienteEncontrado(null);
+    setClienteNoEncontrado(false);
+    setGarantiasHeredadas(false);
+    setPermitirModificarGarantias(true);
+    setFirmaCliente(null);
+    setFirmaCodeudor(null);
+    setFirmaSupervisor(null);
+    setCodeudorNombre('');
+    setCodeudorCedula('');
+    setCodeudorTelefono('');
+    setCodeudorDireccion('');
+    setReferenciaNombre('');
+    setReferenciaTelefono('');
+    setReferenciaParentesco('Familiar');
+    setFechasManuales(false);
+    setFechaPrimeraCuota(getFechaPrimerVencimientoFinMes());
+    setNumeroCuotas(4);
+    setContratoExitoso(null);
+  };
+
+  const handleSolicitarLimpiezaFormulario = () => {
+    const hayDatos =
+      carrito.length > 0 ||
+      cedula.trim() !== '' ||
+      nombres.trim() !== '' ||
+      cuotaInicial > 0 ||
+      referenciaPagoInicial.trim() !== '' ||
+      firmaCliente !== null;
+
+    if (!hayDatos) {
+      ejecutarLimpiezaTotal();
+      return;
+    }
+
+    mostrarNotificacion(
+      '¿Desea restablecer el formulario POS?',
+      'Esta acción vaciará los productos del carrito y restablecerá los datos del cliente, condiciones financieras, métodos de pago y firmas capturadas.',
+      'warning',
+      'Sí, Limpiar Todo',
+      () => {
+        ejecutarLimpiezaTotal();
+      },
+      true,
+      'Cancelar'
+    );
+  };
+
   const handleDescargarReciboPdf = async (contratoId: string) => {
     if (!contratoId) return;
     try {
@@ -275,7 +394,11 @@ export default function PosOriginacionCreditoPage() {
       document.body.removeChild(link);
     } catch (error) {
       console.error('Error al descargar recibo digital en PDF:', error);
-      alert('No fue posible generar el recibo en PDF. Verifique que el contrato se encuentre registrado.');
+      mostrarNotificacion(
+        'Comprobante PDF No Disponible',
+        'No fue posible generar el recibo en PDF. Verifique que el contrato se encuentre registrado en el sistema.',
+        'error'
+      );
     } finally {
       setIsDescargandoPdf(false);
     }
@@ -352,9 +475,21 @@ export default function PosOriginacionCreditoPage() {
       }
     };
 
+    const fetchBancos = async () => {
+      try {
+        const res = await api.get('/bancos?solo_activas=true');
+        if (Array.isArray(res.data)) {
+          setListaBancos(res.data);
+        }
+      } catch (err) {
+        console.warn('[POS] Error cargando lista de bancos:', err);
+      }
+    };
+
     fetchProductos();
     fetchCiudades();
     fetchParametros();
+    fetchBancos();
   }, []);
 
   // Actualizar precio de entrada al cambiar de producto seleccionado
@@ -375,10 +510,10 @@ export default function PosOriginacionCreditoPage() {
     const itemEnCarrito = carrito.find((item) => item.producto_id === prod.id);
     const cantidadTotal = (itemEnCarrito ? itemEnCarrito.cantidad : 0) + cantidadInput;
     if (prod.maneja_stock && (prod.stock ?? 0) < cantidadTotal) {
-      alert(
-        `Existencias insuficientes para "${prod.nombre}".\n` +
-        `Disponible en almacén: ${prod.stock ?? 0} unidades.\n` +
-        `Solicitado: ${cantidadTotal} unidades.`
+      mostrarNotificacion(
+        'Existencias Insuficientes',
+        `Existencias insuficientes para "${prod.nombre}".\nDisponible en almacén: ${prod.stock ?? 0} unidades.\nSolicitado: ${cantidadTotal} unidades.`,
+        'warning'
       );
       return;
     }
@@ -436,6 +571,55 @@ export default function PosOriginacionCreditoPage() {
   const montoFinanciado = esContado ? 0 : Math.max(0, totalVenta - cuotaInicialEfectiva);
   const valorCuotaCalculado = esContado ? 0 : (numeroCuotas > 0 ? Math.round(montoFinanciado / numeroCuotas) : 0);
 
+  const montoObjetivo = esContado ? totalVenta : (Number(cuotaInicial) || 0);
+  const totalTransfers = comprobantes.reduce((sum, c) => sum + (Number(c.monto) || 0), 0);
+  const totalIngresado = metodoPagoInicial === 'Efectivo'
+    ? montoObjetivo
+    : (metodoPagoInicial === 'Transferencia' ? totalTransfers : (Number(montoEfectivo) || 0) + totalTransfers);
+  const diferenciaCaja = montoObjetivo > 0 ? Math.round((montoObjetivo - totalIngresado) * 100) / 100 : 0;
+
+  const comprobantesValidos = metodoPagoInicial === 'Efectivo' || (
+    comprobantes.length > 0 &&
+    comprobantes.every((c) => c.entidad_bancaria.trim() !== '' && c.referencia_pago.trim() !== '' && Number(c.monto) > 0)
+  );
+
+  const refsArray = comprobantes.map((c) => c.referencia_pago.trim().toUpperCase()).filter(Boolean);
+  const hayRefsDuplicadasInternas = new Set(refsArray).size !== refsArray.length;
+
+  const agregarComprobante = () => {
+    if (comprobantes.length >= 3) return;
+    const baseTrans = metodoPagoInicial === 'Mixto' ? Math.max(0, montoObjetivo - (Number(montoEfectivo) || 0)) : montoObjetivo;
+    const sumaActual = comprobantes.reduce((sum, c) => sum + (Number(c.monto) || 0), 0);
+    const restante = Math.max(0, baseTrans - sumaActual);
+    const newId = String(Date.now() + Math.random());
+    setFocusedVoucherId(newId);
+    setComprobantes((prev) => [
+      ...prev,
+      { id: newId, entidad_bancaria: '', referencia_pago: '', monto: restante }
+    ]);
+  };
+
+  const solicitarEliminarComprobante = (id: string) => {
+    if (comprobantes.length <= 1) return;
+    setTransfAEliminarId(id);
+    setModalEliminarTransfVisible(true);
+  };
+
+  const confirmarEliminarComprobante = () => {
+    if (transfAEliminarId) {
+      setComprobantes((prev) => prev.filter((c) => c.id !== transfAEliminarId));
+    }
+    setModalEliminarTransfVisible(false);
+    setTransfAEliminarId(null);
+  };
+
+  const actualizarComprobante = (id: string, campo: keyof ComprobanteTransferencia, valor: any) => {
+    setComprobantes((prev) =>
+      prev.map((c) => (c.id === id ? { ...c, [campo]: valor } : c))
+    );
+    setErrorReferenciaDuplicada(null);
+  };
+
   // Manejador centralizado para autocompletar montos al cambiar de método de pago (50/50 en Mixto)
   const handleCambiarMetodoPago = (nuevoMetodo: 'Efectivo' | 'Transferencia' | 'Mixto') => {
     setMetodoPagoInicial(nuevoMetodo);
@@ -443,118 +627,155 @@ export default function PosOriginacionCreditoPage() {
     if (nuevoMetodo === 'Efectivo') {
       setMontoEfectivo(base);
       setMontoTransferencia(0);
+      setComprobantes([{ id: '1', entidad_bancaria: '', referencia_pago: '', monto: 0 }]);
     } else if (nuevoMetodo === 'Transferencia') {
       setMontoEfectivo(0);
       setMontoTransferencia(base);
+      setComprobantes([
+        { id: '1', entidad_bancaria: bancoTransferencia || '', referencia_pago: referenciaPagoInicial || '', monto: base }
+      ]);
     } else if (nuevoMetodo === 'Mixto') {
       const mitad = Math.floor(base / 2);
       setMontoEfectivo(mitad);
       setMontoTransferencia(base - mitad);
+      setComprobantes([
+        { id: '1', entidad_bancaria: bancoTransferencia || '', referencia_pago: referenciaPagoInicial || '', monto: base - mitad }
+      ]);
     }
   };
 
-  // Sub-renderizado unificado y no destructivo del bloque de Método de Pago y Desglose Simultáneo
+  // Sub-renderizado unificado, armónico y no destructivo del bloque de Método de Pago
   const renderBloqueMetodoPago = () => {
-    const montoObjetivo = esContado ? totalVenta : (Number(cuotaInicial) || 0);
     const isMontoCero = esContado ? totalVenta <= 0 : (!cuotaInicial || Number(cuotaInicial) <= 0);
 
     return (
       <div
         className={cn(
-          "p-4 rounded-xl border space-y-4 transition-all",
+          "p-4 sm:p-5 rounded-2xl border space-y-4 transition-all",
           isMontoCero ? "bg-slate-50/60 border-slate-200" : "bg-slate-50 border-slate-200"
         )}
       >
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-          <div>
-            <div className="flex items-center justify-between mb-1">
-              <label className="block text-xs font-semibold text-slate-700">
-                {esContado ? 'MÉTODO DE PAGO (VENTA DE CONTADO) *' : 'MÉTODO DE PAGO (CUOTA INICIAL) *'}
-              </label>
-              {isMontoCero && (
+        {/* LAYOUT REACTIVO SEGÚN MÉTODO DE PAGO */}
+        {isMontoCero ? (
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-3.5 items-end">
+            <div>
+              <div className="flex items-center justify-between mb-1">
+                <label className="block text-xs font-semibold text-slate-700">
+                  {esContado ? 'MÉTODO DE PAGO (VENTA DE CONTADO) *' : 'MÉTODO DE PAGO (CUOTA INICIAL) *'}
+                </label>
                 <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">
                   {esContado ? 'Sin mercancía ($0)' : 'Sin anticipo ($0)'}
                 </span>
-              )}
+              </div>
+              <select
+                disabled
+                value="Efectivo"
+                className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 text-xs font-semibold text-slate-400 bg-gray-100 opacity-50 cursor-not-allowed select-none"
+              >
+                <option value="Efectivo">Efectivo</option>
+              </select>
             </div>
-            <select
-              disabled={isMontoCero}
-              value={isMontoCero ? 'Efectivo' : metodoPagoInicial}
-              onChange={(e) => {
-                if (isMontoCero) return;
-                const val = e.target.value as 'Efectivo' | 'Transferencia' | 'Mixto';
-                handleCambiarMetodoPago(val);
-              }}
-              className={cn(
-                "w-full px-3.5 py-2.5 rounded-xl border border-slate-200 text-xs font-semibold text-slate-900 transition-all",
-                isMontoCero
-                  ? "opacity-50 bg-gray-100 text-slate-400 cursor-not-allowed select-none"
-                  : "bg-white focus:outline-hidden focus:ring-2 focus:ring-emerald-500"
-              )}
-            >
-              <option value="Efectivo">Efectivo</option>
-              <option value="Transferencia">Transferencia</option>
-              <option value="Mixto">Mixto (Efectivo + Transferencia)</option>
-            </select>
+            <div className="md:col-span-2">
+              <div className="px-3.5 py-2.5 rounded-xl bg-slate-100/70 border border-slate-200 flex items-center gap-2.5 text-xs text-slate-500">
+                <AlertCircle className="w-4 h-4 text-slate-400 shrink-0" />
+                <span>
+                  {esContado
+                    ? 'Agregue productos al carrito en la Sección 2 para liquidar la venta.'
+                    : 'Crédito 100% financiado sin anticipo inicial. El valor total se amortiza en las cuotas pactadas.'}
+                </span>
+              </div>
+            </div>
           </div>
-
-          {isMontoCero ? (
-            <div className="flex items-end pb-1">
-              <span className="text-[11px] text-slate-400 italic">
-                {esContado
-                  ? 'Agregue productos al carrito para liquidar la venta.'
-                  : 'Crédito 100% financiado sin anticipo inicial.'}
-              </span>
-            </div>
-          ) : metodoPagoInicial === 'Transferencia' ? (
+        ) : metodoPagoInicial === 'Efectivo' ? (
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-3.5 items-end">
             <div>
               <label className="block text-xs font-semibold text-slate-700 mb-1">
-                NO. REFERENCIA / APROBACIÓN *
+                {esContado ? 'MÉTODO DE PAGO (VENTA DE CONTADO) *' : 'MÉTODO DE PAGO (CUOTA INICIAL) *'}
               </label>
-              <input
-                type="text"
-                required
-                placeholder="Ej. Comprobante Nequi / Bancolombia"
-                value={referenciaPagoInicial}
-                onChange={(e) => setReferenciaPagoInicial(e.target.value)}
-                className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 text-xs font-semibold text-slate-900 bg-white focus:outline-hidden focus:ring-2 focus:ring-blue-500"
-              />
-            </div>
-          ) : metodoPagoInicial === 'Efectivo' ? (
-            <div className="flex items-end pb-1">
-              <span className="text-[11px] text-slate-500">
-                {esContado
-                  ? 'Recepción del 100% del valor de la venta en efectivo en caja.'
-                  : 'Recepción del 100% de la cuota inicial en efectivo en caja.'}
-              </span>
-            </div>
-          ) : null}
-        </div>
-
-        {/* CAMPOS ADICIONALES PARA PAGO MIXTO */}
-        {!isMontoCero && metodoPagoInicial === 'Mixto' && (
-          <div className="pt-3 border-t border-slate-200/80 space-y-3">
-            <div className="flex items-center justify-between">
-              <span className="text-xs font-bold text-slate-800">
-                Desglose de Pago Simultáneo
-              </span>
-              <span
-                className={cn(
-                  'text-[11px] font-mono font-semibold px-2 py-0.5 rounded-md border',
-                  Number(montoEfectivo || 0) + Number(montoTransferencia || 0) === Number(montoObjetivo)
-                    ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
-                    : 'bg-amber-50 text-amber-700 border-amber-200'
-                )}
+              <select
+                value={metodoPagoInicial}
+                onChange={(e) => {
+                  const val = e.target.value as 'Efectivo' | 'Transferencia' | 'Mixto';
+                  handleCambiarMetodoPago(val);
+                  setErrorReferenciaDuplicada(null);
+                }}
+                className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 text-xs font-semibold text-slate-900 bg-white focus:outline-hidden focus:ring-2 focus:ring-emerald-500 transition-all cursor-pointer"
               >
-                Ingresado: {formatCOP(Number(montoEfectivo || 0) + Number(montoTransferencia || 0))} / {formatCOP(montoObjetivo)}
-              </span>
+                <option value="Efectivo">Efectivo</option>
+                <option value="Transferencia">Transferencia</option>
+                <option value="Mixto">Mixto (Efectivo + Transferencia)</option>
+              </select>
             </div>
-
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+            <div className="md:col-span-2">
+              <div className="px-3.5 py-2.5 rounded-xl bg-emerald-50/70 border border-emerald-200/80 flex items-center gap-2.5 text-xs text-emerald-800">
+                <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                <span>
+                  {esContado
+                    ? 'Recepción del 100% del valor de la venta en efectivo en caja física.'
+                    : 'Recepción del 100% de la cuota inicial en efectivo en caja física.'}
+                </span>
+              </div>
+            </div>
+          </div>
+        ) : (
+          /* TRANSFERENCIA O PAGO MIXTO CON HASTA 3 COMPROBANTES Y CUADRE EN VIVO */
+          <div className="space-y-4">
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-3.5 items-end">
               <div>
                 <label className="block text-xs font-semibold text-slate-700 mb-1">
-                  MONTO EN EFECTIVO (COP) *
+                  {esContado ? 'MÉTODO DE PAGO (VENTA DE CONTADO) *' : 'MÉTODO DE PAGO (CUOTA INICIAL) *'}
                 </label>
+                <select
+                  value={metodoPagoInicial}
+                  onChange={(e) => {
+                    const val = e.target.value as 'Efectivo' | 'Transferencia' | 'Mixto';
+                    handleCambiarMetodoPago(val);
+                    setErrorReferenciaDuplicada(null);
+                  }}
+                  className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 text-xs font-semibold text-slate-900 bg-white focus:outline-hidden focus:ring-2 focus:ring-emerald-500 transition-all cursor-pointer"
+                >
+                  <option value="Efectivo">Efectivo</option>
+                  <option value="Transferencia">Transferencia</option>
+                  <option value="Mixto">Mixto (Efectivo + Transferencia)</option>
+                </select>
+              </div>
+
+              <div className="md:col-span-2 flex flex-wrap items-center justify-between gap-2 p-2.5 rounded-xl bg-slate-100/90 border border-slate-200">
+                <div className="flex items-center gap-2">
+                  <span className="text-xs font-bold text-slate-700">Cuadre en Vivo:</span>
+                  <span className="text-[11px] font-mono font-medium text-slate-600">
+                    Ingresado: {formatCOP(totalIngresado)} / {formatCOP(montoObjetivo)}
+                  </span>
+                </div>
+                {/* Contador dinámico en vivo */}
+                <div>
+                  {diferenciaCaja > 0 ? (
+                    <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-bold bg-amber-50 text-amber-700 border border-amber-300">
+                      Faltan {formatCOP(diferenciaCaja)} COP
+                    </span>
+                  ) : diferenciaCaja < 0 ? (
+                    <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-bold bg-rose-50 text-rose-700 border border-rose-300">
+                      Sobra {formatCOP(Math.abs(diferenciaCaja))} COP
+                    </span>
+                  ) : (
+                    <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-bold bg-emerald-100 text-emerald-800 border border-emerald-300">
+                      <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
+                      ✓ Cuadre exacto ($0 COP)
+                    </span>
+                  )}
+                </div>
+              </div>
+            </div>
+
+            {/* Input de Efectivo solo en modalidad Mixto */}
+            {metodoPagoInicial === 'Mixto' && (
+              <div className="p-3.5 rounded-xl bg-white border border-slate-200/80 space-y-2">
+                <div className="flex items-center justify-between">
+                  <label className="block text-xs font-semibold text-slate-700">
+                    MONTO EN EFECTIVO (COP) *
+                  </label>
+                  <span className="text-[11px] text-slate-400 font-mono">Caja física</span>
+                </div>
                 <div className="relative">
                   <span className="absolute left-3 top-2.5 text-xs text-slate-400 font-mono">$</span>
                   <input
@@ -564,54 +785,137 @@ export default function PosOriginacionCreditoPage() {
                     placeholder="0"
                     value={montoEfectivo || ''}
                     onChange={(e) => setMontoEfectivo(parseFloat(e.target.value) || 0)}
-                    className="w-full pl-7 pr-3 py-2 rounded-xl border border-slate-200 text-xs font-mono font-semibold text-slate-900 bg-white focus:outline-hidden focus:ring-2 focus:ring-emerald-500"
+                    className="w-full pl-7 pr-3 py-2.5 rounded-xl border border-slate-200 text-xs font-mono font-semibold text-slate-900 bg-white focus:outline-hidden focus:ring-2 focus:ring-emerald-500"
                   />
                 </div>
               </div>
-
-              <div>
-                <label className="block text-xs font-semibold text-slate-700 mb-1">
-                  MONTO EN TRANSFERENCIA (COP) *
-                </label>
-                <div className="relative">
-                  <span className="absolute left-3 top-2.5 text-xs text-slate-400 font-mono">$</span>
-                  <input
-                    type="number"
-                    min="0"
-                    max={montoObjetivo}
-                    placeholder="0"
-                    value={montoTransferencia || ''}
-                    onChange={(e) => setMontoTransferencia(parseFloat(e.target.value) || 0)}
-                    className="w-full pl-7 pr-3 py-2 rounded-xl border border-slate-200 text-xs font-mono font-semibold text-slate-900 bg-white focus:outline-hidden focus:ring-2 focus:ring-blue-500"
-                  />
-                </div>
-              </div>
-
-              <div>
-                <label className="block text-xs font-semibold text-slate-700 mb-1">
-                  NO. REFERENCIA / COMPROBANTE *
-                </label>
-                <input
-                  type="text"
-                  required
-                  placeholder="Ej. Comprobante Nequi / Bancolombia"
-                  value={referenciaPagoInicial}
-                  onChange={(e) => setReferenciaPagoInicial(e.target.value)}
-                  className="w-full px-3 py-2 rounded-xl border border-slate-200 text-xs font-semibold text-slate-900 bg-white focus:outline-hidden focus:ring-2 focus:ring-blue-500"
-                />
-              </div>
-            </div>
-
-            {/* ADVERTENCIA VISUAL REQUERIDA */}
-            <p className="text-[11px] text-amber-700 font-medium bg-amber-50/70 p-2 rounded-lg border border-amber-200/60 flex items-center gap-1.5">
-              ⚠️ Valores sugeridos. Verifica y ajusta el dinero físico recibido.
-            </p>
-
-            {Number(montoEfectivo || 0) + Number(montoTransferencia || 0) !== Number(montoObjetivo) && (
-              <p className="text-[11px] text-amber-600 font-medium">
-                ⚠️ La suma de efectivo y transferencia debe coincidir con {esContado ? 'el Total de la Venta' : 'la cuota inicial'} ({formatCOP(montoObjetivo)}).
-              </p>
             )}
+
+            {/* SECCIÓN DE COMPROBANTES DE TRANSFERENCIA (DINÁMICO HASTA 3) */}
+            <div className="space-y-3 pt-2">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <span className="text-xs font-bold text-slate-800 uppercase tracking-wider">
+                    COMPROBANTES BANCARIOS ({comprobantes.length}/3)
+                  </span>
+                  <span className="text-[11px] font-mono text-slate-500">
+                    Total Transferencias: {formatCOP(totalTransfers)}
+                  </span>
+                </div>
+
+                {comprobantes.length < 3 && (
+                  <button
+                    type="button"
+                    onClick={agregarComprobante}
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold text-blue-700 bg-blue-50 hover:bg-blue-100 border border-blue-200 transition-all cursor-pointer shadow-2xs active:scale-95"
+                  >
+                    <Plus className="w-3.5 h-3.5" />
+                    + Agregar comprobante (Máx 3)
+                  </button>
+                )}
+              </div>
+
+              <div className="space-y-2.5">
+                {comprobantes.map((comp, idx) => (
+                  <div
+                    key={comp.id}
+                    className="p-3.5 rounded-xl bg-white border border-slate-200 shadow-2xs space-y-3 transition-all hover:border-slate-300"
+                  >
+                    <div className="flex items-center justify-between border-b border-slate-100 pb-2">
+                      <span className="text-xs font-bold text-slate-700 flex items-center gap-1.5">
+                        <span className="w-5 h-5 rounded-full bg-blue-100 text-blue-700 font-bold text-[11px] flex items-center justify-center">
+                          {idx + 1}
+                        </span>
+                        Comprobante #{idx + 1}
+                      </span>
+                      {comprobantes.length > 1 && (
+                        <button
+                          type="button"
+                          onClick={() => solicitarEliminarComprobante(comp.id)}
+                          className="text-slate-400 hover:text-rose-600 transition-colors p-1 rounded-lg hover:bg-rose-50 cursor-pointer"
+                          title="Eliminar comprobante"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      )}
+                    </div>
+
+                    <div className="grid grid-cols-1 md:grid-cols-12 gap-3 items-end">
+                      <div className="md:col-span-3">
+                        <label className="block text-[11px] font-semibold text-slate-600 mb-1">
+                          ENTIDAD BANCARIA *
+                        </label>
+                        <select
+                          value={comp.entidad_bancaria}
+                          onChange={(e) => actualizarComprobante(comp.id, 'entidad_bancaria', e.target.value)}
+                          className="w-full px-3 py-2 rounded-xl border border-slate-200 text-xs font-semibold text-slate-900 bg-white focus:outline-hidden focus:ring-2 focus:ring-blue-500 cursor-pointer min-h-[38px] h-[38px]"
+                        >
+                          <option value="">Seleccione un banco...</option>
+                          {listaBancos.map((b) => (
+                            <option key={b.id} value={b.nombre}>
+                              {b.nombre}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+
+                      <div className="md:col-span-6">
+                        <label className="block text-[11px] font-semibold text-slate-600 mb-1">
+                          NO. REFERENCIA / APROBACIÓN *
+                        </label>
+                        <input
+                          type="text"
+                          required
+                          placeholder="Ej. Aprobación #123456"
+                          value={comp.referencia_pago}
+                          onChange={(e) => actualizarComprobante(comp.id, 'referencia_pago', e.target.value)}
+                          className="w-full px-3 py-2 rounded-xl border border-slate-200 text-xs font-mono font-semibold text-slate-900 bg-white focus:outline-hidden focus:ring-2 focus:ring-blue-500 min-h-[38px] h-[38px]"
+                        />
+                      </div>
+
+                      <div className="md:col-span-3">
+                        <label className="block text-[11px] font-semibold text-slate-600 mb-1">
+                          MONTO (COP) *
+                        </label>
+                        <div className="relative">
+                          <span className="absolute left-3 top-2.5 text-xs text-slate-400 font-mono">$</span>
+                          <input
+                            type="number"
+                            min="0"
+                            placeholder="0"
+                            value={comp.monto || ''}
+                            onChange={(e) => actualizarComprobante(comp.id, 'monto', parseFloat(e.target.value) || 0)}
+                            autoFocus={focusedVoucherId === comp.id}
+                            onFocus={(e) => e.target.select()}
+                            className="w-full pl-7 pr-3 py-2 rounded-xl border border-slate-200 text-xs font-mono font-semibold text-slate-900 bg-white focus:outline-hidden focus:ring-2 focus:ring-blue-500 min-h-[38px] h-[38px]"
+                          />
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+
+              {hayRefsDuplicadasInternas && (
+                <div className="p-3 rounded-xl bg-rose-50 border border-rose-200 text-xs text-rose-800 flex items-center gap-2">
+                  <AlertCircle className="w-4 h-4 text-rose-600 shrink-0" />
+                  <span>
+                    <strong>Comprobantes Duplicados:</strong> No puede ingresar la misma referencia bancaria en más de un comprobante dentro de la misma operación.
+                  </span>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {errorReferenciaDuplicada && (
+          <div className="p-3.5 rounded-xl bg-rose-50 border border-rose-200 flex items-start gap-2.5 text-xs text-rose-800 animate-in fade-in">
+            <AlertCircle className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
+            <div>
+              <p className="font-bold text-rose-900">⚠️ Comprobante Bancario Duplicado</p>
+              <p className="mt-0.5 text-rose-700">{errorReferenciaDuplicada}</p>
+              <p className="mt-1 font-semibold text-rose-800">Por favor solicite un comprobante válido al cliente e ingrese una nueva referencia.</p>
+            </div>
           </div>
         )}
       </div>
@@ -621,12 +925,20 @@ export default function PosOriginacionCreditoPage() {
   // PROCESAR Y ENVIAR AL BACKEND FASTAPI
   const handleEnviarVenta = async () => {
     if (!nombres.trim() || !cedula.trim()) {
-      alert('Por favor complete la identificación y el nombre completo del cliente titular.');
+      mostrarNotificacion(
+        'Datos del Cliente Incompletos',
+        'Por favor complete la identificación y el nombre completo del cliente titular antes de continuar.',
+        'warning'
+      );
       return;
     }
 
     if (carrito.length === 0) {
-      alert('Debe agregar al menos un producto al carrito de la venta.');
+      mostrarNotificacion(
+        'Carrito Vacío',
+        'Debe agregar al menos un producto al carrito de la venta antes de radicar la operación.',
+        'warning'
+      );
       return;
     }
 
@@ -679,28 +991,40 @@ export default function PosOriginacionCreditoPage() {
     const conceptoTexto = esContado ? 'Total de la Venta' : 'la cuota inicial';
 
     if (!esContado && modalidadProyeccion === 'dinamica' && !fechaPrimeraCuota) {
-      alert('La Fecha del Primer Pago es obligatoria para originar la venta a crédito en modalidad dinámica.');
+      mostrarNotificacion(
+        'Fecha de Primer Pago Requerida',
+        'La Fecha del Primer Pago es obligatoria para originar la venta a crédito en modalidad dinámica.',
+        'warning'
+      );
       setIsSubmitting(false);
       return;
     }
 
-    if (inicialEsperada > 0 && metodoPagoInicial === 'Transferencia' && !referenciaPagoInicial.trim()) {
-      alert(`Debe ingresar el número de referencia o aprobación para el pago por transferencia ${esContado ? 'del Total de la Venta' : 'de la cuota inicial'}.`);
-      setIsSubmitting(false);
-      return;
-    }
-
-    if (inicialEsperada > 0 && metodoPagoInicial === 'Mixto') {
-      const sumaMixta = Number((Number(montoEfectivo || 0) + Number(montoTransferencia || 0)).toFixed(2));
-      if (sumaMixta !== inicialEsperada) {
-        alert(
-          `En Pago Mixto, la suma de Efectivo (${formatCOP(montoEfectivo)}) y Transferencia (${formatCOP(montoTransferencia)}) debe ser exactamente igual ${esContado ? 'al Total de la Venta' : 'a la cuota inicial'} (${formatCOP(inicialEsperada)}).`
+    if (inicialEsperada > 0 && metodoPagoInicial !== 'Efectivo') {
+      if (diferenciaCaja !== 0) {
+        mostrarNotificacion(
+          'Descuadre matemático de caja',
+          `El valor ingresado no coincide con ${conceptoTexto} (${formatCOP(inicialEsperada)}). ${diferenciaCaja > 0 ? `Faltan ${formatCOP(diferenciaCaja)} COP.` : `Sobran ${formatCOP(Math.abs(diferenciaCaja))} COP.`}`,
+          'warning'
         );
         setIsSubmitting(false);
         return;
       }
-      if (!referenciaPagoInicial.trim()) {
-        alert('Debe ingresar el número de referencia o aprobación para la porción pagada por transferencia bancaria.');
+      if (!comprobantesValidos) {
+        mostrarNotificacion(
+          'Comprobantes Incompletos',
+          'Todos los comprobantes bancarios deben incluir entidad bancaria, número de referencia y un monto mayor a cero.',
+          'warning'
+        );
+        setIsSubmitting(false);
+        return;
+      }
+      if (hayRefsDuplicadasInternas) {
+        mostrarNotificacion(
+          'Referencias Duplicadas',
+          'No puede ingresar números de referencia idénticos en comprobantes distintos de la misma operación.',
+          'warning'
+        );
         setIsSubmitting(false);
         return;
       }
@@ -714,13 +1038,16 @@ export default function PosOriginacionCreditoPage() {
           : (metodoPagoInicial === 'Efectivo' ? cuotaInicialEfectiva : 0))
       : 0;
     const finalMontoInicialTransferencia = tieneCuotaInicial
-      ? (metodoPagoInicial === 'Mixto'
-          ? Number(montoTransferencia || 0)
-          : (metodoPagoInicial === 'Transferencia' ? cuotaInicialEfectiva : 0))
+      ? (metodoPagoInicial === 'Mixto' || metodoPagoInicial === 'Transferencia'
+          ? totalTransfers
+          : 0)
       : 0;
-    const finalReferenciaPagoInicial = tieneCuotaInicial && (metodoPagoInicial === 'Transferencia' || metodoPagoInicial === 'Mixto')
-      ? (referenciaPagoInicial.trim() || '')
+    const finalReferenciaPagoInicial = tieneCuotaInicial && metodoPagoInicial !== 'Efectivo'
+      ? comprobantes.map((c) => c.referencia_pago.trim()).filter(Boolean).join(' / ')
       : '';
+    const finalBancoTransferencia = tieneCuotaInicial && metodoPagoInicial !== 'Efectivo'
+      ? (comprobantes[0]?.entidad_bancaria?.trim() || null)
+      : null;
 
     const payload: any = {
       cliente_id: resolvedClienteId,
@@ -732,6 +1059,7 @@ export default function PosOriginacionCreditoPage() {
       modalidad_proyeccion: esContado ? 'fija' : modalidadProyeccion,
       cuota_inicial: cuotaInicialEfectiva,
       metodo_pago_inicial: finalMetodoPagoInicial,
+      banco_transferencia: finalBancoTransferencia,
       referencia_pago_inicial: finalReferenciaPagoInicial,
       monto_inicial_efectivo: finalMontoInicialEfectivo,
       monto_inicial_transferencia: finalMontoInicialTransferencia,
@@ -749,6 +1077,15 @@ export default function PosOriginacionCreditoPage() {
         cantidad: item.cantidad,
         valor_unitario_acordado: item.valor_unitario_acordado,
       })),
+      ...(tieneCuotaInicial && metodoPagoInicial !== 'Efectivo' && comprobantes.length > 0 ? {
+        transferencias: comprobantes
+          .filter((c) => Number(c.monto) > 0)
+          .map((c) => ({
+            entidad_bancaria: c.entidad_bancaria.trim(),
+            referencia_pago: c.referencia_pago.trim(),
+            monto: Number(c.monto) || 0,
+          }))
+      } : {}),
     };
 
     // Bloques independientes de garantías de respaldo para ventas a crédito
@@ -773,12 +1110,20 @@ export default function PosOriginacionCreditoPage() {
     // Validación de firmas obligatorias si el Modo Digital está activo en ventas a crédito
     if (habilitarFirmaDigital && !esContado) {
       if (!firmaCliente) {
-        alert('En Modo Digital, la firma de conformidad del cliente titular es obligatoria.');
+        mostrarNotificacion(
+          'Firma de Titular Requerida',
+          'En Modo Digital, la firma manuscrita de conformidad del cliente titular es obligatoria para certificar el contrato.',
+          'warning'
+        );
         setIsSubmitting(false);
         return;
       }
       if (!firmaSupervisor) {
-        alert('En Modo Digital, la firma del supervisor / asesor autorizado es obligatoria.');
+        mostrarNotificacion(
+          'Firma de Asesor Requerida',
+          'En Modo Digital, la firma manuscrita del supervisor / asesor comercial autorizado es obligatoria.',
+          'warning'
+        );
         setIsSubmitting(false);
         return;
       }
@@ -823,8 +1168,26 @@ export default function PosOriginacionCreditoPage() {
       });
     } catch (error: any) {
       console.error('Error registrando operación en POS:', error);
-      const msg = error?.response?.data?.detail || 'No fue posible registrar la venta en el servidor.';
-      alert(`Error al registrar operación: ${typeof msg === 'string' ? msg : JSON.stringify(msg)}`);
+      const status = error?.response?.status;
+      const detail = error?.response?.data?.detail;
+      const msg = typeof detail === 'string' ? detail : (detail ? JSON.stringify(detail) : 'No fue posible registrar la venta en el servidor.');
+
+      if (status === 409) {
+        setErrorReferenciaDuplicada(msg);
+        mostrarNotificacion(
+          '⚠️ Comprobante Bancario Duplicado',
+          `${msg}\n\nPor favor solicite un soporte de transferencia válido al cliente e ingrese el nuevo número de comprobante.`,
+          'error',
+          'Corregir Referencia'
+        );
+      } else {
+        mostrarNotificacion(
+          'Error al Registrar Operación',
+          msg,
+          'error',
+          'Aceptar'
+        );
+      }
     } finally {
       setIsSubmitting(false);
     }
@@ -858,6 +1221,18 @@ export default function PosOriginacionCreditoPage() {
             Seleccione la modalidad de operación, cargue los artículos y configure el cierre financiero.
           </p>
         </div>
+
+        <div className="flex items-center gap-2.5 self-start sm:self-center">
+          <button
+            type="button"
+            onClick={handleSolicitarLimpiezaFormulario}
+            className="flex items-center gap-2 px-3.5 py-2.5 rounded-xl border border-slate-200 bg-white hover:bg-rose-50 hover:text-rose-600 hover:border-rose-200 text-xs font-semibold text-slate-600 transition-all shadow-2xs group cursor-pointer"
+            title="Restablecer todos los datos del formulario POS"
+          >
+            <RotateCcw className="w-4 h-4 text-slate-400 group-hover:text-rose-500 transition-colors" />
+            <span>Limpiar Formulario</span>
+          </button>
+        </div>
       </div>
 
       {/* ========================================================================= */}
@@ -876,6 +1251,7 @@ export default function PosOriginacionCreditoPage() {
                 setMontoEfectivo(0);
                 setMontoTransferencia(0);
                 setReferenciaPagoInicial('');
+                setBancoTransferencia('');
               } else {
                 if (metodoPagoInicial === 'Efectivo') {
                   setMontoEfectivo(cuotaInicial);
@@ -1083,37 +1459,7 @@ export default function PosOriginacionCreditoPage() {
               </button>
 
               <button
-                onClick={() => {
-                  setContratoExitoso(null);
-                  setCarrito([]);
-                  setCedula('');
-                  setNombres('');
-                  setTelefono('');
-                  setDireccion('');
-                  setBarrio('');
-                  setCiudad('Montería');
-                  setNumeroContrato('');
-                  setContratoAutomatico(true);
-                  setCuotaInicial(0);
-                  setMetodoPagoInicial('Efectivo');
-                  setMontoEfectivo(0);
-                  setMontoTransferencia(0);
-                  setReferenciaPagoInicial('');
-                  setClienteEncontrado(null);
-                  setClienteNoEncontrado(false);
-                  setFirmaCliente(null);
-                  setFirmaCodeudor(null);
-                  setFirmaSupervisor(null);
-                  setCodeudorNombre('');
-                  setCodeudorCedula('');
-                  setCodeudorTelefono('');
-                  setCodeudorDireccion('');
-                  setReferenciaNombre('');
-                  setReferenciaTelefono('');
-                  setReferenciaParentesco('Familiar');
-                  setFechasManuales(false);
-                  setFechaPrimeraCuota(getFechaPrimerVencimientoFinMes());
-                }}
+                onClick={ejecutarLimpiezaTotal}
                 className="w-full sm:w-auto px-5 py-2.5 rounded-xl bg-slate-900 hover:bg-slate-800 text-white text-xs font-semibold shadow-xs transition-all cursor-pointer"
               >
                 + Nueva Operación POS
@@ -1125,6 +1471,140 @@ export default function PosOriginacionCreditoPage() {
               >
                 Ver en Cartera General →
               </Link>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL INSTITUCIONAL DE NOTIFICACIONES / VALIDACIÓN / ERRORES */}
+      {modalNotificacion && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs animate-in fade-in">
+          <div className="bg-white rounded-2xl w-full max-w-md border border-slate-200 shadow-2xl p-6 space-y-5 text-center animate-in zoom-in-95">
+            <div
+              className={cn(
+                'w-14 h-14 rounded-2xl border flex items-center justify-center mx-auto shadow-xs',
+                modalNotificacion.tipo === 'error'
+                  ? 'bg-rose-50 text-rose-600 border-rose-200'
+                  : modalNotificacion.tipo === 'info'
+                  ? 'bg-blue-50 text-blue-600 border-blue-200'
+                  : modalNotificacion.tipo === 'success'
+                  ? 'bg-emerald-50 text-emerald-600 border-emerald-200'
+                  : 'bg-amber-50 text-amber-600 border-amber-200'
+              )}
+            >
+              {modalNotificacion.tipo === 'error' ? (
+                <AlertCircle className="w-8 h-8" />
+              ) : modalNotificacion.tipo === 'success' ? (
+                <CheckCircle2 className="w-8 h-8" />
+              ) : (
+                <AlertTriangle className="w-8 h-8" />
+              )}
+            </div>
+
+            <div className="space-y-2">
+              <span
+                className={cn(
+                  'text-[11px] font-bold uppercase tracking-wider',
+                  modalNotificacion.tipo === 'error'
+                    ? 'text-rose-700'
+                    : modalNotificacion.tipo === 'info'
+                    ? 'text-blue-700'
+                    : modalNotificacion.tipo === 'success'
+                    ? 'text-emerald-700'
+                    : 'text-amber-700'
+                )}
+              >
+                {modalNotificacion.tipo === 'error'
+                  ? 'Validación Estricta / Conflicto'
+                  : modalNotificacion.tipo === 'info'
+                  ? 'Información del Sistema'
+                  : modalNotificacion.tipo === 'success'
+                  ? 'Confirmación Exitosa'
+                  : 'Aviso Requerido'}
+              </span>
+              <h3 className="text-xl font-bold text-slate-900">
+                {modalNotificacion.titulo}
+              </h3>
+              <p className="text-xs sm:text-sm text-slate-600 whitespace-pre-line text-left bg-slate-50 p-3.5 rounded-xl border border-slate-100 leading-relaxed font-sans">
+                {modalNotificacion.mensaje}
+              </p>
+            </div>
+
+            <div className="pt-2 flex flex-col sm:flex-row items-center gap-2.5">
+              {modalNotificacion.mostrarCancelar && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    const onCancel = modalNotificacion.onCancelar;
+                    setModalNotificacion(null);
+                    if (typeof onCancel === 'function') onCancel();
+                  }}
+                  className="w-full sm:w-1/2 py-2.5 px-4 rounded-xl font-semibold text-sm border border-slate-200 text-slate-700 bg-white hover:bg-slate-50 transition-all cursor-pointer"
+                >
+                  {modalNotificacion.cancelarTexto || 'Cancelar'}
+                </button>
+              )}
+              <button
+                type="button"
+                onClick={() => {
+                  const cb = modalNotificacion.onAccion;
+                  setModalNotificacion(null);
+                  if (typeof cb === 'function') {
+                    cb();
+                  }
+                }}
+                className={cn(
+                  'w-full py-2.5 px-4 rounded-xl font-semibold text-sm transition-all shadow-sm active:scale-[0.99] cursor-pointer text-white',
+                  modalNotificacion.mostrarCancelar ? 'sm:w-1/2' : 'w-full',
+                  modalNotificacion.tipo === 'error'
+                    ? 'bg-rose-600 hover:bg-rose-700 shadow-rose-600/20'
+                    : modalNotificacion.tipo === 'warning' && modalNotificacion.mostrarCancelar
+                    ? 'bg-rose-600 hover:bg-rose-700 shadow-rose-600/20'
+                    : 'bg-slate-900 hover:bg-slate-800 shadow-slate-900/20'
+                )}
+              >
+                {modalNotificacion.accionTexto || 'Entendido'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL INSTITUCIONAL: CONFIRMAR ELIMINACIÓN DE TRANSFERENCIA */}
+      {modalEliminarTransfVisible && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs animate-in fade-in">
+          <div className="bg-white rounded-2xl w-full max-w-sm border border-slate-200 shadow-2xl p-6 space-y-5 text-center animate-in zoom-in-95">
+            <div className="w-14 h-14 rounded-full bg-rose-50 border border-rose-200 flex items-center justify-center mx-auto shadow-xs text-rose-600">
+              <Trash2 className="w-7 h-7" />
+            </div>
+
+            <div className="space-y-2">
+              <h3 className="text-lg font-bold text-slate-900">
+                Confirmar Acción
+              </h3>
+              <p className="text-xs sm:text-sm text-slate-600 leading-relaxed font-sans">
+                ¿Seguro que desea <strong className="font-bold text-slate-900">eliminar</strong> esta transferencia?
+              </p>
+            </div>
+
+            <div className="pt-2 flex items-center gap-3">
+              <button
+                type="button"
+                onClick={() => {
+                  setModalEliminarTransfVisible(false);
+                  setTransfAEliminarId(null);
+                }}
+                className="w-1/2 py-2.5 px-4 rounded-xl font-semibold text-xs border border-slate-200 text-slate-700 bg-slate-100 hover:bg-slate-200 transition-all cursor-pointer"
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                onClick={confirmarEliminarComprobante}
+                className="w-1/2 py-2.5 px-4 rounded-xl font-semibold text-xs bg-rose-600 hover:bg-rose-700 text-white transition-all shadow-sm active:scale-[0.99] cursor-pointer"
+              >
+                Eliminar
+              </button>
             </div>
           </div>
         </div>
@@ -1819,8 +2299,8 @@ export default function PosOriginacionCreditoPage() {
                   {/* PRECIO ACORDADO O BASE FIJO */}
                   <div className="sm:col-span-2">
                     {prodSeleccionado.es_precio_variable ? (
-                      <div className="space-y-1">
-                        <label className="block text-xs font-bold text-purple-900 flex items-center gap-1.5">
+                      <div>
+                        <label className="block text-xs font-bold text-purple-900 flex items-center gap-1.5 mb-1">
                           <Sparkles className="w-3.5 h-3.5 text-purple-700" />
                           <span>VALOR UNITARIO ACORDADO CON EL CLIENTE (COP) *</span>
                         </label>
@@ -1828,23 +2308,17 @@ export default function PosOriginacionCreditoPage() {
                           type="number"
                           value={precioAcordadoInput}
                           onChange={(e) => setPrecioAcordadoInput(parseFloat(e.target.value) || 0)}
-                          className="w-full px-3.5 py-2 rounded-xl border border-purple-300 bg-purple-50/50 text-purple-950 font-mono font-bold text-base focus:bg-white focus:outline-hidden focus:ring-2 focus:ring-purple-600 transition-all"
+                          className="w-full px-3.5 py-2 rounded-xl border border-purple-300 bg-purple-50/50 text-purple-950 font-mono font-bold text-sm focus:bg-white focus:outline-hidden focus:ring-2 focus:ring-purple-600 transition-all min-h-[38px] h-[38px]"
                         />
-                        <span className="text-[11px] text-purple-700 block">
-                          Precio base de referencia: {formatCOP(prodSeleccionado.precio_base)}. Como es obra de arte, puede pactar un valor diferente con el cliente.
-                        </span>
                       </div>
                     ) : (
-                      <div className="space-y-1">
-                        <label className="block text-xs font-semibold text-slate-700">
+                      <div>
+                        <label className="block text-xs font-semibold text-slate-700 mb-1">
                           PRECIO UNITARIO ESTÁNDAR (NO NEGOCIABLE)
                         </label>
-                        <div className="w-full px-3.5 py-2 rounded-xl border border-slate-200 bg-white font-mono font-bold text-sm text-slate-900">
+                        <div className="w-full px-3.5 py-2 rounded-xl border border-slate-200 bg-white font-mono font-bold text-sm text-slate-900 min-h-[38px] h-[38px] flex items-center">
                           {formatCOP(prodSeleccionado.precio_base)}
                         </div>
-                        <span className="text-[11px] text-slate-600 block">
-                          Tarifa estándar predeterminada para mecedoras tradicionales.
-                        </span>
                       </div>
                     )}
                   </div>
@@ -1861,12 +2335,12 @@ export default function PosOriginacionCreditoPage() {
                         max="50"
                         value={cantidadInput}
                         onChange={(e) => setCantidadInput(parseInt(e.target.value) || 1)}
-                        className="w-20 px-3 py-2 rounded-xl border border-slate-200 text-center font-bold text-sm bg-white focus:outline-hidden focus:ring-2 focus:ring-emerald-500"
+                        className="w-20 px-3 py-2 rounded-xl border border-slate-200 text-center font-bold text-sm bg-white focus:outline-hidden focus:ring-2 focus:ring-emerald-500 min-h-[38px] h-[38px]"
                       />
                       <button
                         type="button"
                         onClick={handleAgregarAlCarrito}
-                        className="flex-1 py-2 px-3 rounded-xl bg-slate-900 hover:bg-slate-800 text-white text-xs font-bold shadow-xs transition-all flex items-center justify-center gap-1.5 cursor-pointer"
+                        className="flex-1 py-2 px-3 rounded-xl bg-slate-900 hover:bg-slate-800 text-white text-xs font-bold shadow-xs transition-all flex items-center justify-center gap-1.5 cursor-pointer min-h-[38px] h-[38px]"
                       >
                         <Plus className="w-3.5 h-3.5" />
                         <span>Agregar</span>
@@ -1874,6 +2348,19 @@ export default function PosOriginacionCreditoPage() {
                     </div>
                   </div>
 
+                </div>
+
+                {/* Nota de referencia del precio */}
+                <div className="text-[11px]">
+                  {prodSeleccionado.es_precio_variable ? (
+                    <span className="text-purple-700 block">
+                      Precio base de referencia: {formatCOP(prodSeleccionado.precio_base)}. Como es obra de arte, puede pactar un valor diferente con el cliente.
+                    </span>
+                  ) : (
+                    <span className="text-slate-600 block">
+                      Tarifa estándar predeterminada para mecedoras tradicionales.
+                    </span>
+                  )}
                 </div>
               </div>
             )}
@@ -2015,30 +2502,65 @@ export default function PosOriginacionCreditoPage() {
               /* VISTA CRÉDITO: SELECCIÓN DE MODALIDAD, CUOTA INICIAL Y PLAZOS */
               <div className="space-y-6">
                 
-                {/* Modalidad Unificada: Crédito Mensual (Fin de Mes) */}
+                {/* Modalidad de Cobro: Renderizado Condicional Estricto según modalidadProyeccion */}
                 <div>
                   <div className="flex items-center justify-between mb-2">
                     <label className="block text-xs font-semibold text-slate-700">
-                      MODALIDAD DE COBRO UNIFICADA *
+                      {modalidadProyeccion === 'dinamica' ? 'MODALIDAD DINÁMICA' : 'MODALIDAD DE COBRO UNIFICADA *'}
                     </label>
-                    <span className="text-[11px] text-emerald-700 font-semibold bg-emerald-50 px-2 py-0.5 rounded-md border border-emerald-200">
-                      Mensual Fin de Mes
+                    <span
+                      className={cn(
+                        'text-[11px] font-semibold px-2 py-0.5 rounded-md border',
+                        modalidadProyeccion === 'dinamica'
+                          ? 'text-blue-700 bg-blue-50 border-blue-200'
+                          : 'text-emerald-700 bg-emerald-50 border-emerald-200'
+                      )}
+                    >
+                      {modalidadProyeccion === 'dinamica' ? 'MODALIDAD DINÁMICA' : 'Mensual Fin de Mes'}
                     </span>
                   </div>
-                  <div className="p-3.5 rounded-xl border border-emerald-200 bg-emerald-50/40 flex items-center justify-between">
-                    <div className="flex items-center gap-3">
-                      <div className="w-9 h-9 rounded-lg bg-emerald-600 text-white flex items-center justify-center font-bold text-xs shadow-xs">
-                        30/31
+
+                  {modalidadProyeccion === 'dinamica' ? (
+                    /* MODO DINÁMICO: Tarjeta Azul "Crédito Dinámico (En Ruta)" con paridad móvil */
+                    <div className="p-3.5 rounded-xl border border-blue-200 bg-blue-50/60 flex items-center justify-between">
+                      <div className="flex items-center gap-3">
+                        <div className="w-9 h-9 rounded-lg bg-blue-600 text-white flex items-center justify-center font-bold text-sm shadow-xs">
+                          📅
+                        </div>
+                        <div>
+                          <span className="text-xs font-bold text-slate-900 block uppercase">
+                            Crédito Dinámico (En Ruta)
+                          </span>
+                          <span className="text-[11px] text-blue-900/80 block">
+                            Fechas y frecuencias de cobro acordadas y agendadas directamente en terreno
+                          </span>
+                        </div>
                       </div>
-                      <div>
-                        <span className="text-xs font-bold text-slate-900 block uppercase">Frecuencia Mensual</span>
-                        <span className="text-[11px] text-slate-600 block">Vencimiento programado automáticamente para el fin de cada mes</span>
-                      </div>
+                      <span className="text-xs font-bold text-blue-800 bg-blue-100/90 px-2.5 py-1 rounded-lg border border-blue-200/80">
+                        DINÁMICA
+                      </span>
                     </div>
-                    <span className="text-xs font-bold text-emerald-800 bg-emerald-100/80 px-2.5 py-1 rounded-lg">
-                      Exclusivo
-                    </span>
-                  </div>
+                  ) : (
+                    /* MODO ORIGINAL (CUOTAS FIJAS): Tarjeta Verde "30/31 FRECUENCIA MENSUAL" y "Mensual Fin de Mes" */
+                    <div className="p-3.5 rounded-xl border border-emerald-200 bg-emerald-50/40 flex items-center justify-between">
+                      <div className="flex items-center gap-3">
+                        <div className="w-9 h-9 rounded-lg bg-emerald-600 text-white flex items-center justify-center font-bold text-xs shadow-xs">
+                          30/31
+                        </div>
+                        <div>
+                          <span className="text-xs font-bold text-slate-900 block uppercase">
+                            30/31 FRECUENCIA MENSUAL
+                          </span>
+                          <span className="text-[11px] text-slate-600 block">
+                            Vencimiento programado automáticamente para el fin de cada mes
+                          </span>
+                        </div>
+                      </div>
+                      <span className="text-xs font-bold text-emerald-800 bg-emerald-100/80 px-2.5 py-1 rounded-lg border border-emerald-200">
+                        Mensual Fin de Mes
+                      </span>
+                    </div>
+                  )}
                 </div>
 
                 {/* Parámetros de Plazo y Cuota Inicial */}
@@ -2062,6 +2584,7 @@ export default function PosOriginacionCreditoPage() {
                             setMontoEfectivo(0);
                             setMontoTransferencia(0);
                             setReferenciaPagoInicial('');
+                            setBancoTransferencia('');
                           } else if (metodoPagoInicial === 'Efectivo') {
                             setMontoEfectivo(val);
                             setMontoTransferencia(0);
@@ -2221,14 +2744,14 @@ export default function PosOriginacionCreditoPage() {
                     <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-1 text-xs">
                       <span className="font-bold text-slate-900 flex items-center gap-1.5">
                         <Clock className="w-3.5 h-3.5 text-slate-600" />
-                        Desglose Financiero en Tiempo Real ({numeroCuotas} cuotas {tipoPago}s)
+                        Desglose Financiero en Tiempo Real ({numeroCuotas} cuotas {modalidadProyeccion === 'dinamica' ? 'dinámicas' : `${tipoPago}s`})
                       </span>
                       <span className="text-[11px] text-slate-600 font-mono">
                         Total Artículos: <strong>{formatCOP(totalVenta)}</strong> {cuotaInicialEfectiva > 0 && `| Inicial: -${formatCOP(cuotaInicialEfectiva)}`}
                       </span>
                     </div>
 
-                    {numeroCuotas === 4 && (
+                    {numeroCuotas === 4 && modalidadProyeccion !== 'dinamica' && (
                       <div className="px-3 py-2 rounded-lg bg-emerald-50 border border-emerald-200/70 text-emerald-900 text-xs flex items-center gap-2">
                         <span className="font-bold text-emerald-700">✓ Plan 4 Cuotas:</span>
                         <span>Configurado internamente como <strong>Cuota Inicial + 3 meses / periodos</strong> correspondientes.</span>
@@ -2245,13 +2768,41 @@ export default function PosOriginacionCreditoPage() {
                         <span className="text-[10px] text-slate-600 block uppercase font-semibold">Plazo Pactado</span>
                         <span className="font-mono font-bold text-slate-900 block mt-0.5">{numeroCuotas} Cuotas</span>
                         <span className="text-[10px] text-slate-500 block capitalize">
-                          {modalidadProyeccion === 'dinamica' ? 'Dinámica' : tipoPago}
+                          {modalidadProyeccion === 'dinamica' ? 'Dinámica (Ruta)' : tipoPago}
                         </span>
                       </div>
-                      <div className="p-2.5 rounded-lg bg-emerald-50/80 border border-emerald-200 shadow-2xs">
-                        <span className="text-[10px] text-emerald-800 block uppercase font-bold">Valor Cuota Periódica</span>
-                        <span className="font-mono font-bold text-emerald-900 block mt-0.5 text-sm">{formatCOP(valorCuotaCalculado)}</span>
-                        <span className="text-[10px] text-emerald-700 block">Cobro periódico</span>
+                      <div
+                        className={cn(
+                          "p-2.5 rounded-lg border shadow-2xs",
+                          modalidadProyeccion === 'dinamica'
+                            ? "bg-indigo-50/80 border-indigo-200"
+                            : "bg-emerald-50/80 border-emerald-200"
+                        )}
+                      >
+                        <span
+                          className={cn(
+                            "text-[10px] block uppercase font-bold",
+                            modalidadProyeccion === 'dinamica' ? "text-indigo-800" : "text-emerald-800"
+                          )}
+                        >
+                          Valor Cuota Periódica
+                        </span>
+                        <span
+                          className={cn(
+                            "font-mono font-bold block mt-0.5 text-sm",
+                            modalidadProyeccion === 'dinamica' ? "text-indigo-950" : "text-emerald-900"
+                          )}
+                        >
+                          {formatCOP(valorCuotaCalculado)}
+                        </span>
+                        <span
+                          className={cn(
+                            "text-[10px] block",
+                            modalidadProyeccion === 'dinamica' ? "text-indigo-700" : "text-emerald-700"
+                          )}
+                        >
+                          {modalidadProyeccion === 'dinamica' ? 'Cobro en ruta' : 'Cobro periódico'}
+                        </span>
                       </div>
                       <div className="p-2.5 rounded-lg bg-white border border-slate-200/60 shadow-2xs">
                         <span className="text-[10px] text-slate-600 block uppercase font-semibold">
@@ -2265,16 +2816,16 @@ export default function PosOriginacionCreditoPage() {
                     {/* Cronograma Proyectado de Vencimientos por Cuota */}
                     {modalidadProyeccion === 'dinamica' ? (
                       <div className="pt-3 border-t border-slate-200/60">
-                        <div className="p-3.5 rounded-xl bg-amber-50/80 border border-amber-200 shadow-2xs">
+                        <div className="p-3.5 rounded-xl bg-indigo-50/80 border border-indigo-200 shadow-2xs">
                           <div className="flex items-center gap-2">
                             <span className="text-sm">🗓️</span>
-                            <span className="text-xs font-bold text-amber-900 uppercase tracking-wide">
+                            <span className="text-xs font-bold text-indigo-900 uppercase tracking-wide">
                               Modalidad Dinámica Activa
                             </span>
                           </div>
-                          <p className="text-[11px] text-amber-800 mt-1.5 leading-relaxed">
+                          <p className="text-[11px] text-indigo-800 mt-1.5 leading-relaxed">
                             No se proyecta un cronograma rígido con fechas de vencimiento predefinidas. La 1ª visita queda pactada para el{' '}
-                            <span className="font-bold text-amber-950 font-mono">{fechaPrimeraCuota || 'Día a acordar'}</span> y las cuotas subsiguientes se agendarán dinámicamente en terreno durante la cobranza.
+                            <span className="font-bold text-indigo-950 font-mono">{fechaPrimeraCuota || 'Día a acordar'}</span> y las cuotas subsiguientes se agendarán dinámicamente en terreno durante la cobranza.
                           </p>
                         </div>
                       </div>
@@ -2539,10 +3090,32 @@ export default function PosOriginacionCreditoPage() {
               </div>
             )}
 
+            {/* AVISO VISUAL DE BLOQUEO MATEMÁTICO POR DESCUADRE */}
+            {montoObjetivo > 0 && metodoPagoInicial !== 'Efectivo' && diferenciaCaja !== 0 && (
+              <div className="p-3 rounded-xl bg-amber-50 border border-amber-200 text-xs text-amber-800 flex items-start gap-2 shadow-2xs">
+                <AlertCircle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+                <div className="leading-relaxed">
+                  <span className="font-bold">Bloqueo Matemático: </span>
+                  {diferenciaCaja > 0
+                    ? `Faltan ${formatCOP(diferenciaCaja)} COP para cuadrar la operación.`
+                    : `Sobran ${formatCOP(Math.abs(diferenciaCaja))} COP en la suma de pagos registrados.`}
+                </div>
+              </div>
+            )}
+
             {/* BOTÓN GIGANTE DE ACCIÓN PRINCIPAL (ADAPTABLE) */}
             <button
               type="button"
-              disabled={isSubmitting || totalVenta <= 0 || (!esContado && montoFinanciado <= 0)}
+              disabled={
+                isSubmitting ||
+                totalVenta <= 0 ||
+                (!esContado && montoFinanciado <= 0) ||
+                (montoObjetivo > 0 && metodoPagoInicial !== 'Efectivo' && (
+                  diferenciaCaja !== 0 ||
+                  !comprobantesValidos ||
+                  hayRefsDuplicadasInternas
+                ))
+              }
               onClick={handleEnviarVenta}
               className={cn(
                 'w-full py-4 px-5 rounded-xl font-bold text-sm shadow-md transition-all flex items-center justify-center gap-2.5 cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed text-white',

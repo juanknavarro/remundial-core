@@ -106,6 +106,11 @@ class Abono(Base):
         String(255),
         nullable=True,
     )
+    banco_transferencia: Mapped[Optional[str]] = mapped_column(
+        String(100),
+        nullable=True,
+        index=True,
+    )
     fecha_siguiente_visita: Mapped[Optional[date]] = mapped_column(
         Date,
         nullable=True,
@@ -124,6 +129,12 @@ class Abono(Base):
     credito = relationship("Credito", back_populates="abonos", lazy="selectin")
     cobrador = relationship("Usuario", foreign_keys=[cobrador_id], lazy="selectin")
     cierre_caja = relationship("CierreCaja", back_populates="abonos", lazy="selectin")
+    transferencias = relationship(
+        "DetalleTransferencia",
+        back_populates="abono",
+        cascade="all, delete-orphan",
+        lazy="selectin",
+    )
 
     def __repr__(self) -> str:
         return (

@@ -39,3 +39,7 @@ htmlcov/
 .idea/
 *.swp
 *.swo
+
+# Storage & Uploads
+storage/firmas/*.png
+storage/firmas/*.jpg

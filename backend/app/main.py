@@ -8,7 +8,9 @@ from fastapi.staticfiles import StaticFiles
 
 from app.core.config import settings
 from app.routers.abonos import router as abonos_router
+from app.routers.auditoria import router as auditoria_router
 from app.routers.auth import router as auth_router
+from app.routers.bancos import router as bancos_router
 from app.routers.clientes import router as clientes_router
 from app.routers.configuracion import router as configuracion_router
 from app.routers.creditos import router as creditos_router
@@ -50,7 +52,7 @@ async def ensure_master_user() -> None:
 
 
 async def ensure_db_schema() -> None:
-    """Asegura la presencia de columnas recientes en la base de datos PostgreSQL."""
+    """Asegura la presencia de columnas, tabla de entidades bancarias e índices únicos compuestos en PostgreSQL."""
     from sqlalchemy import text
     from app.core.database import AsyncSessionLocal
     try:
@@ -58,10 +60,112 @@ async def ensure_db_schema() -> None:
             await session.execute(text("ALTER TABLE creditos ADD COLUMN IF NOT EXISTS modalidad_proyeccion VARCHAR(20) DEFAULT 'fija';"))
             await session.execute(text("ALTER TABLE creditos ADD COLUMN IF NOT EXISTS fecha_siguiente_visita DATE;"))
             await session.execute(text("ALTER TABLE abonos ADD COLUMN IF NOT EXISTS fecha_siguiente_visita DATE;"))
+            await session.execute(text("ALTER TABLE creditos ADD COLUMN IF NOT EXISTS banco_transferencia VARCHAR(100);"))
+            await session.execute(text("ALTER TABLE abonos ADD COLUMN IF NOT EXISTS banco_transferencia VARCHAR(100);"))
+
+            # Tabla de Entidades Bancarias y Pasarelas de Pago
+            await session.execute(text("""
+                CREATE TABLE IF NOT EXISTS entidades_bancarias (
+                    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                    nombre VARCHAR(100) UNIQUE NOT NULL,
+                    activa BOOLEAN NOT NULL DEFAULT true,
+                    creado_en TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+                );
+            """))
+
+            # Poblar entidades bancarias predeterminadas de Colombia si no existen
+            bancos_default = [
+                "Bancolombia",
+                "Nequi",
+                "Daviplata",
+                "Davivienda",
+                "BBVA",
+                "Banco de Bogotá",
+                "Banco Agrario",
+                "Scotiabank Colpatria",
+                "Banco Popular",
+                "Banco de Occidente",
+                "Transfiya / Otras",
+            ]
+            for b_nombre in bancos_default:
+                await session.execute(
+                    text("""
+                        INSERT INTO entidades_bancarias (nombre, activa)
+                        VALUES (:nombre, true)
+                        ON CONFLICT (nombre) DO NOTHING;
+                    """),
+                    {"nombre": b_nombre},
+                )
+
+            # Eliminar índices parciales simples anteriores
+            await session.execute(text("DROP INDEX IF EXISTS uq_abonos_referencia_pago_normalizada;"))
+            await session.execute(text("DROP INDEX IF EXISTS uq_creditos_referencia_inicial_normalizada;"))
+
+            # Crear índices únicos compuestos (Banco + Referencia Normalizada)
+            await session.execute(text("""
+                CREATE UNIQUE INDEX IF NOT EXISTS uq_abonos_banco_referencia_normalizada
+                ON abonos (UPPER(TRIM(banco_transferencia)), UPPER(TRIM(referencia_pago)))
+                WHERE referencia_pago IS NOT NULL AND TRIM(referencia_pago) <> ''
+                  AND banco_transferencia IS NOT NULL AND TRIM(banco_transferencia) <> '';
+            """))
+            await session.execute(text("""
+                CREATE UNIQUE INDEX IF NOT EXISTS uq_creditos_banco_referencia_normalizada
+                ON creditos (UPPER(TRIM(banco_transferencia)), UPPER(TRIM(referencia_pago_inicial)))
+                WHERE referencia_pago_inicial IS NOT NULL AND TRIM(referencia_pago_inicial) <> ''
+                  AND banco_transferencia IS NOT NULL AND TRIM(banco_transferencia) <> '';
+            """))
+
+            # Tabla de Ventas Anuladas y Solicitudes de Devolución/Reembolso
+            await session.execute(text("""
+                CREATE TABLE IF NOT EXISTS ventas_anuladas (
+                    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                    fecha TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+                    vendedor_id UUID NOT NULL REFERENCES usuarios(id),
+                    monto_total NUMERIC(12, 2) NOT NULL,
+                    metodo_pago_original VARCHAR(50) NOT NULL,
+                    referencia_original VARCHAR(100),
+                    articulos_json JSONB NOT NULL DEFAULT '[]'::jsonb,
+                    estado_devolucion VARCHAR(50) NOT NULL,
+                    banco_destino_cliente VARCHAR(100),
+                    cuenta_destino_cliente VARCHAR(100),
+                    notas_vendedor TEXT,
+                    referencia_reembolso_oficina VARCHAR(100),
+                    banco_origen_reembolso VARCHAR(100),
+                    fecha_reembolso TIMESTAMP WITH TIME ZONE,
+                    firma_vendedor TEXT,
+                    firma_cliente TEXT,
+                    creado_en TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+                )
+            """))
+            await session.execute(text("ALTER TABLE ventas_anuladas ADD COLUMN IF NOT EXISTS firma_vendedor TEXT;"))
+            await session.execute(text("ALTER TABLE ventas_anuladas ADD COLUMN IF NOT EXISTS firma_cliente TEXT;"))
+            await session.execute(text("CREATE INDEX IF NOT EXISTS idx_ventas_anuladas_vendedor ON ventas_anuladas(vendedor_id)"))
+            await session.execute(text("CREATE INDEX IF NOT EXISTS idx_ventas_anuladas_estado ON ventas_anuladas(estado_devolucion)"))
+
+            # Tabla de Detalles de Transferencias Múltiples (Hito 3)
+            await session.execute(text("""
+                CREATE TABLE IF NOT EXISTS detalles_transferencia (
+                    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                    venta_id UUID REFERENCES creditos(id_contrato) ON DELETE CASCADE,
+                    abono_id UUID REFERENCES abonos(id_recibo) ON DELETE CASCADE,
+                    entidad_bancaria VARCHAR(100) NOT NULL,
+                    referencia_pago VARCHAR(100) NOT NULL,
+                    monto NUMERIC(12, 2) NOT NULL,
+                    creado_en TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+                );
+            """))
+            await session.execute(text("CREATE INDEX IF NOT EXISTS idx_detalles_transf_venta ON detalles_transferencia(venta_id);"))
+            await session.execute(text("CREATE INDEX IF NOT EXISTS idx_detalles_transf_abono ON detalles_transferencia(abono_id);"))
+            # Candado estricto a nivel de motor: UNIQUE (entidad_bancaria, UPPER(TRIM(referencia_pago)))
+            await session.execute(text("""
+                CREATE UNIQUE INDEX IF NOT EXISTS uq_detalles_transferencia_banco_ref
+                ON detalles_transferencia (entidad_bancaria, UPPER(TRIM(referencia_pago)));
+            """))
+
             await session.commit()
-            print("[SCHEMA] Columnas modalidad_proyeccion y fecha_siguiente_visita aseguradas en base de datos.")
+            print("[SCHEMA] Tabla de entidades bancarias, ventas anuladas, columnas e índices únicos asegurados en PostgreSQL.")
     except Exception as exc:
-        print(f"[SCHEMA] Advertencia al verificar columnas en arranque: {exc}")
+        print(f"[SCHEMA] Advertencia al verificar esquema en arranque: {exc}")
 
 
 @asynccontextmanager
@@ -196,6 +300,8 @@ app.include_router(productos_router)
 app.include_router(clientes_router)
 app.include_router(creditos_router)
 app.include_router(abonos_router)
+app.include_router(auditoria_router)
+app.include_router(bancos_router)
 app.include_router(reportes_router)
 app.include_router(configuracion_router)
 app.include_router(config_alias_router)
@@ -209,6 +315,8 @@ app.include_router(productos_router, prefix=settings.API_V1_STR)
 app.include_router(clientes_router, prefix=settings.API_V1_STR)
 app.include_router(creditos_router, prefix=settings.API_V1_STR)
 app.include_router(abonos_router, prefix=settings.API_V1_STR)
+app.include_router(auditoria_router, prefix=settings.API_V1_STR)
+app.include_router(bancos_router, prefix=settings.API_V1_STR)
 app.include_router(reportes_router, prefix=settings.API_V1_STR)
 app.include_router(configuracion_router, prefix=settings.API_V1_STR)
 app.include_router(config_alias_router, prefix=settings.API_V1_STR)

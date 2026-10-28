@@ -1,12 +1,16 @@
 from datetime import date, datetime
 from decimal import Decimal
-from typing import Any, Optional
+from typing import Any, List, Optional
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.models.abono import EstadoAbono
 from app.schemas.cliente import CoordenadasGPS
+from app.schemas.detalle_transferencia import (
+    DetalleTransferenciaCreate,
+    DetalleTransferenciaResponse,
+)
 from app.schemas.usuario import UsuarioResponse
 
 
@@ -38,6 +42,14 @@ class AbonoBase(BaseModel):
     referencia_pago: Optional[str] = Field(
         default=None,
         description="Número de referencia o comprobante de la transferencia",
+    )
+    banco_transferencia: Optional[str] = Field(
+        default=None,
+        description="Entidad bancaria o pasarela origen de la transferencia (ej. Bancolombia, Nequi)",
+    )
+    transferencias: Optional[List[DetalleTransferenciaCreate]] = Field(
+        default_factory=list,
+        description="Lista de transferencias asociadas al recaudo (hasta 3)",
     )
     notas: Optional[str] = Field(
         default=None,
@@ -108,27 +120,91 @@ class AbonoCreate(AbonoBase):
         metodo = (self.metodo_pago or "efectivo").strip().lower()
         v_abonado = Decimal(str(self.valor_abonado or 0))
 
+        if self.transferencias and len(self.transferencias) > 3:
+            raise ValueError("Descuadre matemático de caja: Se permite un máximo de 3 comprobantes de transferencia.")
+
         if metodo == "efectivo":
             if not self.monto_efectivo or self.monto_efectivo == Decimal("0.00"):
                 self.monto_efectivo = v_abonado
-            if self.monto_transferencia is None:
-                self.monto_transferencia = Decimal("0.00")
+            self.monto_transferencia = Decimal("0.00")
+            self.transferencias = []
+            self.banco_transferencia = None
+            self.referencia_pago = None
         elif metodo == "transferencia":
-            if not self.monto_transferencia or self.monto_transferencia == Decimal("0.00"):
-                self.monto_transferencia = v_abonado
-            if self.monto_efectivo is None:
+            if self.transferencias and len(self.transferencias) > 0:
+                total_trans = sum((Decimal(str(t.monto)) for t in self.transferencias), Decimal("0.00"))
+                if total_trans != v_abonado:
+                    raise ValueError(
+                        f"Descuadre matemático de caja: El total de las transferencias (${total_trans:.2f}) "
+                        f"no coincide exactamente con el valor del abono (${v_abonado:.2f})."
+                    )
+                self.monto_transferencia = total_trans
                 self.monto_efectivo = Decimal("0.00")
+                self.banco_transferencia = self.transferencias[0].entidad_bancaria
+                self.referencia_pago = self.transferencias[0].referencia_pago
+            else:
+                if not self.monto_transferencia or self.monto_transferencia == Decimal("0.00"):
+                    self.monto_transferencia = v_abonado
+                self.monto_efectivo = Decimal("0.00")
+                if self.monto_transferencia <= Decimal("0.00"):
+                    raise ValueError("El monto transferido debe ser mayor a $0 COP.")
+                banco = (self.banco_transferencia or "").strip()
+                if not banco:
+                    raise ValueError("Debe seleccionar la entidad bancaria origen de la transferencia.")
+                ref = (self.referencia_pago or "").strip()
+                if not ref:
+                    raise ValueError("Debe ingresar el número de comprobante o referencia bancaria para pagos por transferencia.")
+                if len(ref) < 3:
+                    raise ValueError("La referencia de pago debe contener al menos 3 caracteres alfanuméricos válidos.")
+                self.banco_transferencia = banco
+                self.referencia_pago = ref
+                self.transferencias = [
+                    DetalleTransferenciaCreate(
+                        entidad_bancaria=banco,
+                        referencia_pago=ref,
+                        monto=v_abonado,
+                    )
+                ]
         elif metodo == "mixto":
             m_efectivo = Decimal(str(self.monto_efectivo or 0))
-            m_transferencia = Decimal(str(self.monto_transferencia or 0))
-            if (m_efectivo + m_transferencia) != v_abonado:
+            if self.transferencias and len(self.transferencias) > 0:
+                total_trans = sum((Decimal(str(t.monto)) for t in self.transferencias), Decimal("0.00"))
+                self.monto_transferencia = total_trans
+                self.banco_transferencia = self.transferencias[0].entidad_bancaria
+                self.referencia_pago = self.transferencias[0].referencia_pago
+            else:
+                m_trans = Decimal(str(self.monto_transferencia or 0))
+                if m_trans > Decimal("0.00"):
+                    banco = (self.banco_transferencia or "").strip()
+                    if not banco:
+                        raise ValueError("Debe seleccionar la entidad bancaria para la porción transferida en el pago mixto.")
+                    ref = (self.referencia_pago or "").strip()
+                    if not ref:
+                        raise ValueError("Debe ingresar el número de comprobante o referencia de la transferencia en el pago mixto.")
+                    if len(ref) < 3:
+                        raise ValueError("La referencia de pago debe contener al menos 3 caracteres alfanuméricos válidos.")
+                    self.banco_transferencia = banco
+                    self.referencia_pago = ref
+                    self.transferencias = [
+                        DetalleTransferenciaCreate(
+                            entidad_bancaria=banco,
+                            referencia_pago=ref,
+                            monto=m_trans,
+                        )
+                    ]
+                else:
+                    self.banco_transferencia = None
+                    self.referencia_pago = None
+                    self.transferencias = []
+
+            total_pago = m_efectivo + Decimal(str(self.monto_transferencia or 0))
+            if total_pago != v_abonado:
                 raise ValueError(
-                    f"En recaudo mixto, la suma de monto_efectivo (${m_efectivo}) y "
-                    f"monto_transferencia (${m_transferencia}) debe ser estrictamente igual al "
-                    f"valor_abonado (${v_abonado})."
+                    f"Descuadre matemático de caja: En recaudo mixto, la suma de monto_efectivo (${m_efectivo:.2f}) "
+                    f"y transferencias (${self.monto_transferencia:.2f}) debe ser estrictamente igual al "
+                    f"valor_abonado (${v_abonado:.2f})."
                 )
             self.monto_efectivo = m_efectivo
-            self.monto_transferencia = m_transferencia
         return self
 
 
@@ -155,6 +231,8 @@ class AbonoResponse(BaseModel):
     monto_efectivo: Optional[Decimal] = Decimal("0.00")
     monto_transferencia: Optional[Decimal] = Decimal("0.00")
     referencia_pago: Optional[str] = None
+    banco_transferencia: Optional[str] = None
+    transferencias: List[DetalleTransferenciaResponse] = []
     es_abono_parcial: Optional[bool] = Field(
         default=False,
         description="Indica si este recaudo correspondió a un pago parcial de la cuota",
@@ -222,6 +300,7 @@ class ReciboOfflinePdfRequest(BaseModel):
     metodo_pago: Optional[str] = "efectivo"
     monto_efectivo: Optional[Decimal] = None
     monto_transferencia: Optional[Decimal] = None
+    banco_transferencia: Optional[str] = None
     referencia_pago: Optional[str] = None
     fecha: Optional[str] = None
     fecha_completa: Optional[str] = None

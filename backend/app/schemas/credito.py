@@ -8,6 +8,10 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 from app.models.credito import EstadoCredito, TipoPago
 from app.schemas.cliente import ClienteResponse
+from app.schemas.detalle_transferencia import (
+    DetalleTransferenciaCreate,
+    DetalleTransferenciaResponse,
+)
 from app.schemas.producto import ProductoResponse
 from app.schemas.usuario import UsuarioResponse
 
@@ -268,11 +272,17 @@ class CreditoBase(BaseModel):
     referencia_pago_inicial: Optional[str] = Field(
         None, max_length=100, description="No. de comprobante o referencia de pago del anticipo"
     )
+    banco_transferencia: Optional[str] = Field(
+        None, max_length=100, description="Entidad bancaria o pasarela de la transferencia inicial (ej. Bancolombia, Nequi)"
+    )
     monto_inicial_efectivo: Optional[Decimal] = Field(
         default=Decimal("0.00"), description="Monto en efectivo recibido para la cuota inicial"
     )
     monto_inicial_transferencia: Optional[Decimal] = Field(
         default=Decimal("0.00"), description="Monto en transferencia recibido para la cuota inicial"
+    )
+    transferencias: Optional[List[DetalleTransferenciaCreate]] = Field(
+        default_factory=list, description="Lista de comprobantes de transferencia (hasta 3)"
     )
     monto_financiado: Decimal = Field(..., ge=0, description="Valor neto a financiar en cuotas (0 para venta de contado)")
     numero_cuotas: int = Field(..., gt=0, description="Cantidad total de cuotas pactadas")
@@ -400,7 +410,7 @@ class CreditoCreate(CreditoBase):
 
     @model_validator(mode="after")
     def validar_distribucion_pago_inicial(self) -> "CreditoCreate":
-        """Valida y distribuye la cuota inicial según el método de pago seleccionado."""
+        """Valida y distribuye la cuota inicial según el método de pago seleccionado y soporta hasta 3 transferencias."""
         c_inicial = Decimal(str(self.cuota_inicial or 0))
         metodo = (self.metodo_pago_inicial or "").strip().lower()
 
@@ -408,30 +418,97 @@ class CreditoCreate(CreditoBase):
         if c_inicial <= Decimal("0.00"):
             self.monto_inicial_efectivo = Decimal("0.00")
             self.monto_inicial_transferencia = Decimal("0.00")
+            self.transferencias = []
             return self
+
+        # Validar límite de hasta 3 comprobantes
+        if self.transferencias and len(self.transferencias) > 3:
+            raise ValueError("Descuadre matemático de caja: Se permite un máximo de 3 comprobantes de transferencia.")
 
         if metodo == "efectivo":
             self.monto_inicial_efectivo = c_inicial
             self.monto_inicial_transferencia = Decimal("0.00")
+            self.transferencias = []
+            self.banco_transferencia = None
+            self.referencia_pago_inicial = None
         elif metodo == "transferencia":
-            if not self.referencia_pago_inicial or not self.referencia_pago_inicial.strip():
-                raise ValueError("Debe ingresar la referencia o comprobante de pago para la cuota inicial por transferencia.")
-            self.monto_inicial_transferencia = c_inicial
-            self.monto_inicial_efectivo = Decimal("0.00")
+            if self.transferencias and len(self.transferencias) > 0:
+                total_trans = sum((Decimal(str(t.monto)) for t in self.transferencias), Decimal("0.00"))
+                if total_trans != c_inicial:
+                    raise ValueError(
+                        f"Descuadre matemático de caja: El total de las transferencias (${total_trans:.2f}) "
+                        f"no coincide con la cuota inicial declarada (${c_inicial:.2f})."
+                    )
+                self.monto_inicial_transferencia = total_trans
+                self.monto_inicial_efectivo = Decimal("0.00")
+                self.banco_transferencia = self.transferencias[0].entidad_bancaria
+                self.referencia_pago_inicial = self.transferencias[0].referencia_pago
+            else:
+                banco = (self.banco_transferencia or "").strip()
+                if not banco:
+                    raise ValueError("Debe seleccionar la entidad bancaria para el pago o cuota inicial por transferencia.")
+                ref = (self.referencia_pago_inicial or "").strip()
+                if not ref:
+                    raise ValueError("Debe ingresar la referencia o comprobante de pago para la cuota inicial por transferencia.")
+                if len(ref) < 3:
+                    raise ValueError("La referencia de pago inicial debe contener al menos 3 caracteres alfanuméricos válidos.")
+                self.banco_transferencia = banco
+                self.referencia_pago_inicial = ref
+                self.monto_inicial_transferencia = c_inicial
+                self.monto_inicial_efectivo = Decimal("0.00")
+                self.transferencias = [
+                    DetalleTransferenciaCreate(
+                        entidad_bancaria=banco,
+                        referencia_pago=ref,
+                        monto=c_inicial,
+                    )
+                ]
         elif metodo == "mixto":
             m_efectivo = Decimal(str(self.monto_inicial_efectivo or 0))
-            m_transferencia = Decimal(str(self.monto_inicial_transferencia or 0))
-            if (m_efectivo + m_transferencia) != c_inicial:
+            if self.transferencias and len(self.transferencias) > 0:
+                total_trans = sum((Decimal(str(t.monto)) for t in self.transferencias), Decimal("0.00"))
+                self.monto_inicial_transferencia = total_trans
+                self.banco_transferencia = self.transferencias[0].entidad_bancaria
+                self.referencia_pago_inicial = self.transferencias[0].referencia_pago
+            else:
+                m_trans = Decimal(str(self.monto_inicial_transferencia or 0))
+                if m_trans > Decimal("0.00"):
+                    banco = (self.banco_transferencia or "").strip()
+                    if not banco:
+                        raise ValueError("Debe seleccionar la entidad bancaria para la porción de transferencia en el pago mixto.")
+                    ref = (self.referencia_pago_inicial or "").strip()
+                    if not ref:
+                        raise ValueError("Debe ingresar la referencia o comprobante de pago para la transferencia en pago mixto.")
+                    if len(ref) < 3:
+                        raise ValueError("La referencia de pago inicial debe contener al menos 3 caracteres alfanuméricos válidos.")
+                    self.banco_transferencia = banco
+                    self.referencia_pago_inicial = ref
+                    self.transferencias = [
+                        DetalleTransferenciaCreate(
+                            entidad_bancaria=banco,
+                            referencia_pago=ref,
+                            monto=m_trans,
+                        )
+                    ]
+                else:
+                    self.banco_transferencia = None
+                    self.referencia_pago_inicial = None
+                    self.transferencias = []
+
+            total_pago = m_efectivo + Decimal(str(self.monto_inicial_transferencia or 0))
+            if total_pago != c_inicial:
                 raise ValueError(
-                    f"En pago mixto, la suma de efectivo ({m_efectivo}) y transferencia ({m_transferencia}) debe ser exactamente igual a la cuota inicial ({c_inicial})."
+                    f"Descuadre matemático de caja: En pago mixto, la suma de efectivo (${m_efectivo:.2f}) "
+                    f"y transferencias (${self.monto_inicial_transferencia:.2f}) debe ser exactamente igual "
+                    f"a la cuota inicial (${c_inicial:.2f})."
                 )
-            if not self.referencia_pago_inicial or not self.referencia_pago_inicial.strip():
-                raise ValueError("Debe ingresar la referencia o comprobante de pago para la transferencia en pago mixto.")
             self.monto_inicial_efectivo = m_efectivo
-            self.monto_inicial_transferencia = m_transferencia
         elif not metodo:
             self.monto_inicial_efectivo = c_inicial
             self.monto_inicial_transferencia = Decimal("0.00")
+            self.banco_transferencia = None
+            self.referencia_pago_inicial = None
+            self.transferencias = []
 
         return self
 
@@ -447,6 +524,7 @@ class CreditoUpdate(BaseModel):
     saldo_pendiente: Optional[Decimal] = Field(None, ge=0)
     metodo_pago_inicial: Optional[str] = Field(None, max_length=50)
     referencia_pago_inicial: Optional[str] = Field(None, max_length=100)
+    banco_transferencia: Optional[str] = Field(None, max_length=100)
     monto_inicial_efectivo: Optional[Decimal] = None
     monto_inicial_transferencia: Optional[Decimal] = None
     codeudor: Optional[CodeudorCreate] = None
@@ -484,6 +562,7 @@ class CreditoResponse(CreditoBase):
     supervisor: Optional[UsuarioResponse] = None
     cobrador: Optional[UsuarioResponse] = None
     cronograma_cuotas: List[CuotaCronograma] = []
+    transferencias: List[DetalleTransferenciaResponse] = []
     codeudor: Optional[CodeudorCreate] = None
     referencia: Optional[ReferenciaFamiliarCreate] = None
 

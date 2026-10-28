@@ -18,7 +18,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { version as appVersion } from '../../package.json';
 import { CACHE_CONFIG } from '../storage/database';
 
-export default function LoginScreen() {
+export default function LoginScreen({ route, navigation }) {
   const { login, authError, setAuthError } = useAuth();
   const [identifier, setIdentifier] = useState('');
   const [password, setPassword] = useState('');
@@ -26,6 +26,25 @@ export default function LoginScreen() {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isIdentifierFocused, setIsIdentifierFocused] = useState(false);
   const [isPasswordFocused, setIsPasswordFocused] = useState(false);
+  const [mostrarError, setMostrarError] = useState(false);
+
+  // Controlar visualización de error: Ocultar en carga silenciosa inicial
+  // Solo se muestra si el usuario fue redirigido explícitamente desde una sesión activa por 401
+  React.useEffect(() => {
+    const fueRedirigidoPorExpiracion = Boolean(
+      route?.params?.sesionExpirada ||
+      route?.params?.expirado ||
+      route?.params?.motivo === 'expirado' ||
+      route?.params?.from401
+    );
+
+    if (fueRedirigidoPorExpiracion) {
+      setMostrarError(true);
+    } else {
+      setMostrarError(false);
+      setAuthError(null);
+    }
+  }, [route?.params]);
 
   const [brandInfo, setBrandInfo] = useState({
     brandTitle: 'Plataforma Core',
@@ -146,13 +165,18 @@ export default function LoginScreen() {
 
   const handleLogin = async () => {
     if (!identifier.trim() || !password) {
+      setMostrarError(true);
       setAuthError('Por favor complete su usuario/teléfono y contraseña');
       return;
     }
 
     setIsSubmitting(true);
-    await login(identifier, password);
+    const res = await login(identifier, password);
     setIsSubmitting(false);
+
+    if (!res?.success) {
+      setMostrarError(true);
+    }
   };
 
   return (
@@ -199,8 +223,8 @@ export default function LoginScreen() {
               Ingresa tus credenciales autorizadas
             </Text>
 
-            {/* ALERTA DE ERROR */}
-            {authError ? (
+            {/* ALERTA DE ERROR: Solo visible tras intento real fallido o redirección activa */}
+            {mostrarError && authError ? (
               <View style={styles.errorBanner} accessibilityRole="alert">
                 <Text style={styles.errorIcon}>⚠</Text>
                 <Text style={styles.errorText}>{authError}</Text>

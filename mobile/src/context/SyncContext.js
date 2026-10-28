@@ -33,6 +33,20 @@ export function esErrorDeRed(error) {
   return false;
 }
 
+const BANCOS_DEFECTO = [
+  { id: 1, nombre: 'Bancolombia', activa: true },
+  { id: 2, nombre: 'Nequi', activa: true },
+  { id: 3, nombre: 'Daviplata', activa: true },
+  { id: 4, nombre: 'Davivienda', activa: true },
+  { id: 5, nombre: 'BBVA', activa: true },
+  { id: 6, nombre: 'Banco de Bogotá', activa: true },
+  { id: 7, nombre: 'Banco Agrario', activa: true },
+  { id: 8, nombre: 'Scotiabank Colpatria', activa: true },
+  { id: 9, nombre: 'Banco Popular', activa: true },
+  { id: 10, nombre: 'Banco de Occidente', activa: true },
+  { id: 11, nombre: 'Transfiya / Otras', activa: true },
+];
+
 const SyncContext = createContext(null);
 
 export function SyncProvider({ children }) {
@@ -41,6 +55,7 @@ export function SyncProvider({ children }) {
   const [pendingCount, setPendingCount] = useState(0);
   const [lastSyncTime, setLastSyncTime] = useState(null);
   const [syncErrors, setSyncErrors] = useState([]);
+  const [bancos, setBancos] = useState(BANCOS_DEFECTO);
 
   const isSyncingRef = useRef(false);
 
@@ -134,6 +149,12 @@ export function SyncProvider({ children }) {
             if (rawP.referencia_pago) {
               payloadCola.referencia_pago = String(rawP.referencia_pago).trim();
             }
+            if (rawP.banco_transferencia) {
+              payloadCola.banco_transferencia = String(rawP.banco_transferencia).trim();
+            }
+            if (rawP.transferencias && Array.isArray(rawP.transferencias)) {
+              payloadCola.transferencias = rawP.transferencias;
+            }
             if (rawP.notas) {
               payloadCola.notas = String(rawP.notas).trim();
             }
@@ -160,17 +181,40 @@ export function SyncProvider({ children }) {
             console.log(`[SyncContext] Abono ${item.id} sincronizado exitosamente con el servidor. ID Servidor: ${resPost.data?.id_recibo || 'OK'}`);
           }
         } catch (itemErr) {
-          // Si el servidor respondió con un error de cliente (400, 422, etc.), registrar para auditoría y remover de cola
+          // Si el servidor respondió con un error de cliente (400, 422, etc.), registrar para auditoría sin destruir la transacción financiera
           if (itemErr.response && itemErr.response.status >= 400 && itemErr.response.status < 500) {
-            console.warn(`[SyncContext - Auditoría Producción] Transacción ${item.id} (${item.type}) descartada por validación del servidor (${itemErr.response.status}):`, {
-              payload: item.payload,
-              error_detail: itemErr.response?.data,
-            });
-            // Cortar de raíz cualquier bucle eliminando la transacción rechazada de la cola SQLite
-            await eliminarDeCola(item.id);
+            const statusHttp = itemErr.response.status;
             const msg = typeof itemErr.response.data?.detail === 'string'
               ? itemErr.response.data.detail
-              : JSON.stringify(itemErr.response.data?.detail || itemErr.response.data);
+              : JSON.stringify(itemErr.response.data?.detail || itemErr.response.data || 'Rechazo de validación');
+
+            // HITO 2: Si el error 400 es por stock insuficiente, retener en cuarentena como 'conflicto_stock' (NO eliminarDeCola)
+            const esErrorStock = statusHttp === 400 && (
+              msg.toLowerCase().includes('stock') ||
+              msg.toLowerCase().includes('stock insuficiente') ||
+              msg.toLowerCase().includes('almacén') ||
+              msg.toLowerCase().includes('almacen') ||
+              msg.toLowerCase().includes('inventario')
+            );
+
+            if (item.type === 'venta' && esErrorStock) {
+              console.warn(`[SyncContext - Cuarentena Stock] Venta ${item.id} retenida por falta de stock:`, msg);
+              await actualizarItemCola(item.id, {
+                status: 'conflicto_stock',
+                lastError: msg,
+                updatedAt: new Date().toISOString(),
+              });
+              errores.push({ id: item.id, error: msg, status: 'conflicto_stock' });
+              continue;
+            }
+
+            console.warn(`[SyncContext - Transacción Retenida] Transacción ${item.id} (${item.type}) no procesada por validación (${statusHttp}):`, {
+              payload: item.payload,
+              error_detail: msg,
+            });
+
+            // NO eliminar a ciegas la transacción financiera. Se preserva en el almacenamiento local con estado 'failed' para auditoría
+            await registrarFalloEnCola(item.id, `[HTTP ${statusHttp}] ${msg}`);
             errores.push({ id: item.id, error: msg });
             continue;
           }
@@ -245,14 +289,43 @@ export function SyncProvider({ children }) {
   }, []);
 
   // =========================================================================
+  // 3d. SINCRONIZACIÓN DE CATÁLOGO DE ENTIDADES BANCARIAS
+  // =========================================================================
+  const sincronizarBancos = useCallback(async () => {
+    try {
+      const cacheBancosStr = await AsyncStorage.getItem('@remundial_cache_bancos');
+      if (cacheBancosStr) {
+        try {
+          const parsed = JSON.parse(cacheBancosStr);
+          if (Array.isArray(parsed) && parsed.length > 0) {
+            setBancos(parsed);
+          }
+        } catch (_) {}
+      }
+
+      const res = await apiClient.get('/bancos?solo_activas=true', { timeout: 4000 });
+      if (Array.isArray(res?.data) && res.data.length > 0) {
+        setBancos(res.data);
+        await AsyncStorage.setItem('@remundial_cache_bancos', JSON.stringify(res.data));
+        return res.data;
+      }
+    } catch (err) {
+      console.warn('[SyncContext] Fallo transitorio al actualizar catálogo de bancos:', err?.message);
+    }
+    return null;
+  }, []);
+
+  // =========================================================================
   // 4. LISTENERS DE CICLO DE VIDA (AppState y Navegador)
   // =========================================================================
   useEffect(() => {
     refrescarContador();
+    sincronizarBancos();
     verificarConectividad().then((online) => {
       if (online) {
         sincronizarCiudadesOperativas();
         sincronizarParametrosOperativos();
+        sincronizarBancos();
       }
     });
 
@@ -262,6 +335,7 @@ export function SyncProvider({ children }) {
       procesarCola();
       sincronizarCiudadesOperativas();
       sincronizarParametrosOperativos();
+      sincronizarBancos();
     };
     const handleOffline = () => {
       setIsOnline(false);
@@ -280,6 +354,7 @@ export function SyncProvider({ children }) {
             procesarCola();
             sincronizarCiudadesOperativas();
             sincronizarParametrosOperativos();
+            sincronizarBancos();
           }
         });
       }
@@ -450,6 +525,12 @@ export function SyncProvider({ children }) {
     if (payload.referencia_pago) {
       payloadAbono.referencia_pago = payload.referencia_pago.toString().trim();
     }
+    if (payload.banco_transferencia) {
+      payloadAbono.banco_transferencia = payload.banco_transferencia.toString().trim();
+    }
+    if (payload.transferencias && Array.isArray(payload.transferencias)) {
+      payloadAbono.transferencias = payload.transferencias;
+    }
 
     if (payload.notas && typeof payload.notas === 'string' && payload.notas.trim().length > 0) {
       payloadAbono.notas = payload.notas.trim();
@@ -489,7 +570,74 @@ export function SyncProvider({ children }) {
       return { ok: false, offline: true, error: 'valor_abonado debe ser mayor a 0' };
     }
 
-    // 1. REGISTRO ATÓMICO INMEDIATO EN SQLITE (Offline-First Garantizado)
+    // 1. VALIDACIÓN SÍNCRONA EN LÍNEA PARA TRANSFERENCIAS O PAGOS MIXTOS
+    // Si hay conectividad e involucra transferencia bancaria, validar directamente con la API
+    // antes de guardar localmente para evitar confirmaciones falsas con referencias duplicadas (HTTP 409)
+    const involucraTransferencia =
+      payloadAbono.metodo_pago === 'transferencia' ||
+      (payloadAbono.metodo_pago === 'mixto' && Number(payloadAbono.monto_transferencia) > 0) ||
+      Boolean(payloadAbono.referencia_pago) ||
+      (Array.isArray(payloadAbono.transferencias) && payloadAbono.transferencias.length > 0);
+
+    if (isOnline && involucraTransferencia) {
+      try {
+        console.log('👉 [DEBUG ENCOLAR 2b - ENVÍO DIRECTO TRANSFERENCIA] Transmitiendo abono síncrono a API...', payloadAbono);
+        const resDirect = await apiClient.post('/abonos', payloadAbono);
+        console.log('👉 [DEBUG ENCOLAR 2c - CONFIRMACIÓN API] Abono por transferencia aprobado por servidor:', resDirect.data);
+
+        setIsOnline(true);
+        if (pendingCount > 0) {
+          procesarCola();
+        }
+
+        return {
+          ok: true,
+          offline: false,
+          data: resDirect.data,
+          id_recibo: resDirect.data?.id_recibo,
+        };
+      } catch (transfErr) {
+        // Si el servidor respondió con un error de cliente (409 Conflict, 400 Bad Request, etc.)
+        if (transfErr.response && transfErr.response.status >= 400 && transfErr.response.status < 500) {
+          console.warn(`[SyncContext] Rechazo estricto de la API en abono con transferencia (${transfErr.response.status}):`, transfErr.response.data);
+          let errorMsg = 'Error en la validación del recaudo.';
+          const detail = transfErr.response.data?.detail;
+          if (typeof detail === 'string') {
+            errorMsg = detail;
+          } else if (Array.isArray(detail)) {
+            errorMsg = detail.map((d) => d.msg || d.message || JSON.stringify(d)).join('\n');
+          } else if (typeof detail === 'object') {
+            errorMsg = detail.msg || detail.message || JSON.stringify(detail);
+          } else if (transfErr.response?.data?.message) {
+            errorMsg = transfErr.response.data.message;
+          } else if (transfErr.message) {
+            errorMsg = transfErr.message;
+          }
+
+          // Retornar rechazo definitivo SIN encolar en SQLite
+          return {
+            ok: false,
+            offline: false,
+            status: transfErr.response.status,
+            error: errorMsg,
+          };
+        }
+
+        // Si es fallo de red real, marcar offline y permitir rescate offline
+        if (esErrorDeRed(transfErr)) {
+          console.warn('[SyncContext] Fallo de conectividad durante validación de transferencia. Rescatando offline...');
+          setIsOnline(false);
+        } else {
+          return {
+            ok: false,
+            offline: false,
+            error: transfErr.message || 'Error inesperado al conectar con el servidor para validar la transferencia.',
+          };
+        }
+      }
+    }
+
+    // 2. REGISTRO ATÓMICO EN SQLITE (Para pagos en efectivo o rescate offline)
     try {
       console.log('👉 [DEBUG ENCOLAR 3 - INSERT SQLITE] Ejecutando encolarTransaccion en SQLite local...');
       const itemEncolado = await encolarTransaccion('abono', payloadAbono, {
@@ -572,6 +720,93 @@ export function SyncProvider({ children }) {
     }
   };
 
+  /**
+   * Obtiene las ventas en cuarentena por conflicto de inventario (HITO 2).
+   */
+  const obtenerVentasEnConflicto = useCallback(async () => {
+    try {
+      const cola = await obtenerCola();
+      return cola.filter((item) => item.type === 'venta' && item.status === 'conflicto_stock');
+    } catch {
+      return [];
+    }
+  }, []);
+
+  /**
+   * Remueve una venta de la cola tras anulación confirmada en backend.
+   */
+  const eliminarVentaDeCola = useCallback(async (id) => {
+    try {
+      await eliminarDeCola(id);
+      await refrescarContador();
+    } catch (err) {
+      console.warn('[SyncContext] Error al eliminar venta de cola:', err);
+    }
+  }, [refrescarContador]);
+
+  /**
+   * INYECCIÓN TEMPORAL PARA TESTING UI (HITO 2):
+   * Inserta en la cola local SQLite/AsyncStorage una venta en conflicto_stock
+   */
+  const inyectarVentaCuarentena = useCallback(async () => {
+    try {
+      const cola = await obtenerCola();
+      const idSimulado = `VENTA-OFF-TEST-${Date.now()}`;
+
+      const nuevoItemCuarentena = {
+        id: idSimulado,
+        type: 'venta',
+        status: 'conflicto_stock',
+        createdAt: new Date().toISOString(),
+        retryCount: 1,
+        lastError: 'HTTP 400 Bad Request: Stock insuficiente en almacén (Simulación de cuarentena).',
+        payload: {
+          monto_total: 100000,
+          cuota_inicial: 100000,
+          monto_financiado: 100000,
+          metodo_pago_inicial: 'Mixto',
+          monto_efectivo: 50000,
+          monto_transferencia: 50000,
+          banco_transferencia: 'Bancolombia',
+          referencia_pago_inicial: 'TRANSF-MOCK-9988',
+          detalles: [
+            {
+              producto_id: 888,
+              nombre: 'Juego de Sala Imperial 3 Puestos (Ficticio)',
+              cantidad: 1,
+              valor_unitario_acordado: 100000,
+            },
+          ],
+          cliente: {
+            nombres: 'Prueba Mock',
+            cedula: '1098765432',
+            telefono: '3001234567',
+            direccion: 'Carrera 15 # 45-20',
+            barrio: 'Centro',
+          },
+        },
+        meta: {
+          cliente_nombre: 'Prueba Mock',
+          cliente_cedula: '1098765432',
+          cliente_telefono: '3001234567',
+          articulos_resumen: '1x Juego de Sala Imperial 3 Puestos (Ficticio)',
+          tipo_pago: 'Mixto ($50.000 Efectivo, $50.000 Transferencia)',
+          banco: 'Bancolombia',
+          valor_cuota: 100000,
+          cuotas: 1,
+        },
+      };
+
+      const nuevaCola = [nuevoItemCuarentena, ...cola];
+      await AsyncStorage.setItem(DB_STORAGE_KEYS.SYNC_QUEUE, JSON.stringify(nuevaCola));
+      await refrescarContador();
+      return nuevoItemCuarentena;
+    } catch (err) {
+      console.warn('[SyncContext] Error al inyectar venta en cuarentena:', err);
+      throw err;
+    }
+  }, [refrescarContador]);
+
   return (
     <SyncContext.Provider
       value={{
@@ -580,12 +815,17 @@ export function SyncProvider({ children }) {
         pendingCount,
         lastSyncTime,
         syncErrors,
+        bancos,
+        sincronizarBancos,
         forzarSincronizacion: procesarCola,
         sincronizarCiudadesOperativas,
         encolarVenta,
         encolarAbono,
         obtenerVentasLocalesPendientes,
         obtenerAbonosLocalesPendientes,
+        obtenerVentasEnConflicto,
+        eliminarVentaDeCola,
+        inyectarVentaCuarentena,
         refrescarContador,
       }}
     >

@@ -33,6 +33,12 @@ from app.schemas.usuario import (
     UsuarioResponse,
     UsuarioUpdate,
 )
+from app.schemas.venta_anulada import (
+    VentaAnuladaBase,
+    VentaAnuladaCreate,
+    VentaAnuladaReembolsoUpdate,
+    VentaAnuladaResponse,
+)
 
 __all__ = [
     # Usuario
@@ -63,4 +69,9 @@ __all__ = [
     "AbonoBase",
     "AbonoCreate",
     "AbonoResponse",
+    # Venta Anulada
+    "VentaAnuladaBase",
+    "VentaAnuladaCreate",
+    "VentaAnuladaReembolsoUpdate",
+    "VentaAnuladaResponse",
 ]

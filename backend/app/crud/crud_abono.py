@@ -4,12 +4,14 @@ from typing import List, Optional
 from uuid import UUID
 
 from fastapi import HTTPException, status
-from sqlalchemy import cast, select, String
+from sqlalchemy import cast, func, select, String
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.models.abono import Abono, CierreCaja, EstadoAbono
 from app.models.credito import Credito, EstadoCredito
+from app.models.detalle_transferencia import DetalleTransferencia
 from app.models.usuario import Usuario
 from app.schemas.abono import AbonoCreate
 from app.schemas.credito import generar_cronograma_con_arrastre
@@ -103,6 +105,7 @@ async def get_abono(db: AsyncSession, id_recibo: UUID) -> Optional[Abono]:
         .options(
             selectinload(Abono.cobrador),
             selectinload(Abono.credito).selectinload(Credito.cliente),
+            selectinload(Abono.transferencias),
         )
         .where(Abono.id_recibo == id_recibo)
     )
@@ -129,6 +132,7 @@ async def get_abono_por_id_o_hash(db: AsyncSession, id_o_hash: str) -> Optional[
         .options(
             selectinload(Abono.cobrador),
             selectinload(Abono.credito).selectinload(Credito.cliente),
+            selectinload(Abono.transferencias),
         )
         .where(cast(Abono.id_recibo, String).ilike(f"{clean}%"))
         .order_by(Abono.fecha.desc())
@@ -158,6 +162,7 @@ async def get_abonos_by_credito(
         .options(
             selectinload(Abono.cobrador),
             selectinload(Abono.credito).selectinload(Credito.cliente),
+            selectinload(Abono.transferencias),
         )
         .where(Abono.credito_id == credito_id)
         .offset(skip)
@@ -182,6 +187,7 @@ async def get_abonos_list(
         .options(
             selectinload(Abono.cobrador),
             selectinload(Abono.credito).selectinload(Credito.cliente),
+            selectinload(Abono.transferencias),
         )
         .offset(skip)
         .limit(limit)
@@ -318,6 +324,79 @@ async def get_cierres_caja_list(
 
 
 
+async def validar_referencia_bancaria_no_duplicada(
+    db: AsyncSession,
+    referencia: Optional[str],
+    banco: Optional[str] = None,
+    excluir_abono_id: Optional[UUID] = None,
+    excluir_credito_id: Optional[UUID] = None,
+) -> None:
+    """Verifica transversalmente que la dupla (banco_transferencia, referencia_pago) no exista en abonos ni en créditos."""
+    if not referencia or not referencia.strip():
+        return
+
+    ref_normalizada = referencia.strip().upper()
+    banco_normalizado = banco.strip().upper() if banco and banco.strip() else None
+
+    # 0. Comprobar en tabla 'detalles_transferencia' (Hito 3)
+    stmt_detalle = select(DetalleTransferencia.id, DetalleTransferencia.entidad_bancaria).where(
+        func.upper(func.trim(DetalleTransferencia.referencia_pago)) == ref_normalizada
+    )
+    if banco_normalizado:
+        stmt_detalle = stmt_detalle.where(
+            func.upper(func.trim(DetalleTransferencia.entidad_bancaria)) == banco_normalizado
+        )
+    if excluir_abono_id:
+        stmt_detalle = stmt_detalle.where(DetalleTransferencia.abono_id != excluir_abono_id)
+    if excluir_credito_id:
+        stmt_detalle = stmt_detalle.where(DetalleTransferencia.venta_id != excluir_credito_id)
+    res_detalle = await db.execute(stmt_detalle.limit(1))
+    if res_detalle.first():
+        banco_str = f" para el banco '{banco.strip()}'" if banco and banco.strip() else ""
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"La referencia bancaria '{referencia.strip()}'{banco_str} ya fue registrada previamente en el sistema. Ingrese un comprobante único.",
+        )
+
+    # 1. Comprobar en tabla 'abonos'
+    stmt_abono = select(Abono.id_recibo, Abono.banco_transferencia).where(
+        func.upper(func.trim(Abono.referencia_pago)) == ref_normalizada
+    )
+    if banco_normalizado:
+        stmt_abono = stmt_abono.where(
+            func.upper(func.trim(Abono.banco_transferencia)) == banco_normalizado
+        )
+    if excluir_abono_id:
+        stmt_abono = stmt_abono.where(Abono.id_recibo != excluir_abono_id)
+    res_abono = await db.execute(stmt_abono.limit(1))
+    if res_abono.first():
+        banco_str = f" para el banco '{banco.strip()}'" if banco and banco.strip() else ""
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"La referencia bancaria '{referencia.strip()}'{banco_str} ya fue registrada previamente en otro recaudo de abono. Ingrese un comprobante único.",
+        )
+
+    # 2. Comprobar en tabla 'creditos' (cuotas iniciales y ventas de contado)
+    stmt_credito = select(Credito.id_contrato, Credito.numero_contrato, Credito.banco_transferencia).where(
+        func.upper(func.trim(Credito.referencia_pago_inicial)) == ref_normalizada
+    )
+    if banco_normalizado:
+        stmt_credito = stmt_credito.where(
+            func.upper(func.trim(Credito.banco_transferencia)) == banco_normalizado
+        )
+    if excluir_credito_id:
+        stmt_credito = stmt_credito.where(Credito.id_contrato != excluir_credito_id)
+    res_credito = await db.execute(stmt_credito.limit(1))
+    row_credito = res_credito.first()
+    if row_credito:
+        num_ctr = row_credito.numero_contrato or "Venta Inicial"
+        banco_str = f" en '{banco.strip()}'" if banco and banco.strip() else ""
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"La referencia bancaria '{referencia.strip()}'{banco_str} ya fue registrada en la venta/contrato {num_ctr}. Ingrese un comprobante único.",
+        )
+
+
 async def create_abono(db: AsyncSession, abono_in: AbonoCreate) -> Abono:
     """Registra un recaudo en terreno y amortiza el saldo del crédito en una única transacción atómica."""
     # 1. Buscar y bloquear a nivel de fila el crédito (concurrencia segura con SELECT FOR UPDATE)
@@ -370,17 +449,46 @@ async def create_abono(db: AsyncSession, abono_in: AbonoCreate) -> Abono:
         float(abono_in.coordenadas_gps_cobro.latitud),
     )
 
+    metodo = (abono_in.metodo_pago or "efectivo").lower().strip()
+    m_efectivo = round(Decimal(str(abono_in.monto_efectivo or 0)), 2)
+    sum_trans = round(sum((Decimal(str(t.monto)) for t in (abono_in.transferencias or [])), Decimal("0.00")), 2)
+    m_transf = sum_trans
+
+    # Fase 2: Bloqueo Matemático Estricto (FastAPI)
+    if (m_efectivo + sum_trans) != monto_abono:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=(
+                f"Descuadre matemático de caja: La suma del efectivo (${m_efectivo:.2f}) más "
+                f"las transferencias (${sum_trans:.2f}) es ${m_efectivo + sum_trans:.2f}, lo cual "
+                f"no coincide exactamente con el valor del abono (${monto_abono:.2f})."
+            ),
+        )
+
+    # Validar comprobantes de transferencias únicas
+    refs_vistas = set()
+    for t in (abono_in.transferencias or []):
+        t_banco = t.entidad_bancaria.strip().upper()
+        t_ref = t.referencia_pago.strip().upper()
+        key = (t_banco, t_ref)
+        if key in refs_vistas:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=f"Descuadre matemático de caja: Comprobante duplicado '{t.referencia_pago}' para el banco '{t.entidad_bancaria}' dentro de la misma solicitud.",
+            )
+        refs_vistas.add(key)
+        await validar_referencia_bancaria_no_duplicada(
+            db=db,
+            referencia=t.referencia_pago,
+            banco=t.entidad_bancaria,
+        )
+
+    # Compatibilidad con campos singulares legacy
+    ref_pago = abono_in.transferencias[0].referencia_pago if (abono_in.transferencias and len(abono_in.transferencias) > 0) else (abono_in.referencia_pago.strip() if abono_in.referencia_pago else None)
+    banco_pago = abono_in.transferencias[0].entidad_bancaria if (abono_in.transferencias and len(abono_in.transferencias) > 0) else (abono_in.banco_transferencia.strip() if abono_in.banco_transferencia else None)
+
     try:
         # A. Insertar el recibo en la tabla abonos
-        metodo = (abono_in.metodo_pago or "efectivo").lower().strip()
-        m_efectivo = abono_in.monto_efectivo if abono_in.monto_efectivo is not None else (
-            monto_abono if metodo == "efectivo" else Decimal("0.00")
-        )
-        m_transf = abono_in.monto_transferencia if abono_in.monto_transferencia is not None else (
-            monto_abono if metodo == "transferencia" else Decimal("0.00")
-        )
-        ref_pago = abono_in.referencia_pago.strip() if abono_in.referencia_pago else None
-
         db_abono = Abono(
             credito_id=credito.id_contrato,
             cobrador_id=cobrador.id,
@@ -388,20 +496,32 @@ async def create_abono(db: AsyncSession, abono_in: AbonoCreate) -> Abono:
             coordenadas_gps_cobro=gps_tuple,
             metodo_pago=metodo,
             monto_efectivo=m_efectivo,
-            monto_transferencia=m_transf,
+            monto_transferencia=sum_trans,
             referencia_pago=ref_pago,
+            banco_transferencia=banco_pago,
             estado=EstadoAbono.REGISTRADO,
             fecha_siguiente_visita=abono_in.fecha_siguiente_visita,
         )
         db.add(db_abono)
+        await db.flush()
 
-        # B. Amortizar el saldo pendiente del contrato de crédito
+        # B. Insertar cada comprobante en la tabla detalles_transferencia
+        for t in (abono_in.transferencias or []):
+            db_trans = DetalleTransferencia(
+                abono_id=db_abono.id_recibo,
+                entidad_bancaria=t.entidad_bancaria.strip(),
+                referencia_pago=t.referencia_pago.strip(),
+                monto=Decimal(str(t.monto)),
+            )
+            db.add(db_trans)
+
+        # C. Amortizar el saldo pendiente del contrato de crédito
         nuevo_saldo = round(credito.saldo_pendiente - monto_abono, 2)
         credito.saldo_pendiente = nuevo_saldo
         if abono_in.fecha_siguiente_visita:
             credito.fecha_siguiente_visita = abono_in.fecha_siguiente_visita
 
-        # C. Transición de estados del crédito y asignación permanente del cobrador
+        # D. Transición de estados del crédito y asignación permanente del cobrador
         if credito.cobrador_id is None:
             credito.cobrador_id = cobrador.id
 
@@ -410,11 +530,11 @@ async def create_abono(db: AsyncSession, abono_in: AbonoCreate) -> Abono:
         elif credito.estado == EstadoCredito.PENDIENTE:
             credito.estado = EstadoCredito.ACTIVO
 
-        # D. Confirmar ambas operaciones atómicamente en una sola transacción
+        # E. Confirmar operaciones atómicamente en una sola transacción
         await db.commit()
         await db.refresh(db_abono)
 
-        # E. Persistir firmas manuscritas digitales (cliente titular y cobrador) si fueron capturadas
+        # F. Persistir firmas manuscritas digitales (cliente titular y cobrador) si fueron capturadas
         if getattr(abono_in, "firma_cliente", None) or getattr(abono_in, "firma_cobrador", None):
             try:
                 guardar_firma_abono(
@@ -428,6 +548,21 @@ async def create_abono(db: AsyncSession, abono_in: AbonoCreate) -> Abono:
                     setattr(db_abono, "firma_cobrador", abono_in.firma_cobrador)
             except Exception as fe:
                 print(f"[Abono] Advertencia guardando firmas digitales de abono: {fe}")
+    except HTTPException:
+        await db.rollback()
+        raise
+    except IntegrityError as ie:
+        await db.rollback()
+        err_msg = str(ie.orig).lower() if hasattr(ie, "orig") else str(ie).lower()
+        if "uq_detalles_transferencia" in err_msg or "uq_abonos_referencia" in err_msg or "uq_creditos_referencia" in err_msg or "referencia" in err_msg:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="La referencia de transferencia ya se encuentra registrada en el sistema. Ingrese un comprobante único.",
+            )
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Error de integridad de datos al procesar el recaudo.",
+        )
     except Exception:
         await db.rollback()
         raise

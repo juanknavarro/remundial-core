@@ -20,6 +20,7 @@ import { useSync } from '../context/SyncContext';
 import apiClient, { STORAGE_KEYS, limpiarCredencialesLocales } from '../api/client';
 import InFrameModal from '../components/InFrameModal';
 import SignatureCanvas from '../components/SignatureCanvas';
+import BankSelectorModal from '../components/BankSelectorModal';
 import {
   guardarEnCache,
   obtenerDeCache,
@@ -702,7 +703,7 @@ function generarPdfReciboAbonoOfflineBlob(recibo, cobradorNombre) {
 
 export default function CobradorDashboard({ navigation }) {
   const { user, token: authToken, logout } = useAuth();
-  const { encolarAbono, obtenerAbonosLocalesPendientes, pendingCount } = useSync();
+  const { encolarAbono, obtenerAbonosLocalesPendientes, pendingCount, bancos } = useSync();
 
   // Control de Pestañas Principales: 'recaudos' (Mis Recaudos del Día) | 'ruta' (Hoja de Ruta)
   const [activeTab, setActiveTab] = useState('recaudos');
@@ -799,9 +800,101 @@ export default function CobradorDashboard({ navigation }) {
   const [creditoSeleccionado, setCreditoSeleccionado] = useState(null);
   const [montoAbono, setMontoAbono] = useState('');
   const [metodoPagoAbono, setMetodoPagoAbono] = useState('efectivo');
+  const [bancoAbono, setBancoAbono] = useState('');
+  const [modalBancoAbonoVisible, setModalBancoAbonoVisible] = useState(false);
+  const [compEditandoBancoAbonoId, setCompEditandoBancoAbonoId] = useState(null);
+  const [comprobantesAbono, setComprobantesAbono] = useState([
+    { id: '1', banco: '', referencia: '', monto: '' }
+  ]);
+  const [focusedVoucherAbonoId, setFocusedVoucherAbonoId] = useState(null);
+  const [modalEliminarTransfAbonoVisible, setModalEliminarTransfAbonoVisible] = useState(false);
+  const [transfAbonoAEliminarId, setTransfAbonoAEliminarId] = useState(null);
+  const [errorReferenciaAbono, setErrorReferenciaAbono] = useState(null);
   const [montoEfectivoAbono, setMontoEfectivoAbono] = useState('');
   const [montoTransferenciaAbono, setMontoTransferenciaAbono] = useState('');
   const [referenciaPagoAbono, setReferenciaPagoAbono] = useState('');
+
+  // Cálculos financieros y vouchers para el Modal de Abono
+  const valorTotalAbonoNum = useMemo(() => {
+    return parseFloat(String(montoAbono).replace(/[^0-9.-]+/g, '')) || 0;
+  }, [montoAbono]);
+
+  const totalTransferenciasAbono = useMemo(() => {
+    return comprobantesAbono.reduce((sum, c) => sum + (parseFloat(c.monto) || 0), 0);
+  }, [comprobantesAbono]);
+
+  const totalIngresadoAbono = useMemo(() => {
+    if (metodoPagoAbono === 'efectivo') return valorTotalAbonoNum;
+    if (metodoPagoAbono === 'transferencia') return totalTransferenciasAbono;
+    return (parseFloat(montoEfectivoAbono) || 0) + totalTransferenciasAbono;
+  }, [metodoPagoAbono, valorTotalAbonoNum, totalTransferenciasAbono, montoEfectivoAbono]);
+
+  const diferenciaCajaAbono = useMemo(() => {
+    if (valorTotalAbonoNum <= 0) return 0;
+    return Math.round((valorTotalAbonoNum - totalIngresadoAbono) * 100) / 100;
+  }, [valorTotalAbonoNum, totalIngresadoAbono]);
+
+  const comprobantesAbonoValidos = useMemo(() => {
+    if (metodoPagoAbono === 'efectivo') return true;
+    return (
+      comprobantesAbono.length > 0 &&
+      comprobantesAbono.every(
+        (c) =>
+          (c.banco || '').trim() !== '' &&
+          (c.referencia || '').trim() !== '' &&
+          (parseFloat(c.monto) || 0) > 0
+      )
+    );
+  }, [metodoPagoAbono, comprobantesAbono]);
+
+  const hayRefsDuplicadasAbono = useMemo(() => {
+    const refs = comprobantesAbono
+      .map((c) => (c.referencia || '').trim().toUpperCase())
+      .filter(Boolean);
+    return new Set(refs).size !== refs.length;
+  }, [comprobantesAbono]);
+
+  const agregarComprobanteAbono = () => {
+    if (comprobantesAbono.length >= 3) return;
+    const baseTrans =
+      metodoPagoAbono === 'mixto'
+        ? Math.max(0, valorTotalAbonoNum - (parseFloat(montoEfectivoAbono) || 0))
+        : valorTotalAbonoNum;
+    const sumaActual = comprobantesAbono.reduce((sum, c) => sum + (parseFloat(c.monto) || 0), 0);
+    const restante = Math.max(0, baseTrans - sumaActual);
+    const newId = String(Date.now() + Math.random());
+    setFocusedVoucherAbonoId(newId);
+    setComprobantesAbono((prev) => [
+      ...prev,
+      {
+        id: newId,
+        banco: '',
+        referencia: '',
+        monto: restante > 0 ? String(restante) : '',
+      },
+    ]);
+  };
+
+  const eliminarComprobanteAbono = (id) => {
+    if (comprobantesAbono.length <= 1) return;
+    setTransfAbonoAEliminarId(id);
+    setModalEliminarTransfAbonoVisible(true);
+  };
+
+  const confirmarEliminarComprobanteAbono = () => {
+    if (transfAbonoAEliminarId) {
+      setComprobantesAbono((prev) => prev.filter((c) => c.id !== transfAbonoAEliminarId));
+    }
+    setModalEliminarTransfAbonoVisible(false);
+    setTransfAbonoAEliminarId(null);
+  };
+
+  const actualizarComprobanteAbono = (id, campo, valor) => {
+    setComprobantesAbono((prev) =>
+      prev.map((c) => (c.id === id ? { ...c, [campo]: valor } : c))
+    );
+    setErrorReferenciaAbono(null);
+  };
   const [gpsCoords, setGpsCoords] = useState(null);
   const [isCapturingGps, setIsCapturingGps] = useState(false);
   const [gpsStatusText, setGpsStatusText] = useState('Esperando captura satelital...');
@@ -1746,6 +1839,10 @@ export default function CobradorDashboard({ navigation }) {
       : (credito.valor_cuota ? String(Math.round(credito.valor_cuota)) : '');
     setMontoAbono(cuotaSugerida);
     setMetodoPagoAbono('efectivo');
+    setBancoAbono('');
+    setErrorReferenciaAbono(null);
+    setCompEditandoBancoAbonoId(null);
+    setComprobantesAbono([{ id: '1', banco: '', referencia: '', monto: '' }]);
     const valSug = parseFloat(cuotaSugerida) || 0;
     setMontoEfectivoAbono(valSug > 0 ? String(valSug) : '');
     setMontoTransferenciaAbono('0');
@@ -1758,21 +1855,40 @@ export default function CobradorDashboard({ navigation }) {
   const handleCambiarMetodoPagoAbono = (metodo) => {
     const mLower = String(metodo).toLowerCase();
     setMetodoPagoAbono(mLower);
+    setErrorReferenciaAbono(null);
     const val = parseFloat(String(montoAbono).replace(/[^0-9.-]+/g, '')) || 0;
     if (mLower === 'efectivo') {
       setMontoEfectivoAbono(val > 0 ? String(val) : '');
       setMontoTransferenciaAbono('0');
+      setComprobantesAbono([{ id: '1', banco: '', referencia: '', monto: '' }]);
     } else if (mLower === 'transferencia') {
       setMontoEfectivoAbono('0');
       setMontoTransferenciaAbono(val > 0 ? String(val) : '');
+      setComprobantesAbono([
+        {
+          id: '1',
+          banco: comprobantesAbono[0]?.banco || '',
+          referencia: comprobantesAbono[0]?.referencia || '',
+          monto: val > 0 ? String(val) : '',
+        },
+      ]);
     } else if (mLower === 'mixto') {
       if (val > 0) {
         const mitad = Math.floor(val / 2);
         setMontoEfectivoAbono(String(mitad));
         setMontoTransferenciaAbono(String(val - mitad));
+        setComprobantesAbono([
+          {
+            id: '1',
+            banco: comprobantesAbono[0]?.banco || '',
+            referencia: comprobantesAbono[0]?.referencia || '',
+            monto: String(val - mitad),
+          },
+        ]);
       } else {
         setMontoEfectivoAbono('');
         setMontoTransferenciaAbono('');
+        setComprobantesAbono([{ id: '1', banco: '', referencia: '', monto: '' }]);
       }
     }
   };
@@ -1786,14 +1902,27 @@ export default function CobradorDashboard({ navigation }) {
     } else if (metodo === 'transferencia') {
       setMontoEfectivoAbono('0');
       setMontoTransferenciaAbono(val > 0 ? String(val) : '');
+      if (comprobantesAbono.length === 1) {
+        setComprobantesAbono((prev) => [
+          { ...prev[0], monto: val > 0 ? String(val) : '' },
+        ]);
+      }
     } else if (metodo === 'mixto') {
       if (val > 0) {
         const mitad = Math.floor(val / 2);
         setMontoEfectivoAbono(String(mitad));
         setMontoTransferenciaAbono(String(val - mitad));
+        if (comprobantesAbono.length === 1) {
+          setComprobantesAbono((prev) => [
+            { ...prev[0], monto: String(val - mitad) },
+          ]);
+        }
       } else {
         setMontoEfectivoAbono('');
         setMontoTransferenciaAbono('');
+        if (comprobantesAbono.length === 1) {
+          setComprobantesAbono((prev) => [{ ...prev[0], monto: '' }]);
+        }
       }
     }
   };
@@ -1865,36 +1994,33 @@ export default function CobradorDashboard({ navigation }) {
       return;
     }
 
-    // Regla de validación de Pago Mixto / Transferencia
-    if (metodoPagoAbono === 'transferencia') {
-      if (!referenciaPagoAbono || !referenciaPagoAbono.trim()) {
-        console.warn('❌ [DEBUG 4ca - REFERENCIA REQUERIDA] Falta comprobante/referencia bancaria');
+    // Regla de validación de Transferencia / Pago Mixto con múltiples comprobantes y bloqueo matemático
+    if (metodoPagoAbono !== 'efectivo') {
+      if (diferenciaCajaAbono !== 0) {
+        const difFmt = formatCOP(Math.abs(diferenciaCajaAbono));
+        const tipoDif = diferenciaCajaAbono > 0 ? 'Faltan' : 'Sobran';
+        console.warn('❌ [DEBUG 4ca - DESCUADRE CAJA]', { diferenciaCajaAbono, valor });
         Alert.alert(
-          'Referencia Requerida',
-          'Debe ingresar el número de comprobante o referencia bancaria para pagos por transferencia.'
-        );
-        return;
-      }
-    } else if (metodoPagoAbono === 'mixto') {
-      const mEfec = parseFloat(montoEfectivoAbono) || 0;
-      const mTrans = parseFloat(montoTransferenciaAbono) || 0;
-      const suma = Math.round((mEfec + mTrans) * 100) / 100;
-      const valorRedondeado = Math.round(valor * 100) / 100;
-
-      if (suma !== valorRedondeado) {
-        console.warn('❌ [DEBUG 4cb - DESCUADRE MIXTO] Suma:', suma, 'Valor:', valorRedondeado);
-        Alert.alert(
-          'Descuadre en Pago Mixto',
-          `La suma de efectivo ($${mEfec.toLocaleString('es-CO')}) y transferencia ($${mTrans.toLocaleString('es-CO')}) debe ser exactamente igual al total a recaudar ($${valor.toLocaleString('es-CO')}). Actualmente suma $${suma.toLocaleString('es-CO')}.`
+          'Descuadre Matemático de Caja',
+          `La suma de efectivo y transferencias ingresadas no coincide exactamente con el valor a abonar ($${valor.toLocaleString('es-CO')}). ${tipoDif} $${difFmt} COP. Debe cuadrar a $0.`
         );
         return;
       }
 
-      if (mTrans > 0 && (!referenciaPagoAbono || !referenciaPagoAbono.trim())) {
-        console.warn('❌ [DEBUG 4cc - REFERENCIA TRANSFERENCIA REQUERIDA]');
+      if (!comprobantesAbonoValidos) {
+        console.warn('❌ [DEBUG 4cb - COMPROBANTES INCOMPLETOS]');
         Alert.alert(
-          'Referencia Requerida',
-          'Debe ingresar el número de comprobante o referencia bancaria de la transferencia en el pago mixto.'
+          'Comprobantes Incompletos',
+          'Cada comprobante de transferencia debe tener asignada su entidad bancaria, número de referencia y un monto mayor a cero.'
+        );
+        return;
+      }
+
+      if (hayRefsDuplicadasAbono) {
+        console.warn('❌ [DEBUG 4cc - REFERENCIAS DUPLICADAS]');
+        Alert.alert(
+          'Comprobantes Duplicados',
+          'No puede ingresar números de referencia idénticos en comprobantes distintos del mismo abono.'
         );
         return;
       }
@@ -2007,18 +2133,35 @@ export default function CobradorDashboard({ navigation }) {
 
       let finalMontoEfectivo = 0;
       let finalMontoTransferencia = 0;
-      const finalReferenciaPago = referenciaPagoAbono ? referenciaPagoAbono.trim() : null;
 
       if (metodoPagoAbono === 'efectivo') {
         finalMontoEfectivo = valor;
         finalMontoTransferencia = 0;
       } else if (metodoPagoAbono === 'transferencia') {
         finalMontoEfectivo = 0;
-        finalMontoTransferencia = valor;
+        finalMontoTransferencia = totalTransferenciasAbono;
       } else if (metodoPagoAbono === 'mixto') {
         finalMontoEfectivo = parseFloat(montoEfectivoAbono) || 0;
-        finalMontoTransferencia = parseFloat(montoTransferenciaAbono) || 0;
+        finalMontoTransferencia = totalTransferenciasAbono;
       }
+
+      const finalTransferencias = (metodoPagoAbono !== 'efectivo' && comprobantesAbono.length > 0)
+        ? comprobantesAbono
+            .filter((c) => (parseFloat(c.monto) || 0) > 0)
+            .map((c) => ({
+              entidad_bancaria: (c.banco || '').trim(),
+              referencia_pago: (c.referencia || '').trim(),
+              monto: parseFloat(c.monto) || 0,
+            }))
+        : null;
+
+      const finalReferenciaPago = (metodoPagoAbono !== 'efectivo' && comprobantesAbono.length > 0)
+        ? (comprobantesAbono.map((c) => (c.referencia || '').trim()).filter(Boolean).join(' / ') || null)
+        : null;
+
+      const finalBancoAbono = (metodoPagoAbono !== 'efectivo' && comprobantesAbono.length > 0)
+        ? (comprobantesAbono[0]?.banco?.trim() || null)
+        : null;
 
       const payload = {
         credito_id: targetCreditoId,
@@ -2030,9 +2173,11 @@ export default function CobradorDashboard({ navigation }) {
           longitud: lon,
         },
         metodo_pago: metodoPagoAbono,
+        banco_transferencia: finalBancoAbono,
         monto_efectivo: finalMontoEfectivo,
         monto_transferencia: finalMontoTransferencia,
         referencia_pago: finalReferenciaPago,
+        ...(finalTransferencias && finalTransferencias.length > 0 ? { transferencias: finalTransferencias } : {}),
         fecha_siguiente_visita: (esModalidadDinamica && saldoResultante > 0) ? getFechaLocal(fechaSiguienteVisita) : null,
         notas: `Abono en ruta (${cuotaTexto}) - Cobrador ${nombreCobradorReal}`,
         firma_cliente: firmaCliente,
@@ -2048,9 +2193,11 @@ export default function CobradorDashboard({ navigation }) {
         numero_contrato: targetContrato,
         valor,
         metodo_pago: metodoPagoAbono,
+        banco_transferencia: finalBancoAbono,
         monto_efectivo: finalMontoEfectivo,
         monto_transferencia: finalMontoTransferencia,
         referencia_pago: finalReferenciaPago,
+        transferencias: finalTransferencias,
         fecha_siguiente_visita: (esModalidadDinamica && saldoResultante > 0) ? getFechaLocal(fechaSiguienteVisita) : null,
         credito_id: targetCreditoId,
         cobrador_id: targetCobradorId,
@@ -2075,11 +2222,23 @@ export default function CobradorDashboard({ navigation }) {
       const res = await encolarAbono(payload, meta);
       console.log("👉 [DEBUG 7 - RETORNO DE encolarAbono] Resultado obtenido:", res);
 
-      // Si el servidor devolvió un rechazo de negocio o validación (ej. 400 saldo excedido, 422, etc.):
       if (!res || !res.ok) {
         console.warn("❌ [DEBUG 7b - RESPUESTA NO OK] encolarAbono falló:", res);
         setIsSubmittingAbono(false);
         isSubmittingAbonoRef.current = false;
+        const isDuplicado = res?.status === 409 || (res?.error && String(res.error).toLowerCase().includes('referencia'));
+        const alertTitulo = isDuplicado ? '⚠️ Comprobante Bancario Duplicado' : 'Aviso de Validación';
+        const alertMsg = res?.error || 'No fue posible registrar el abono. Verifique los datos ingresados.';
+        if (isDuplicado) {
+          setErrorReferenciaAbono(alertMsg);
+        }
+        setTimeout(() => {
+          Alert.alert(
+            alertTitulo,
+            alertMsg,
+            [{ text: isDuplicado ? 'Corregir Referencia' : 'Aceptar' }]
+          );
+        }, 50);
         return;
       }
 
@@ -2148,6 +2307,7 @@ export default function CobradorDashboard({ navigation }) {
         valor_cuota_siguiente: valorCuotaSiguienteFinal,
         nombre_archivo_pdf: nombreArchivoPdf,
         metodo_pago: res.data?.metodo_pago || 'efectivo',
+        transferencias: finalTransferencias,
         nuevoSaldo: nuevoSaldoConfirmado,
         firma_cliente: firmaCliente,
         firma_cobrador: firmaCobrador,
@@ -2163,7 +2323,22 @@ export default function CobradorDashboard({ navigation }) {
       console.log("👉 [DEBUG 11 - COMPROBANTE LISTO] Recibo desplegado con éxito.");
     } catch (error) {
       console.error('❌ [DEBUG ERROR CATCH] Error registrando abono:', error);
-      Alert.alert('Error al Registrar Abono', error.message || 'No se pudo procesar el cobro en el dispositivo.');
+      setIsSubmittingAbono(false);
+      isSubmittingAbonoRef.current = false;
+      const isDuplicado = error?.response?.status === 409 || (error?.message && String(error.message).toLowerCase().includes('referencia'));
+      const msg = error?.response?.data?.detail || error.message || 'No se pudo procesar el cobro en el dispositivo.';
+      const alertTitulo = isDuplicado ? '⚠️ Comprobante Bancario Duplicado' : 'Error al Registrar Abono';
+      const alertMsg = typeof msg === 'string' ? msg : JSON.stringify(msg);
+      if (isDuplicado) {
+        setErrorReferenciaAbono(alertMsg);
+      }
+      setTimeout(() => {
+        Alert.alert(
+          alertTitulo,
+          alertMsg,
+          [{ text: isDuplicado ? 'Corregir Referencia' : 'Aceptar' }]
+        );
+      }, 50);
     } finally {
       console.log("👉 [DEBUG 12 - FINALLY] Liberando bloqueo isSubmittingAbono");
       setIsSubmittingAbono(false);
@@ -4302,132 +4477,203 @@ export default function CobradorDashboard({ navigation }) {
               </View>
 
               {/* Selector de Método de Pago: Efectivo / Transferencia / Mixto */}
-              {(() => {
-                const valorTotalAbonoNum = parseFloat(String(montoAbono).replace(/[^0-9.-]+/g, '')) || 0;
-                const mEfecNum = parseFloat(montoEfectivoAbono) || 0;
-                const mTransNum = parseFloat(montoTransferenciaAbono) || 0;
-                const sumaMixtaAbono = Math.round((mEfecNum + mTransNum) * 100) / 100;
-                const totalRedondeado = Math.round(valorTotalAbonoNum * 100) / 100;
-                const estaCuadradoMixto = Math.abs(sumaMixtaAbono - totalRedondeado) < 0.01;
+              <View style={styles.metodoPagoBox}>
+                <Text style={styles.inputLabel}>MÉTODO DE PAGO</Text>
+                <View style={styles.metodoPagoTabs}>
+                  {[
+                    { id: 'efectivo', label: 'Efectivo', icon: '💵 ' },
+                    { id: 'transferencia', label: 'Transferencia', icon: '📱 ' },
+                    { id: 'mixto', label: 'Mixto', icon: '⚖️ ' },
+                  ].map((m) => {
+                    const isSelected = metodoPagoAbono === m.id;
+                    return (
+                      <TouchableOpacity
+                        key={m.id}
+                        disabled={isSubmittingAbono}
+                        style={[
+                          styles.metodoPagoTabBtn,
+                          isSelected && styles.metodoPagoTabBtnActive,
+                        ]}
+                        onPress={() => handleCambiarMetodoPagoAbono(m.id)}
+                        accessibilityRole="button"
+                        accessibilityState={{ selected: isSelected }}
+                      >
+                        <Text
+                          style={[
+                            styles.metodoPagoTabText,
+                            isSelected && styles.metodoPagoTabTextActive,
+                          ]}
+                        >
+                          {m.icon}{m.label}
+                        </Text>
+                      </TouchableOpacity>
+                    );
+                  })}
+                </View>
 
-                return (
-                  <View style={styles.metodoPagoBox}>
-                    <Text style={styles.inputLabel}>MÉTODO DE PAGO</Text>
-                    <View style={styles.metodoPagoTabs}>
-                      {[
-                        { id: 'efectivo', label: 'Efectivo', icon: '💵 ' },
-                        { id: 'transferencia', label: 'Transferencia', icon: '📱 ' },
-                        { id: 'mixto', label: 'Mixto', icon: '⚖️ ' },
-                      ].map((m) => {
-                        const isSelected = metodoPagoAbono === m.id;
-                        return (
-                          <TouchableOpacity
-                            key={m.id}
-                            disabled={isSubmittingAbono}
+                {/* Sección de Transferencia o Mixto con múltiples comprobantes y cuadre en vivo */}
+                {(metodoPagoAbono === 'transferencia' || metodoPagoAbono === 'mixto') && (
+                  <View style={styles.metodoDetalleBox}>
+                    <View style={styles.cuadreBoxHeader}>
+                      <Text style={styles.cuadreBoxTitle}>
+                        {metodoPagoAbono === 'mixto' ? 'DESGLOSE DE PAGO SIMULTÁNEO' : 'COMPROBANTES BANCARIOS'}
+                      </Text>
+                      {valorTotalAbonoNum > 0 && (
+                        <View
+                          style={[
+                            styles.cuadreBadge,
+                            diferenciaCajaAbono === 0
+                              ? styles.cuadreBadgeOk
+                              : (diferenciaCajaAbono > 0 ? styles.cuadreBadgeWarn : styles.cuadreBadgeError),
+                          ]}
+                        >
+                          <Text
                             style={[
-                              styles.metodoPagoTabBtn,
-                              isSelected && styles.metodoPagoTabBtnActive,
+                              styles.cuadreBadgeText,
+                              diferenciaCajaAbono === 0
+                                ? styles.cuadreBadgeTextOk
+                                : (diferenciaCajaAbono > 0 ? styles.cuadreBadgeTextWarn : styles.cuadreBadgeTextError),
                             ]}
-                            onPress={() => handleCambiarMetodoPagoAbono(m.id)}
-                            accessibilityRole="button"
-                            accessibilityState={{ selected: isSelected }}
                           >
-                            <Text
-                              style={[
-                                styles.metodoPagoTabText,
-                                isSelected && styles.metodoPagoTabTextActive,
-                              ]}
-                            >
-                              {m.icon}{m.label}
-                            </Text>
-                          </TouchableOpacity>
-                        );
-                      })}
+                            {diferenciaCajaAbono === 0
+                              ? '✓ Cuadre exacto ($0 COP)'
+                              : (diferenciaCajaAbono > 0
+                                  ? `Faltan ${formatCOP(diferenciaCajaAbono)} COP`
+                                  : `Sobra ${formatCOP(Math.abs(diferenciaCajaAbono))} COP`)}
+                          </Text>
+                        </View>
+                      )}
                     </View>
 
-                    {/* Si es 'transferencia': Campo para Número de Comprobante / Referencia */}
-                    {metodoPagoAbono === 'transferencia' && (
-                      <View style={styles.metodoDetalleBox}>
-                        <Text style={styles.fieldLabel}>NÚMERO DE COMPROBANTE / REFERENCIA *</Text>
+                    {/* Input de Efectivo sólo para Mixto */}
+                    {metodoPagoAbono === 'mixto' && (
+                      <View style={{ marginBottom: 12 }}>
+                        <Text style={styles.fieldLabel}>EFECTIVO *</Text>
                         <TextInput
                           style={styles.fieldInput}
-                          placeholder="Ej. Nequi, Bancolombia, Daviplata (Ref. #)"
+                          keyboardType="numeric"
+                          placeholder="0"
                           placeholderTextColor="#94A3B8"
-                          value={referenciaPagoAbono}
-                          onChangeText={setReferenciaPagoAbono}
-                          autoCapitalize="characters"
+                          value={montoEfectivoAbono}
+                          onChangeText={setMontoEfectivoAbono}
                           editable={!isSubmittingAbono}
                         />
-                        <Text style={styles.fieldHelpText}>
-                          Código o número de aprobación bancario del recaudo.
+                        <Text style={styles.sugerenciaMixtoText}>
+                          ⚠️ Ajusta el dinero físico recibido. El saldo restante debe cubrirse en transferencias.
                         </Text>
                       </View>
                     )}
 
-                    {/* Si es 'mixto': Dos inputs numéricos, aviso de sugerencia 50/50 y campo de Referencia */}
-                    {metodoPagoAbono === 'mixto' && (
-                      <View style={styles.metodoDetalleBox}>
-                        <View style={styles.cuadreBoxHeader}>
-                          <Text style={styles.cuadreBoxTitle}>DESGLOSE DE PAGO SIMULTÁNEO</Text>
-                          {valorTotalAbonoNum > 0 && (
-                            <View style={[styles.cuadreBadge, estaCuadradoMixto ? styles.cuadreBadgeOk : styles.cuadreBadgeWarn]}>
-                              <Text style={[styles.cuadreBadgeText, estaCuadradoMixto ? styles.cuadreBadgeTextOk : styles.cuadreBadgeTextWarn]}>
-                                {estaCuadradoMixto
-                                  ? `✓ Cuadrado: ${formatCOP(valorTotalAbonoNum)}`
-                                  : `⚠️ Total: ${formatCOP(sumaMixtaAbono)} de ${formatCOP(valorTotalAbonoNum)}`}
+                    {/* Sub-bloque de Comprobantes Bancarios */}
+                    <View style={{ marginTop: 4 }}>
+                      <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+                        <Text style={styles.fieldLabel}>
+                          TRANSFERENCIAS ({comprobantesAbono.length}/3)
+                        </Text>
+                        {comprobantesAbono.length < 3 && (
+                          <TouchableOpacity
+                            style={styles.btnAddVoucher}
+                            onPress={agregarComprobanteAbono}
+                            disabled={isSubmittingAbono}
+                          >
+                            <Text style={styles.btnAddVoucherText}>+ Agregar comprobante (Máx 3)</Text>
+                          </TouchableOpacity>
+                        )}
+                      </View>
+
+                      {comprobantesAbono.map((comp, idx) => (
+                        <View key={comp.id || idx} style={styles.voucherCard}>
+                          <View style={styles.voucherCardHeader}>
+                            <Text style={styles.voucherCardTitle}>Comprobante #{idx + 1}</Text>
+                            {comprobantesAbono.length > 1 && (
+                              <TouchableOpacity
+                                style={styles.voucherDeleteBtn}
+                                onPress={() => eliminarComprobanteAbono(comp.id)}
+                                disabled={isSubmittingAbono}
+                              >
+                                <Text style={styles.voucherDeleteBtnText}>✕ Eliminar</Text>
+                              </TouchableOpacity>
+                            )}
+                          </View>
+
+                          {/* Banco Selector */}
+                          <TouchableOpacity
+                            style={[
+                              styles.bankPickerTrigger,
+                              !comp.banco && styles.bankPickerTriggerEmpty,
+                            ]}
+                            onPress={() => {
+                              setCompEditandoBancoAbonoId(comp.id);
+                              setModalBancoAbonoVisible(true);
+                            }}
+                            disabled={isSubmittingAbono}
+                            activeOpacity={0.8}
+                          >
+                            <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                              <Text style={{ marginRight: 8, fontSize: 16 }}>🏛️</Text>
+                              <Text
+                                style={[
+                                  styles.bankPickerTriggerText,
+                                  !comp.banco && styles.bankPickerTriggerTextPlaceholder,
+                                ]}
+                              >
+                                {comp.banco || 'Seleccione entidad bancaria...'}
                               </Text>
                             </View>
-                          )}
-                        </View>
+                            <Text style={{ color: '#94A3B8', fontSize: 12 }}>▼</Text>
+                          </TouchableOpacity>
 
-                        <View style={styles.formRowTwoCols}>
-                          <View style={{ flex: 1, justifyContent: 'flex-end' }}>
-                            <Text style={styles.fieldLabel}>EFECTIVO *</Text>
-                            <TextInput
-                              style={styles.fieldInput}
-                              keyboardType="numeric"
-                              placeholder="0"
-                              placeholderTextColor="#94A3B8"
-                              value={montoEfectivoAbono}
-                              onChangeText={setMontoEfectivoAbono}
-                              editable={!isSubmittingAbono}
-                            />
+                          {/* Referencia y Monto */}
+                          <View style={styles.formRowTwoCols}>
+                            <View style={{ flex: 1.2 }}>
+                              <Text style={styles.fieldLabel}>REFERENCIA / APROBACIÓN *</Text>
+                              <TextInput
+                                style={styles.fieldInput}
+                                placeholder="No. Comprobante"
+                                placeholderTextColor="#94A3B8"
+                                value={comp.referencia}
+                                onChangeText={(val) => actualizarComprobanteAbono(comp.id, 'referencia', val)}
+                                autoCapitalize="characters"
+                                editable={!isSubmittingAbono}
+                              />
+                            </View>
+                            <View style={{ flex: 0.8 }}>
+                              <Text style={styles.fieldLabel}>MONTO *</Text>
+                              <TextInput
+                                style={styles.fieldInput}
+                                keyboardType="numeric"
+                                placeholder="0"
+                                placeholderTextColor="#94A3B8"
+                                value={comp.monto}
+                                onChangeText={(val) => actualizarComprobanteAbono(comp.id, 'monto', val)}
+                                editable={!isSubmittingAbono}
+                                autoFocus={focusedVoucherAbonoId === comp.id}
+                                selectTextOnFocus
+                              />
+                            </View>
                           </View>
-                          <View style={{ flex: 1, justifyContent: 'flex-end' }}>
-                            <Text style={styles.fieldLabel}>TRANSFERENCIA *</Text>
-                            <TextInput
-                              style={styles.fieldInput}
-                              keyboardType="numeric"
-                              placeholder="0"
-                              placeholderTextColor="#94A3B8"
-                              value={montoTransferenciaAbono}
-                              onChangeText={setMontoTransferenciaAbono}
-                              editable={!isSubmittingAbono}
-                            />
-                          </View>
                         </View>
+                      ))}
 
-                        <Text style={styles.sugerenciaMixtoText}>
-                          ⚠️ Valores sugeridos. Verifica y ajusta el dinero físico recibido.
-                        </Text>
-
-                        <View style={{ marginTop: 8 }}>
-                          <Text style={styles.fieldLabel}>NÚMERO DE COMPROBANTE / REFERENCIA *</Text>
-                          <TextInput
-                            style={styles.fieldInput}
-                            placeholder="Ej. Nequi, Bancolombia, Daviplata (Ref. #)"
-                            placeholderTextColor="#94A3B8"
-                            value={referenciaPagoAbono}
-                            onChangeText={setReferenciaPagoAbono}
-                            autoCapitalize="characters"
-                            editable={!isSubmittingAbono}
-                          />
+                      {hayRefsDuplicadasAbono && (
+                        <View style={styles.errorBannerBox}>
+                          <Text style={styles.errorBannerText}>
+                            ⚠️ No puede ingresar números de referencia idénticos en comprobantes distintos.
+                          </Text>
                         </View>
-                      </View>
-                    )}
+                      )}
+
+                      {errorReferenciaAbono && (
+                        <View style={styles.errorBannerBox}>
+                          <Text style={styles.errorBannerText}>
+                            ⚠️ {errorReferenciaAbono}
+                          </Text>
+                        </View>
+                      )}
+                    </View>
                   </View>
-                );
-              })()}
+                )}
+              </View>
 
               {/* Selector de Agendar Siguiente Visita (Exclusivo Modalidad Dinámica con saldo pendiente) */}
               {(() => {
@@ -4525,14 +4771,30 @@ export default function CobradorDashboard({ navigation }) {
                 />
               </View>
 
-              {/* Botones de Confirmación con Protección Anti-Doble Clic */}
+              {/* Botones de Confirmación con Protección Anti-Doble Clic y Bloqueo Matemático */}
               <TouchableOpacity
-                style={[styles.confirmPaymentBtn, isSubmittingAbono && styles.confirmPaymentBtnDisabled]}
+                style={[
+                  styles.confirmPaymentBtn,
+                  (isSubmittingAbono ||
+                    (metodoPagoAbono !== 'efectivo' &&
+                      (diferenciaCajaAbono !== 0 || !comprobantesAbonoValidos || hayRefsDuplicadasAbono))) &&
+                    styles.confirmPaymentBtnDisabled,
+                ]}
                 onPress={handleConfirmarAbono}
-                disabled={isSubmittingAbono}
+                disabled={
+                  isSubmittingAbono ||
+                  (metodoPagoAbono !== 'efectivo' &&
+                    (diferenciaCajaAbono !== 0 || !comprobantesAbonoValidos || hayRefsDuplicadasAbono))
+                }
                 activeOpacity={isSubmittingAbono ? 1 : 0.7}
                 accessibilityRole="button"
-                accessibilityState={{ disabled: isSubmittingAbono, busy: isSubmittingAbono }}
+                accessibilityState={{
+                  disabled:
+                    isSubmittingAbono ||
+                    (metodoPagoAbono !== 'efectivo' &&
+                      (diferenciaCajaAbono !== 0 || !comprobantesAbonoValidos || hayRefsDuplicadasAbono)),
+                  busy: isSubmittingAbono,
+                }}
               >
                 {isSubmittingAbono ? (
                   <View style={styles.btnLoadingRow}>
@@ -4562,6 +4824,29 @@ export default function CobradorDashboard({ navigation }) {
           </View>
         </View>
       </InFrameModal>
+
+      {/* Modal Selector de Entidad Bancaria para Abonos */}
+      <BankSelectorModal
+        visible={modalBancoAbonoVisible}
+        onClose={() => {
+          setModalBancoAbonoVisible(false);
+          setCompEditandoBancoAbonoId(null);
+        }}
+        bancos={bancos}
+        selectedBanco={
+          compEditandoBancoAbonoId
+            ? (comprobantesAbono.find((c) => c.id === compEditandoBancoAbonoId)?.banco || '')
+            : bancoAbono
+        }
+        onSelectBanco={(b) => {
+          if (compEditandoBancoAbonoId) {
+            actualizarComprobanteAbono(compEditandoBancoAbonoId, 'banco', b);
+          } else {
+            setBancoAbono(b);
+          }
+          setErrorReferenciaAbono(null);
+        }}
+      />
 
       {/* ========================================================================= */}
       {/* MODAL DE COMPROBANTE DIGITAL DE RECIBO (PAGO TOTAL VS ABONO PARCIAL)      */}
@@ -5375,6 +5660,48 @@ export default function CobradorDashboard({ navigation }) {
               </TouchableOpacity>
             </View>
 
+          </View>
+        </View>
+      </InFrameModal>
+
+      {/* Modal Personalizado: Confirmar Eliminación de Transferencia en Abono (UI de Marca) */}
+      <InFrameModal
+        visible={modalEliminarTransfAbonoVisible}
+        transparent={true}
+        animationType="fade"
+        onRequestClose={() => {
+          setModalEliminarTransfAbonoVisible(false);
+          setTransfAbonoAEliminarId(null);
+        }}
+      >
+        <View style={styles.confirmModalOverlay}>
+          <View style={styles.confirmModalCard}>
+            <View style={styles.confirmModalIconBox}>
+              <Text style={{ fontSize: 26 }}>🗑️</Text>
+            </View>
+            <Text style={styles.confirmModalTitle}>Confirmar Acción</Text>
+            <Text style={styles.confirmModalMessage}>
+              ¿Seguro que desea <Text style={{ fontWeight: 'bold' }}>eliminar</Text> esta transferencia?
+            </Text>
+            <View style={styles.confirmModalActions}>
+              <TouchableOpacity
+                style={styles.confirmModalBtnCancel}
+                onPress={() => {
+                  setModalEliminarTransfAbonoVisible(false);
+                  setTransfAbonoAEliminarId(null);
+                }}
+                activeOpacity={0.8}
+              >
+                <Text style={styles.confirmModalBtnCancelText}>Cancelar</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={styles.confirmModalBtnConfirm}
+                onPress={confirmarEliminarComprobanteAbono}
+                activeOpacity={0.8}
+              >
+                <Text style={styles.confirmModalBtnConfirmText}>Eliminar</Text>
+              </TouchableOpacity>
+            </View>
           </View>
         </View>
       </InFrameModal>
@@ -8415,6 +8742,10 @@ const styles = StyleSheet.create({
     backgroundColor: '#FFFBEB',
     borderColor: '#FDE68A',
   },
+  cuadreBadgeError: {
+    backgroundColor: '#FEF2F2',
+    borderColor: '#FECACA',
+  },
   cuadreBadgeText: {
     fontSize: 10,
     fontWeight: '800',
@@ -8424,6 +8755,58 @@ const styles = StyleSheet.create({
   },
   cuadreBadgeTextWarn: {
     color: '#B45309',
+  },
+  cuadreBadgeTextError: {
+    color: '#DC2626',
+  },
+  btnAddVoucher: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    backgroundColor: '#EFF6FF',
+    borderRadius: 6,
+    borderWidth: 1,
+    borderColor: '#BFDBFE',
+  },
+  btnAddVoucherText: {
+    fontSize: 10,
+    fontWeight: '700',
+    color: '#1D4ED8',
+  },
+  voucherCard: {
+    backgroundColor: '#F8FAFC',
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    padding: 8,
+    gap: 6,
+    marginTop: 6,
+  },
+  voucherCardHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    borderBottomWidth: 1,
+    borderBottomColor: '#E2E8F0',
+    paddingBottom: 4,
+  },
+  voucherCardTitle: {
+    fontSize: 10,
+    fontWeight: '800',
+    color: '#334155',
+  },
+  voucherDeleteBtn: {
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    backgroundColor: '#FEE2E2',
+    borderRadius: 4,
+  },
+  voucherDeleteBtnText: {
+    fontSize: 10,
+    color: '#DC2626',
+    fontWeight: '800',
   },
   formRowTwoCols: {
     flexDirection: 'row',
@@ -8455,5 +8838,125 @@ const styles = StyleSheet.create({
     color: '#D97706',
     marginTop: 4,
     fontWeight: '600',
+  },
+  bankPickerTrigger: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    backgroundColor: '#F8FAFC',
+    borderWidth: 1.5,
+    borderColor: '#CBD5E1',
+    borderRadius: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+  },
+  bankPickerTriggerEmpty: {
+    borderColor: '#94A3B8',
+    backgroundColor: '#F1F5F9',
+  },
+  bankPickerTriggerError: {
+    borderColor: '#EF4444',
+    backgroundColor: '#FEF2F2',
+  },
+  bankPickerTriggerText: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#0F172A',
+  },
+  bankPickerTriggerTextPlaceholder: {
+    color: '#64748B',
+    fontWeight: '500',
+  },
+  fieldInputError: {
+    borderColor: '#EF4444',
+    borderWidth: 1.5,
+    backgroundColor: '#FEF2F2',
+  },
+  errorBannerBox: {
+    marginTop: 6,
+    padding: 8,
+    backgroundColor: '#FEF2F2',
+    borderWidth: 1,
+    borderColor: '#FECACA',
+    borderRadius: 8,
+  },
+  errorBannerText: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#B91C1C',
+    lineHeight: 15,
+  },
+  confirmModalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(15, 23, 42, 0.75)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 20,
+    zIndex: 99999,
+  },
+  confirmModalCard: {
+    width: '100%',
+    maxWidth: 360,
+    backgroundColor: '#FFFFFF',
+    borderRadius: 24,
+    padding: 24,
+    alignItems: 'center',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 10 },
+    shadowOpacity: 0.25,
+    shadowRadius: 15,
+    elevation: 20,
+  },
+  confirmModalIconBox: {
+    width: 56,
+    height: 56,
+    borderRadius: 28,
+    backgroundColor: '#FEE2E2',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 16,
+  },
+  confirmModalTitle: {
+    fontSize: 18,
+    fontWeight: 'bold',
+    color: '#0F172A',
+    marginBottom: 8,
+    textAlign: 'center',
+  },
+  confirmModalMessage: {
+    fontSize: 13,
+    color: '#64748B',
+    textAlign: 'center',
+    lineHeight: 18,
+    marginBottom: 20,
+  },
+  confirmModalActions: {
+    flexDirection: 'row',
+    gap: 12,
+    width: '100%',
+  },
+  confirmModalBtnCancel: {
+    flex: 1,
+    paddingVertical: 12,
+    borderRadius: 14,
+    backgroundColor: '#F1F5F9',
+    alignItems: 'center',
+  },
+  confirmModalBtnCancelText: {
+    fontSize: 13,
+    fontWeight: 'bold',
+    color: '#475569',
+  },
+  confirmModalBtnConfirm: {
+    flex: 1,
+    paddingVertical: 12,
+    borderRadius: 14,
+    backgroundColor: '#EF4444',
+    alignItems: 'center',
+  },
+  confirmModalBtnConfirmText: {
+    fontSize: 13,
+    fontWeight: 'bold',
+    color: '#FFFFFF',
   },
 });

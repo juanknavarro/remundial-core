@@ -1,3 +1,4 @@
+import logging
 from datetime import date, timedelta
 from decimal import Decimal
 from typing import List, Optional
@@ -5,13 +6,18 @@ from uuid import UUID
 
 from fastapi import HTTPException, status
 from sqlalchemy import cast, func, or_, select, String
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from app.crud.crud_abono import validar_referencia_bancaria_no_duplicada
 from app.models.cliente import Cliente, ReferenciaCliente, TipoReferenciaEnum
 from app.models.credito import Credito, CreditoDetalle, EstadoCredito, TipoPago
+from app.models.detalle_transferencia import DetalleTransferencia
 from app.models.producto import Producto
 from app.models.usuario import Usuario
+
+logger = logging.getLogger("app.crud_credito")
 from app.schemas.credito import (
     CreditoCreate,
     CreditoUpdate,
@@ -64,6 +70,7 @@ async def get_credito(db: AsyncSession, id_contrato: UUID) -> Optional[Credito]:
             selectinload(Credito.vendedor),
             selectinload(Credito.supervisor),
             selectinload(Credito.cobrador),
+            selectinload(Credito.transferencias),
         )
         .where(Credito.id_contrato == id_contrato)
     )
@@ -92,6 +99,7 @@ async def get_credito_por_id_o_hash(db: AsyncSession, id_o_hash: str) -> Optiona
             selectinload(Credito.vendedor),
             selectinload(Credito.supervisor),
             selectinload(Credito.cobrador),
+            selectinload(Credito.transferencias),
         )
         .where(
             or_(
@@ -129,6 +137,7 @@ async def get_creditos(
             selectinload(Credito.vendedor),
             selectinload(Credito.supervisor),
             selectinload(Credito.cobrador),
+            selectinload(Credito.transferencias),
         )
         .offset(skip)
         .limit(limit)
@@ -282,7 +291,7 @@ async def create_credito(db: AsyncSession, credito_in: CreditoCreate) -> Credito
                 detail=f"Cobrador con ID '{credito_in.cobrador_id}' no existe",
             )
 
-    # Validar existencia de cada producto incluido y existencias de stock
+    # Validar existencia de cada producto incluido en el catálogo y suficiencia estricta de inventario
     for item in credito_in.detalles:
         prod = await db.get(Producto, item.producto_id)
         if not prod:
@@ -290,17 +299,11 @@ async def create_credito(db: AsyncSession, credito_in: CreditoCreate) -> Credito
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"Producto con ID '{item.producto_id}' no existe en el catálogo",
             )
-        # Control estricto de existencias: solo si maneja_stock = True
-        # (Los cuadros/arte por encargo tienen maneja_stock = False y se omiten)
-        if prod.maneja_stock:
-            if prod.stock < item.cantidad:
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail=(
-                        f"Stock insuficiente para '{prod.nombre}'. "
-                        f"Existencias disponibles en almacén: {prod.stock}, Solicitadas en venta: {item.cantidad}."
-                    ),
-                )
+        if prod.maneja_stock and prod.stock < item.cantidad:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Stock insuficiente: El producto '{prod.nombre}' solo cuenta con {prod.stock} unidades disponibles en almacén (solicitadas: {item.cantidad}).",
+            )
 
     # 3. Transacción atómica estricta
     es_contado = monto_financiado_redondeado == Decimal("0.00")
@@ -309,6 +312,54 @@ async def create_credito(db: AsyncSession, credito_in: CreditoCreate) -> Credito
         Decimal("0.00")
         if es_contado
         else (credito_in.saldo_pendiente if credito_in.saldo_pendiente is not None else credito_in.monto_financiado)
+    )
+
+    # Fase 2: Bloqueo Matemático Estricto (FastAPI)
+    c_inicial = round(Decimal(str(credito_in.cuota_inicial or 0)), 2)
+    m_efectivo = round(Decimal(str(credito_in.monto_inicial_efectivo or 0)), 2)
+    sum_trans = round(sum((Decimal(str(t.monto)) for t in (credito_in.transferencias or [])), Decimal("0.00")), 2)
+
+    if c_inicial > Decimal("0.00"):
+        if (m_efectivo + sum_trans) != c_inicial:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=(
+                    f"Descuadre matemático de caja: La suma del efectivo (${m_efectivo:.2f}) y "
+                    f"las transferencias (${sum_trans:.2f}) es ${m_efectivo + sum_trans:.2f}, lo cual "
+                    f"no coincide con la cuota inicial declarada (${c_inicial:.2f})."
+                ),
+            )
+    elif c_inicial == Decimal("0.00"):
+        if m_efectivo != Decimal("0.00") or sum_trans != Decimal("0.00"):
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="Descuadre matemático de caja: Para una venta sin cuota inicial ($0), los montos en efectivo y transferencias deben ser 0.",
+            )
+
+    # Validar comprobantes de transferencias únicas
+    refs_vistas = set()
+    for t in (credito_in.transferencias or []):
+        t_banco = t.entidad_bancaria.strip().upper()
+        t_ref = t.referencia_pago.strip().upper()
+        key = (t_banco, t_ref)
+        if key in refs_vistas:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=f"Descuadre matemático de caja: Comprobante duplicado '{t.referencia_pago}' para el banco '{t.entidad_bancaria}' dentro de la misma venta.",
+            )
+        refs_vistas.add(key)
+        await validar_referencia_bancaria_no_duplicada(
+            db=db,
+            referencia=t.referencia_pago,
+            banco=t.entidad_bancaria,
+        )
+
+    ref_inicial = credito_in.transferencias[0].referencia_pago if (credito_in.transferencias and len(credito_in.transferencias) > 0) else (credito_in.referencia_pago_inicial.strip() if credito_in.referencia_pago_inicial else None)
+    banco_inicial = credito_in.transferencias[0].entidad_bancaria if (credito_in.transferencias and len(credito_in.transferencias) > 0) else (credito_in.banco_transferencia.strip() if credito_in.banco_transferencia else None)
+    metodo_inicial = (
+        credito_in.metodo_pago_inicial.strip().lower()
+        if (credito_in.metodo_pago_inicial and credito_in.metodo_pago_inicial.strip())
+        else None
     )
 
     try:
@@ -347,13 +398,10 @@ async def create_credito(db: AsyncSession, credito_in: CreditoCreate) -> Credito
                 if (credito_in.metodo_pago_inicial and credito_in.metodo_pago_inicial.strip())
                 else None
             ),
-            referencia_pago_inicial=(
-                credito_in.referencia_pago_inicial.strip()
-                if (credito_in.referencia_pago_inicial and credito_in.referencia_pago_inicial.strip())
-                else None
-            ),
-            monto_inicial_efectivo=credito_in.monto_inicial_efectivo,
-            monto_inicial_transferencia=credito_in.monto_inicial_transferencia,
+            referencia_pago_inicial=ref_inicial,
+            banco_transferencia=banco_inicial,
+            monto_inicial_efectivo=m_efectivo,
+            monto_inicial_transferencia=sum_trans,
             monto_financiado=credito_in.monto_financiado,
             numero_cuotas=credito_in.numero_cuotas,
             valor_cuota=credito_in.valor_cuota,
@@ -366,7 +414,17 @@ async def create_credito(db: AsyncSession, credito_in: CreditoCreate) -> Credito
         # Flush para obtener db_credito.id_contrato sin comprometer la transacción
         await db.flush()
 
-        # B. Iterar e insertar los detalles amarrados al ID del nuevo crédito y descontar stock
+        # B. Insertar cada comprobante en la tabla detalles_transferencia
+        for t in (credito_in.transferencias or []):
+            db_trans = DetalleTransferencia(
+                venta_id=db_credito.id_contrato,
+                entidad_bancaria=t.entidad_bancaria.strip(),
+                referencia_pago=t.referencia_pago.strip(),
+                monto=Decimal(str(t.monto)),
+            )
+            db.add(db_trans)
+
+        # C. Iterar e insertar los detalles amarrados al ID del nuevo crédito y descontar stock
         for detalle_in in credito_in.detalles:
             db_detalle = CreditoDetalle(
                 credito_id=db_credito.id_contrato,
@@ -381,7 +439,7 @@ async def create_credito(db: AsyncSession, credito_in: CreditoCreate) -> Credito
             if prod and prod.maneja_stock:
                 prod.stock -= detalle_in.cantidad
 
-        # C. Insertar datos de respaldo (Codeudor y Referencia Familiar) si se proporcionaron
+        # D. Insertar datos de respaldo (Codeudor y Referencia Familiar) si se proporcionaron
         if credito_in.codeudor and credito_in.codeudor.nombre:
             ref_codeudor = ReferenciaCliente(
                 cliente_id=credito_in.cliente_id,
@@ -410,8 +468,24 @@ async def create_credito(db: AsyncSession, credito_in: CreditoCreate) -> Credito
             )
             db.add(ref_familiar)
 
-        # D. Confirmación única atómica (Commit)
+        # E. Confirmación única atómica (Commit)
         await db.commit()
+    except HTTPException:
+        await db.rollback()
+        raise
+    except IntegrityError as ie:
+        await db.rollback()
+        err_msg = str(ie.orig).lower() if hasattr(ie, "orig") else str(ie).lower()
+        if "uq_detalles_transferencia" in err_msg or "uq_creditos" in err_msg or "uq_abonos" in err_msg or "referencia" in err_msg or "banco" in err_msg:
+            banco_msg = f" para el banco '{banco_inicial}'" if banco_inicial else ""
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"La referencia bancaria '{ref_inicial or ''}'{banco_msg} ya se encuentra registrada en el sistema. Ingrese un comprobante único.",
+            )
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Error de integridad de datos al originar la operación de venta.",
+        )
     except Exception:
         # Reversión completa en caso de cualquier excepción
         await db.rollback()

@@ -27,7 +27,7 @@ import { formatCOP, cn } from '@/lib/utils';
 import { api } from '@/lib/api';
 
 type TipoComprobante = 'VENTA_INICIAL' | 'RECIBO_ABONO';
-type FiltroTipo = 'todos' | 'ventas' | 'abonos' | 'abonos_parciales' | 'pendientes' | 'aprobados' | 'rechazados';
+type FiltroTipo = 'todos' | 'ventas' | 'abonos' | 'abonos_parciales' | 'pagos_divididos' | 'pendientes' | 'aprobados' | 'rechazados';
 
 interface ComprobanteItem {
   id: string;
@@ -54,6 +54,9 @@ interface ComprobanteItem {
   saldoInsoluto?: number;
   cuotaAfectada?: number;
   valorCuotaSiguiente?: number;
+  esPagoDividido?: boolean;
+  transferenciasCount?: number;
+  transferencias?: any[];
 }
 
 function sanitizarNombreArchivo(texto: string): string {
@@ -90,6 +93,8 @@ export default function ComprobantesPage() {
   const [filtroActivo, setFiltroActivo] = useState<FiltroTipo>('todos');
   const [descargandoId, setDescargandoId] = useState<string | null>(null);
   const [feedbackDescarga, setFeedbackDescarga] = useState<string | null>(null);
+  const [fechaFiltro, setFechaFiltro] = useState<string>('');
+  const [mesFiltro, setMesFiltro] = useState<string>('');
 
   // Cargar contratos de crédito y recibos de abono desde la API
   const cargarDatos = useCallback(async () => {
@@ -180,6 +185,9 @@ export default function ComprobantesPage() {
             modalidadPago: esContado ? 'Contado' : `${c.numero_cuotas || 0} cuotas`,
             endpointPdf: `/creditos/${idStr}/recibo-pdf`,
             nombreArchivoPdf: formatearNombrePdf('Venta', codigoCtr, c.cliente?.nombres || 'Cliente', dt),
+            esPagoDividido: Boolean(c.es_pago_dividido) || (Array.isArray(c.transferencias) && c.transferencias.length > 1) || String(c.metodo_pago_inicial || '').toLowerCase() === 'mixto',
+            transferenciasCount: Array.isArray(c.transferencias) ? c.transferencias.length : 0,
+            transferencias: c.transferencias || [],
           });
         });
       }
@@ -241,6 +249,9 @@ export default function ComprobantesPage() {
             saldoInsoluto,
             cuotaAfectada: a.cuota_afectada_numero,
             valorCuotaSiguiente: a.valor_cuota_siguiente ? Number(a.valor_cuota_siguiente) : undefined,
+            esPagoDividido: Boolean(a.es_pago_dividido) || (Array.isArray(a.transferencias) && a.transferencias.length > 1) || String(a.metodo_pago || '').toLowerCase() === 'mixto',
+            transferenciasCount: Array.isArray(a.transferencias) ? a.transferencias.length : 0,
+            transferencias: a.transferencias || [],
           });
         });
       }
@@ -322,6 +333,12 @@ export default function ComprobantesPage() {
       if (filtroActivo === 'ventas' && item.tipo !== 'VENTA_INICIAL') return false;
       if (filtroActivo === 'abonos' && item.tipo !== 'RECIBO_ABONO') return false;
       if (filtroActivo === 'abonos_parciales' && !(item.tipo === 'RECIBO_ABONO' && item.esAbonoParcial)) return false;
+      if (filtroActivo === 'pagos_divididos') {
+        if (!item.esPagoDividido) return false;
+        const itemDateStr = item.fechaRaw.toISOString().split('T')[0];
+        if (fechaFiltro && itemDateStr !== fechaFiltro) return false;
+        if (mesFiltro && !itemDateStr.startsWith(mesFiltro)) return false;
+      }
       if (filtroActivo === 'pendientes' && item.estadoTipo !== 'pendiente') return false;
       if (filtroActivo === 'aprobados' && item.estadoTipo !== 'activo') return false;
       if (filtroActivo === 'rechazados' && !item.esRechazado) return false;
@@ -349,6 +366,7 @@ export default function ComprobantesPage() {
     const pendientes = comprobantes.filter((c) => c.estadoTipo === 'pendiente');
     const aprobados = comprobantes.filter((c) => c.estadoTipo === 'activo');
     const rechazados = comprobantes.filter((c) => c.esRechazado);
+    const pagosDivididos = comprobantes.filter((c) => c.esPagoDividido);
     const montoTotalAbonos = abonos.reduce((acc, a) => acc + a.monto, 0);
     const totalSaldoInsoluto = abonosParciales.reduce((acc, a) => acc + (a.saldoInsoluto || 0), 0);
 
@@ -361,6 +379,7 @@ export default function ComprobantesPage() {
       pendientesCount: pendientes.length,
       aprobadosCount: aprobados.length,
       rechazadosCount: rechazados.length,
+      pagosDivididosCount: pagosDivididos.length,
       montoTotalAbonos,
       totalSaldoInsoluto,
     };
@@ -538,6 +557,23 @@ export default function ComprobantesPage() {
           </button>
 
           <button
+            onClick={() => {
+              setFiltroActivo('pagos_divididos');
+              const hoyStr = new Date().toISOString().split('T')[0];
+              setFechaFiltro(hoyStr);
+              setMesFiltro('');
+            }}
+            className={cn(
+              'px-3.5 py-2 rounded-xl transition-all whitespace-nowrap cursor-pointer flex items-center gap-1.5',
+              filtroActivo === 'pagos_divididos'
+                ? 'bg-purple-900 text-white shadow-sm'
+                : 'bg-purple-50 text-purple-700 hover:bg-purple-100 border border-purple-200'
+            )}
+          >
+            <span>Pagos Divididos ({metricas.pagosDivididosCount})</span>
+          </button>
+
+          <button
             onClick={() => setFiltroActivo('aprobados')}
             className={cn(
               'px-3.5 py-2 rounded-xl transition-all whitespace-nowrap cursor-pointer',
@@ -573,6 +609,59 @@ export default function ComprobantesPage() {
             Rechazados ({metricas.rechazadosCount})
           </button>
         </div>
+
+        {/* Barra selectora de Fecha/Mes para consultar Historial de Pagos Divididos */}
+        {filtroActivo === 'pagos_divididos' && (
+          <div className="flex flex-wrap items-center gap-2.5 p-3.5 bg-purple-50/70 rounded-xl border border-purple-200/90 text-xs text-purple-950 animate-in fade-in">
+            <span className="font-bold flex items-center gap-1 text-purple-900">
+              <Calendar className="w-3.5 h-3.5 text-purple-700" />
+              Fecha Operación:
+            </span>
+            <input
+              type="date"
+              value={fechaFiltro}
+              onChange={(e) => {
+                setFechaFiltro(e.target.value);
+                setMesFiltro('');
+              }}
+              className="px-2.5 py-1.5 rounded-lg border border-purple-200 bg-white text-slate-800 text-xs font-medium focus:ring-2 focus:ring-purple-700 shadow-2xs"
+            />
+            <span className="text-purple-600 font-semibold">o Consultar por Mes:</span>
+            <input
+              type="month"
+              value={mesFiltro}
+              onChange={(e) => {
+                setMesFiltro(e.target.value);
+                setFechaFiltro('');
+              }}
+              className="px-2.5 py-1.5 rounded-lg border border-purple-200 bg-white text-purple-950 text-xs font-medium focus:ring-2 focus:ring-purple-700 shadow-2xs cursor-pointer"
+            />
+            <button
+              type="button"
+              onClick={() => {
+                const hoyStr = new Date().toISOString().split('T')[0];
+                setFechaFiltro(hoyStr);
+                setMesFiltro('');
+              }}
+              className="px-3 py-1.5 rounded-lg bg-purple-200 hover:bg-purple-300 text-purple-950 font-bold transition-colors cursor-pointer"
+            >
+              Hoy (Por defecto)
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setFechaFiltro('');
+                setMesFiltro('');
+              }}
+              className="px-3 py-1.5 rounded-lg bg-white hover:bg-purple-100 text-purple-800 border border-purple-200 font-medium transition-colors cursor-pointer"
+            >
+              Ver Todo el Historial
+            </button>
+            <span className="ml-auto text-[11px] text-purple-700 font-medium italic">
+              Mostrando {comprobantesFiltrados.length} operaciones con múltiples comprobantes o modalidad mixta
+            </span>
+          </div>
+        )}
       </div>
 
       {/* TABLA PRINCIPAL DE COMPROBANTES */}
@@ -655,6 +744,11 @@ export default function ComprobantesPage() {
                               ) : (
                                 <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-800 border border-emerald-300">
                                   ✓ Pago Cuota Total
+                                </span>
+                              )}
+                              {item.esPagoDividido && (
+                                <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-purple-100 text-purple-800 border border-purple-300 inline-flex items-center gap-0.5">
+                                  ⚡ Pago Dividido {item.transferenciasCount && item.transferenciasCount > 1 ? `(${item.transferenciasCount} transf.)` : '(Mixto)'}
                                 </span>
                               )}
                             </div>

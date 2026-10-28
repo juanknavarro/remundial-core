@@ -36,9 +36,18 @@ import {
   X,
   Search,
   Plus,
+  Landmark,
+  Edit2,
 } from 'lucide-react';
 import { api } from '@/lib/api';
 import { cn } from '@/lib/utils';
+
+export interface EntidadBancaria {
+  id: number;
+  nombre: string;
+  activa: boolean;
+  creado_en?: string;
+}
 
 export interface PlantillasPdfData {
   membrete: {
@@ -129,9 +138,19 @@ interface RespaldoResumenData {
 }
 
 export default function ConfiguracionPage() {
-  const [activeTab, setActiveTab] = useState<'parametros' | 'plantillas' | 'migracion' | 'respaldos'>('parametros');
+  const [activeTab, setActiveTab] = useState<'parametros' | 'plantillas' | 'migracion' | 'respaldos' | 'bancos'>('parametros');
   const [parametros, setParametros] = useState<ParametrosData | null>(null);
   const [isLoadingParams, setIsLoadingParams] = useState(true);
+
+  // Estados para Módulo de Entidades Bancarias
+  const [bancos, setBancos] = useState<EntidadBancaria[]>([]);
+  const [isLoadingBancos, setIsLoadingBancos] = useState<boolean>(false);
+  const [filtroBancos, setFiltroBancos] = useState<string>('');
+  const [nuevoBancoNombre, setNuevoBancoNombre] = useState<string>('');
+  const [isCreandoBanco, setIsCreandoBanco] = useState<boolean>(false);
+  const [bancoEditando, setBancoEditando] = useState<EntidadBancaria | null>(null);
+  const [isGuardandoEdicionBanco, setIsGuardandoEdicionBanco] = useState<boolean>(false);
+  const [isEliminandoBancoId, setIsEliminandoBancoId] = useState<number | null>(null);
 
   // Estados Formulario Identidad Institucional (Marca Blanca)
   const [formEmpresa, setFormEmpresa] = useState({
@@ -525,9 +544,107 @@ export default function ConfiguracionPage() {
     }
   };
 
+  const cargarBancos = async () => {
+    try {
+      setIsLoadingBancos(true);
+      const res = await api.get<EntidadBancaria[]>('/bancos');
+      setBancos(res.data);
+    } catch (err: any) {
+      console.error('Error al cargar entidades bancarias:', err);
+      dispararToast('Error', 'No se pudieron cargar las entidades bancarias', 'error');
+    } finally {
+      setIsLoadingBancos(false);
+    }
+  };
+
+  const handleCrearBanco = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const nombreLimpio = nuevoBancoNombre.trim();
+    if (!nombreLimpio) {
+      dispararToast('Campo Requerido', 'Debe ingresar el nombre de la entidad bancaria', 'warning');
+      return;
+    }
+    try {
+      setIsCreandoBanco(true);
+      const res = await api.post<EntidadBancaria>('/bancos', {
+        nombre: nombreLimpio,
+        activa: true,
+      });
+      setBancos((prev) => [...prev, res.data].sort((a, b) => a.nombre.localeCompare(b.nombre)));
+      setNuevoBancoNombre('');
+      dispararToast('Entidad Bancaria Registrada', `Se registró "${res.data.nombre}" exitosamente`, 'success');
+    } catch (err: any) {
+      const msg = err.response?.data?.detail || 'No se pudo registrar la entidad bancaria';
+      dispararToast('Error al Crear', msg, 'error');
+    } finally {
+      setIsCreandoBanco(false);
+    }
+  };
+
+  const handleToggleEstadoBanco = async (banco: EntidadBancaria) => {
+    try {
+      const nuevoEstado = !banco.activa;
+      const res = await api.put<EntidadBancaria>(`/bancos/${banco.id}`, {
+        activa: nuevoEstado,
+      });
+      setBancos((prev) => prev.map((b) => (b.id === banco.id ? res.data : b)));
+      dispararToast(
+        nuevoEstado ? 'Entidad Activada' : 'Entidad Desactivada',
+        `La entidad "${banco.nombre}" ahora está ${nuevoEstado ? 'activa para operaciones' : 'inactiva'}`,
+        'success'
+      );
+    } catch (err: any) {
+      const msg = err.response?.data?.detail || 'No se pudo actualizar el estado de la entidad';
+      dispararToast('Error', msg, 'error');
+    }
+  };
+
+  const handleGuardarEdicionBanco = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!bancoEditando) return;
+    const nombreLimpio = bancoEditando.nombre.trim();
+    if (!nombreLimpio) {
+      dispararToast('Campo Requerido', 'El nombre de la entidad no puede estar vacío', 'warning');
+      return;
+    }
+    try {
+      setIsGuardandoEdicionBanco(true);
+      const res = await api.put<EntidadBancaria>(`/bancos/${bancoEditando.id}`, {
+        nombre: nombreLimpio,
+        activa: bancoEditando.activa,
+      });
+      setBancos((prev) => prev.map((b) => (b.id === bancoEditando.id ? res.data : b)));
+      setBancoEditando(null);
+      dispararToast('Entidad Actualizada', `Se actualizó "${res.data.nombre}" exitosamente`, 'success');
+    } catch (err: any) {
+      const msg = err.response?.data?.detail || 'No se pudo actualizar la entidad bancaria';
+      dispararToast('Error', msg, 'error');
+    } finally {
+      setIsGuardandoEdicionBanco(false);
+    }
+  };
+
+  const handleEliminarBanco = async (banco: EntidadBancaria) => {
+    if (!window.confirm(`¿Está seguro de eliminar la entidad "${banco.nombre}"? Si ya posee movimientos históricos asociados, le recomendamos simplemente desactivarla.`)) {
+      return;
+    }
+    try {
+      setIsEliminandoBancoId(banco.id);
+      await api.delete(`/bancos/${banco.id}`);
+      setBancos((prev) => prev.filter((b) => b.id !== banco.id));
+      dispararToast('Entidad Eliminada', `Se eliminó "${banco.nombre}" del catálogo`, 'success');
+    } catch (err: any) {
+      const msg = err.response?.data?.detail || 'No se pudo eliminar la entidad bancaria';
+      dispararToast('Error', msg, 'error');
+    } finally {
+      setIsEliminandoBancoId(null);
+    }
+  };
+
   useEffect(() => {
     cargarParametros();
     cargarResumenBackup();
+    cargarBancos();
   }, []);
 
   // Guardar cambios institucionales (Identidad Institucional / Marca Blanca)
@@ -1177,6 +1294,23 @@ export default function ConfiguracionPage() {
             <span>Respaldos & Base de Datos</span>
             <span className="text-[10px] uppercase font-bold tracking-wider px-1.5 py-0.5 rounded-md bg-emerald-100 text-emerald-800">
               Activo / JSON
+            </span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setActiveTab('bancos')}
+            className={cn(
+              'pb-3.5 px-3 text-sm font-semibold flex items-center gap-2 border-b-2 transition-all cursor-pointer shrink-0',
+              activeTab === 'bancos'
+                ? 'border-slate-900 text-slate-900'
+                : 'border-transparent text-slate-500 hover:text-slate-700 hover:border-slate-300'
+            )}
+          >
+            <Landmark className="w-4 h-4 text-blue-600" />
+            <span>Entidades Bancarias</span>
+            <span className="text-[10px] uppercase font-bold tracking-wider px-1.5 py-0.5 rounded-md bg-blue-100 text-blue-800">
+              {bancos.filter((b) => b.activa).length} Activas
             </span>
           </button>
         </div>
@@ -3639,6 +3773,305 @@ export default function ConfiguracionPage() {
               </button>
             </div>
           </div>
+        </div>
+      )}
+
+      {/* CONTENIDO PESTAÑA 5: ENTIDADES BANCARIAS */}
+      {activeTab === 'bancos' && (
+        <div className="space-y-6">
+          {/* Header Banner & Contexto Arquitectónico */}
+          <div className="bg-gradient-to-r from-blue-900 via-indigo-900 to-slate-900 rounded-3xl p-6 sm:p-8 text-white relative overflow-hidden shadow-xl shadow-blue-950/20">
+            <div className="absolute right-0 top-0 bottom-0 w-1/3 bg-[radial-gradient(ellipse_at_top_right,_var(--tw-gradient-stops))] from-blue-500/20 via-transparent to-transparent pointer-events-none" />
+            <div className="relative z-10 flex flex-col md:flex-row md:items-center justify-between gap-6">
+              <div className="space-y-2 max-w-2xl">
+                <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-blue-500/20 border border-blue-400/30 text-blue-200 text-xs font-semibold uppercase tracking-wider backdrop-blur-sm">
+                  <Landmark className="w-3.5 h-3.5 text-blue-300" />
+                  <span>Validación Compuesta de Referencias</span>
+                </div>
+                <h2 className="text-xl sm:text-2xl font-bold tracking-tight text-white">
+                  Catálogo Oficial de Entidades Bancarias
+                </h2>
+                <p className="text-xs sm:text-sm text-blue-100/90 leading-relaxed">
+                  Administre las entidades financieras, billeteras digitales y pasarelas de recaudo autorizadas.
+                  El sistema valida la unicidad de los pagos de forma compuesta: <span className="font-semibold text-white underline decoration-blue-400">Banco + No. Referencia</span>, evitando rechazos erróneos si dos entidades distintas coinciden en numeración de comprobante.
+                </p>
+              </div>
+
+              <div className="flex items-center gap-3 shrink-0">
+                <button
+                  type="button"
+                  onClick={cargarBancos}
+                  disabled={isLoadingBancos}
+                  className="px-4 py-2.5 rounded-xl bg-white/10 hover:bg-white/20 active:scale-95 text-white text-xs font-semibold backdrop-blur-md border border-white/20 transition-all flex items-center gap-2 cursor-pointer disabled:opacity-50"
+                >
+                  <RefreshCw className={cn('w-4 h-4', isLoadingBancos && 'animate-spin')} />
+                  <span>Actualizar Lista</span>
+                </button>
+              </div>
+            </div>
+
+            {/* Métricas Rápidas */}
+            <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 pt-6 mt-6 border-t border-white/10">
+              <div className="bg-white/5 rounded-2xl p-3.5 border border-white/10 backdrop-blur-xs">
+                <p className="text-[11px] font-semibold text-blue-200 uppercase tracking-wider">Total Entidades</p>
+                <p className="text-2xl font-black text-white mt-0.5">{bancos.length}</p>
+              </div>
+              <div className="bg-white/5 rounded-2xl p-3.5 border border-white/10 backdrop-blur-xs">
+                <p className="text-[11px] font-semibold text-emerald-300 uppercase tracking-wider">Activas en POS & App</p>
+                <p className="text-2xl font-black text-emerald-400 mt-0.5">{bancos.filter((b) => b.activa).length}</p>
+              </div>
+              <div className="bg-white/5 rounded-2xl p-3.5 border border-white/10 backdrop-blur-xs col-span-2 sm:col-span-1">
+                <p className="text-[11px] font-semibold text-slate-300 uppercase tracking-wider">Inactivas</p>
+                <p className="text-2xl font-black text-slate-300 mt-0.5">{bancos.filter((b) => !b.activa).length}</p>
+              </div>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+            {/* Formulario: Registrar Nuevo Banco */}
+            <div className="lg:col-span-1">
+              <div className="bg-white rounded-3xl border border-slate-200/80 p-5 sm:p-6 shadow-sm sticky top-6">
+                <div className="flex items-center gap-3 pb-4 border-b border-slate-100">
+                  <div className="w-10 h-10 rounded-2xl bg-blue-50 text-blue-600 flex items-center justify-center font-bold">
+                    <Plus className="w-5 h-5" />
+                  </div>
+                  <div>
+                    <h3 className="text-sm font-bold text-slate-900">Registrar Banco o Billetera</h3>
+                    <p className="text-xs text-slate-500">Agregue una nueva entidad al catálogo</p>
+                  </div>
+                </div>
+
+                <form onSubmit={handleCrearBanco} className="mt-5 space-y-4">
+                  <div>
+                    <label className="block text-xs font-bold uppercase tracking-wider text-slate-700 mb-1.5">
+                      Nombre de la Entidad *
+                    </label>
+                    <input
+                      type="text"
+                      required
+                      placeholder="Ej. Nu Colombia, Lulo Bank, Dale..."
+                      value={nuevoBancoNombre}
+                      onChange={(e) => setNuevoBancoNombre(e.target.value)}
+                      className="w-full px-4 py-2.5 rounded-xl border border-slate-200 text-sm font-medium text-slate-900 bg-slate-50/50 focus:bg-white focus:outline-hidden focus:ring-2 focus:ring-blue-500 transition-all placeholder:text-slate-400"
+                    />
+                    <p className="text-[11px] text-slate-400 mt-1.5 leading-relaxed">
+                      Este nombre se mostrará en los selectores del POS Web y en la App Móvil de Cobradores.
+                    </p>
+                  </div>
+
+                  <button
+                    type="submit"
+                    disabled={isCreandoBanco || !nuevoBancoNombre.trim()}
+                    className="w-full py-3 px-4 rounded-xl bg-blue-600 hover:bg-blue-700 active:scale-[0.98] text-white text-xs font-bold uppercase tracking-wider shadow-sm transition-all flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    {isCreandoBanco ? (
+                      <>
+                        <RefreshCw className="w-4 h-4 animate-spin" />
+                        <span>Guardando...</span>
+                      </>
+                    ) : (
+                      <>
+                        <Plus className="w-4 h-4" />
+                        <span>Agregar Entidad Bancaria</span>
+                      </>
+                    )}
+                  </button>
+                </form>
+              </div>
+            </div>
+
+            {/* Listado y Administración de Bancos */}
+            <div className="lg:col-span-2">
+              <div className="bg-white rounded-3xl border border-slate-200/80 shadow-sm overflow-hidden">
+                <div className="p-5 sm:p-6 border-b border-slate-100 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                  <div>
+                    <h3 className="text-sm font-bold text-slate-900">Entidades Registradas ({bancos.length})</h3>
+                    <p className="text-xs text-slate-500 mt-0.5">Active, desactive o modifique las instituciones financieras</p>
+                  </div>
+
+                  <div className="relative w-full sm:w-64">
+                    <Search className="w-4 h-4 text-slate-400 absolute left-3 top-3 pointer-events-none" />
+                    <input
+                      type="text"
+                      placeholder="Buscar por nombre..."
+                      value={filtroBancos}
+                      onChange={(e) => setFiltroBancos(e.target.value)}
+                      className="w-full pl-9 pr-3 py-2 rounded-xl border border-slate-200 text-xs font-medium text-slate-800 bg-slate-50/50 focus:bg-white focus:outline-hidden focus:ring-2 focus:ring-blue-500 transition-all placeholder:text-slate-400"
+                    />
+                  </div>
+                </div>
+
+                {isLoadingBancos ? (
+                  <div className="p-12 text-center text-slate-400 flex flex-col items-center justify-center gap-2">
+                    <RefreshCw className="w-6 h-6 animate-spin text-blue-500" />
+                    <span className="text-xs font-semibold">Cargando catálogo bancario...</span>
+                  </div>
+                ) : (
+                  <div className="divide-y divide-slate-100">
+                    {bancos
+                      .filter((b) => b.nombre.toLowerCase().includes(filtroBancos.toLowerCase()))
+                      .map((banco) => (
+                        <div
+                          key={banco.id}
+                          className="p-4 sm:px-6 flex items-center justify-between gap-4 hover:bg-slate-50/70 transition-colors"
+                        >
+                          <div className="flex items-center gap-3.5 min-w-0">
+                            <div
+                              className={cn(
+                                'w-9 h-9 rounded-xl flex items-center justify-center font-bold text-xs shrink-0',
+                                banco.activa
+                                  ? 'bg-blue-50 text-blue-700 border border-blue-200/60'
+                                  : 'bg-slate-100 text-slate-400 border border-slate-200'
+                              )}
+                            >
+                              <Landmark className="w-4 h-4" />
+                            </div>
+                            <div className="min-w-0">
+                              <p className={cn('text-sm font-bold truncate', banco.activa ? 'text-slate-900' : 'text-slate-400 line-through')}>
+                                {banco.nombre}
+                              </p>
+                              <div className="flex items-center gap-2 mt-0.5">
+                                <span
+                                  className={cn(
+                                    'inline-flex items-center gap-1 text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-full border',
+                                    banco.activa
+                                      ? 'bg-emerald-50 text-emerald-700 border-emerald-200/60'
+                                      : 'bg-slate-100 text-slate-500 border-slate-200'
+                                  )}
+                                >
+                                  <span className={cn('w-1.5 h-1.5 rounded-full', banco.activa ? 'bg-emerald-500' : 'bg-slate-400')} />
+                                  {banco.activa ? 'Activa' : 'Inactiva'}
+                                </span>
+                              </div>
+                            </div>
+                          </div>
+
+                          <div className="flex items-center gap-2 shrink-0">
+                            <button
+                              type="button"
+                              onClick={() => handleToggleEstadoBanco(banco)}
+                              className={cn(
+                                'px-3 py-1.5 rounded-xl text-xs font-semibold border transition-all cursor-pointer',
+                                banco.activa
+                                  ? 'bg-amber-50 text-amber-700 border-amber-200 hover:bg-amber-100'
+                                  : 'bg-emerald-50 text-emerald-700 border-emerald-200 hover:bg-emerald-100'
+                              )}
+                              title={banco.activa ? 'Desactivar esta entidad' : 'Activar esta entidad'}
+                            >
+                              {banco.activa ? 'Desactivar' : 'Activar'}
+                            </button>
+
+                            <button
+                              type="button"
+                              onClick={() => setBancoEditando({ ...banco })}
+                              className="p-2 rounded-xl text-slate-400 hover:text-slate-700 hover:bg-slate-100 border border-transparent hover:border-slate-200 transition-all cursor-pointer"
+                              title="Modificar nombre de la entidad"
+                            >
+                              <Edit2 className="w-4 h-4" />
+                            </button>
+
+                            <button
+                              type="button"
+                              disabled={isEliminandoBancoId === banco.id}
+                              onClick={() => handleEliminarBanco(banco)}
+                              className="p-2 rounded-xl text-rose-400 hover:text-rose-600 hover:bg-rose-50 border border-transparent hover:border-rose-200 transition-all cursor-pointer disabled:opacity-50"
+                              title="Eliminar entidad"
+                            >
+                              {isEliminandoBancoId === banco.id ? (
+                                <RefreshCw className="w-4 h-4 animate-spin text-rose-500" />
+                              ) : (
+                                <Trash2 className="w-4 h-4" />
+                              )}
+                            </button>
+                          </div>
+                        </div>
+                      ))}
+
+                    {bancos.filter((b) => b.nombre.toLowerCase().includes(filtroBancos.toLowerCase())).length === 0 && (
+                      <div className="p-8 text-center text-slate-400 text-xs">
+                        No se encontraron entidades bancarias con el término "{filtroBancos}".
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+
+          {/* Modal Edición de Entidad Bancaria */}
+          {bancoEditando && (
+            <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/50 backdrop-blur-xs animate-in fade-in">
+              <div className="bg-white rounded-3xl max-w-md w-full border border-slate-200 shadow-2xl p-6 space-y-4">
+                <div className="flex items-center justify-between pb-3 border-b border-slate-100">
+                  <div className="flex items-center gap-2.5">
+                    <div className="w-8 h-8 rounded-xl bg-blue-50 text-blue-600 flex items-center justify-center">
+                      <Edit2 className="w-4 h-4" />
+                    </div>
+                    <h4 className="text-sm font-bold text-slate-900">Editar Entidad Bancaria</h4>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setBancoEditando(null)}
+                    className="p-1 rounded-lg text-slate-400 hover:text-slate-600 hover:bg-slate-100 transition-colors cursor-pointer"
+                  >
+                    <X className="w-4 h-4" />
+                  </button>
+                </div>
+
+                <form onSubmit={handleGuardarEdicionBanco} className="space-y-4">
+                  <div>
+                    <label className="block text-xs font-bold uppercase tracking-wider text-slate-700 mb-1.5">
+                      Nombre Oficial *
+                    </label>
+                    <input
+                      type="text"
+                      required
+                      value={bancoEditando.nombre}
+                      onChange={(e) => setBancoEditando({ ...bancoEditando, nombre: e.target.value })}
+                      className="w-full px-4 py-2.5 rounded-xl border border-slate-200 text-sm font-medium text-slate-900 focus:outline-hidden focus:ring-2 focus:ring-blue-500 transition-all"
+                    />
+                  </div>
+
+                  <div className="flex items-center gap-3 p-3 rounded-2xl bg-slate-50 border border-slate-200/80">
+                    <input
+                      type="checkbox"
+                      id="banco_activa_edit"
+                      checked={bancoEditando.activa}
+                      onChange={(e) => setBancoEditando({ ...bancoEditando, activa: e.target.checked })}
+                      className="w-4 h-4 text-blue-600 rounded border-slate-300 focus:ring-blue-500 cursor-pointer"
+                    />
+                    <label htmlFor="banco_activa_edit" className="text-xs font-medium text-slate-700 cursor-pointer">
+                      Habilitar entidad para ventas y cobros (Activa)
+                    </label>
+                  </div>
+
+                  <div className="flex items-center justify-end gap-3 pt-2">
+                    <button
+                      type="button"
+                      onClick={() => setBancoEditando(null)}
+                      className="px-4 py-2 rounded-xl text-xs font-semibold text-slate-600 hover:bg-slate-100 transition-colors cursor-pointer"
+                    >
+                      Cancelar
+                    </button>
+                    <button
+                      type="submit"
+                      disabled={isGuardandoEdicionBanco || !bancoEditando.nombre.trim()}
+                      className="px-4 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold shadow-sm transition-all flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+                    >
+                      {isGuardandoEdicionBanco ? (
+                        <>
+                          <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                          <span>Guardando...</span>
+                        </>
+                      ) : (
+                        <span>Guardar Cambios</span>
+                      )}
+                    </button>
+                  </div>
+                </form>
+              </div>
+            </div>
+          )}
         </div>
       )}
 

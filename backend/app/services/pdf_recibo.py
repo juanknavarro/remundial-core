@@ -570,6 +570,15 @@ def generar_pdf_recibo_venta(credito: Credito) -> bytes:
         leading=9.5,
         textColor=c_text,
     )
+    style_ref_wrap = ParagraphStyle(
+        "ReciboRefWrap",
+        parent=base_styles["Normal"],
+        fontName="Helvetica-Bold",
+        fontSize=7,
+        leading=8.5,
+        textColor=c_primary,
+        wordWrap="CJK",
+    )
     style_badge_encargo = ParagraphStyle(
         "ReciboBadgeEncargo",
         parent=base_styles["Normal"],
@@ -927,26 +936,58 @@ def generar_pdf_recibo_venta(credito: Credito) -> bytes:
         Paragraph("<font size='6.5' color='#64748B'>Precio total acordado</font>", style_company_sub),
     ]
 
-    color_inicial_bg = c_emerald_bg if cuota_inicial_val > Decimal("0.00") else c_slate_bg
-    summary_card_2 = [
-        Paragraph("CUOTA INICIAL (ANTICIPO)", style_card_label),
+    # Extracción de método de pago inicial, banco y referencia
+    metodo_raw = (getattr(credito, "metodo_pago_inicial", None) or "Efectivo").strip()
+    metodo_lower = metodo_raw.lower()
+    banco_inicial = (getattr(credito, "banco_transferencia", None) or "").strip()
+    referencia_inicial = (getattr(credito, "referencia_pago_inicial", None) or "").strip()
+    monto_inicial_efe = Decimal(str(getattr(credito, "monto_inicial_efectivo", None) or 0))
+    monto_inicial_trans = Decimal(str(getattr(credito, "monto_inicial_transferencia", None) or 0))
+
+    # Tarjetas de resumen financiero (4 bloques)
+    summary_card_1 = [
+        Paragraph("VALOR TOTAL OPERACIÓN", style_card_label),
         Spacer(1, 2),
-        Paragraph(f"<font color='#059669'><b>{format_cop(cuota_inicial_val)}</b></font>", style_title),
-        Paragraph("<font size='6.5' color='#059669'>Recibido en caja</font>" if cuota_inicial_val > 0 else "<font size='6.5' color='#64748B'>Sin anticipo</font>", style_company_sub),
+        Paragraph(f"<b>{format_cop(valor_total_venta)}</b>", style_title),
+        Paragraph("<font size='6.5' color='#64748B'>Precio total acordado</font>", style_company_sub),
+    ]
+
+    card_2_label = "PAGO TOTAL (CONTADO)" if es_contado else "CUOTA INICIAL (ANTICIPO)"
+    card_2_monto = valor_total_venta if es_contado and cuota_inicial_val <= Decimal("0.00") else cuota_inicial_val
+
+    if cuota_inicial_val <= Decimal("0.00") and not es_contado:
+        card_2_sub = "<font size='6.5' color='#64748B'>Sin anticipo</font>"
+        color_inicial_bg = c_slate_bg
+    elif metodo_lower == "transferencia":
+        color_inicial_bg = colors.HexColor("#EFF6FF")
+        b_tag = f" • {banco_inicial}" if banco_inicial else ""
+        card_2_sub = f"<font size='6.5' color='#0284C7'>Transferencia{b_tag}</font>"
+    elif metodo_lower == "mixto":
+        color_inicial_bg = colors.HexColor("#FFFBEB")
+        card_2_sub = "<font size='6.5' color='#D97706'>Pago Mixto (Efe + Transf)</font>"
+    else:
+        color_inicial_bg = c_emerald_bg
+        card_2_sub = "<font size='6.5' color='#059669'>Recibido en caja (Efectivo)</font>"
+
+    summary_card_2 = [
+        Paragraph(card_2_label, style_card_label),
+        Spacer(1, 2),
+        Paragraph(f"<font color='#059669'><b>{format_cop(card_2_monto)}</b></font>", style_title),
+        Paragraph(card_2_sub, style_company_sub),
     ]
 
     summary_card_3 = [
         Paragraph("SALDO FINANCIADO", style_card_label),
         Spacer(1, 2),
         Paragraph(f"<b>{format_cop(monto_financiado_val)}</b>", style_title),
-        Paragraph(f"<font size='6.5' color='#64748B'>{credito.numero_cuotas} cuotas periódicas</font>", style_company_sub),
+        Paragraph(f"<font size='6.5' color='#64748B'>{credito.numero_cuotas} cuotas periódicas</font>" if not es_contado else "<font size='6.5' color='#64748B'>Sin deuda pendiente</font>", style_company_sub),
     ]
 
     summary_card_4 = [
         Paragraph("VALOR CUOTA MENSUAL", style_card_label),
         Spacer(1, 2),
         Paragraph(f"<font color='#0F172A'><b>{format_cop(valor_cuota_val)}</b></font>", style_title),
-        Paragraph("<font size='6.5' color='#64748B'>Vencimiento a fin de mes</font>", style_company_sub),
+        Paragraph("<font size='6.5' color='#64748B'>Vencimiento a fin de mes</font>" if not es_contado else "<font size='6.5' color='#64748B'>Liquidado en 1 pago</font>", style_company_sub),
     ]
 
     cards_table = Table(
@@ -971,7 +1012,138 @@ def generar_pdf_recibo_venta(credito: Credito) -> bytes:
         )
     )
     story.append(cards_table)
-    story.append(Spacer(1, 8))
+    story.append(Spacer(1, 4 if not es_contado and monto_financiado_val > 0 else 8))
+
+    # 5.1 COMPROBANTE Y DESGLOSE DE PAGO INICIAL / CONTADO
+    if es_contado or cuota_inicial_val > Decimal("0.00"):
+        heading_pago_txt = (
+            "COMPROBANTE DE LIQUIDACIÓN Y PAGO DE CONTADO"
+            if es_contado
+            else "COMPROBANTE Y DESGLOSE DE CUOTA INICIAL (ANTICIPO)"
+        )
+        pago_heading = Table(
+            [[Paragraph(f"<b>{heading_pago_txt}</b>", style_section_heading)]],
+            colWidths=[548],
+        )
+        pago_heading.setStyle(
+            TableStyle(
+                [
+                    ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#F1F5F9")),
+                    ("LEFTPADDING", (0, 0), (-1, -1), 6),
+                    ("TOPPADDING", (0, 0), (-1, -1), 3),
+                    ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
+                ]
+            )
+        )
+        story.append(pago_heading)
+        story.append(Spacer(1, 2))
+
+        trans_list = getattr(credito, "transferencias", None) or []
+        if trans_list and len(trans_list) > 0:
+            pago_rows = [
+                [
+                    Paragraph("<b>Modalidad</b>", style_table_header),
+                    Paragraph("<b>Entidad Receptora</b>", style_table_header),
+                    Paragraph("<b>No. Referencia / Comprobante</b>", style_table_header),
+                    Paragraph("<b>Monto Acreditado</b>", style_table_header),
+                    Paragraph("<b>Certificación</b>", style_table_header),
+                ]
+            ]
+            if metodo_lower == "mixto" and monto_inicial_efe > Decimal("0.00"):
+                pago_rows.append([
+                    Paragraph("Efectivo en Caja", style_table_cell),
+                    Paragraph("Caja General / POS", style_table_cell),
+                    Paragraph("Comprobante Físico", style_ref_wrap),
+                    Paragraph(f"<b>{format_cop(monto_inicial_efe)}</b>", style_table_cell_bold),
+                    Paragraph("<font color='#059669'><b>RECIBIDO EN CAJA</b></font>", style_table_cell),
+                ])
+            for idx_t, t in enumerate(trans_list, 1):
+                pago_rows.append([
+                    Paragraph(f"Transferencia #{idx_t}" if len(trans_list) > 1 else "Transferencia Bancaria", style_table_cell),
+                    Paragraph(f"<b>{t.entidad_bancaria}</b>", style_table_cell),
+                    Paragraph(t.referencia_pago, style_ref_wrap),
+                    Paragraph(f"<b>{format_cop(t.monto)}</b>", style_table_cell_bold),
+                    Paragraph("<font color='#059669'><b>VALIDADO EN LÍNEA</b></font>", style_table_cell),
+                ])
+            suma_transf_vta = sum(Decimal(str(getattr(t, "monto", 0) or 0)) for t in trans_list)
+            efectivo_vta = monto_inicial_efe if metodo_lower == "mixto" else Decimal("0.00")
+            total_pagado_vta = efectivo_vta + suma_transf_vta
+            pago_rows.append([
+                Paragraph(f"<b>Total Pagado: {format_cop(total_pagado_vta)} COP (Efectivo: {format_cop(efectivo_vta)} + Transferencias: {format_cop(suma_transf_vta)})</b>", style_table_cell_bold),
+                "", "", "", ""
+            ])
+            pago_table = Table(pago_rows, colWidths=[110, 115, 135, 95, 93])
+        elif metodo_lower == "transferencia":
+            pago_rows = [
+                [
+                    Paragraph("<b>Modalidad</b>", style_table_header),
+                    Paragraph("<b>Entidad Receptora</b>", style_table_header),
+                    Paragraph("<b>No. Referencia / Aprobación</b>", style_table_header),
+                    Paragraph("<b>Monto Acreditado</b>", style_table_header),
+                    Paragraph("<b>Certificación</b>", style_table_header),
+                ],
+                [
+                    Paragraph("Transferencia Bancaria", style_table_cell),
+                    Paragraph(f"<b>{banco_inicial or 'Bancario General'}</b>", style_table_cell),
+                    Paragraph(referencia_inicial or "Sin Referencia", style_ref_wrap),
+                    Paragraph(f"<b>{format_cop(card_2_monto)}</b>", style_table_cell_bold),
+                    Paragraph("<font color='#059669'><b>VALIDADO EN LÍNEA</b></font>", style_table_cell),
+                ],
+            ]
+            pago_table = Table(pago_rows, colWidths=[100, 115, 145, 95, 93])
+        elif metodo_lower == "mixto":
+            pago_rows = [
+                [
+                    Paragraph("<b>Modalidad</b>", style_table_header),
+                    Paragraph("<b>Efectivo Físico</b>", style_table_header),
+                    Paragraph("<b>Transferencia</b>", style_table_header),
+                    Paragraph("<b>Entidad Bancaria</b>", style_table_header),
+                    Paragraph("<b>No. Referencia</b>", style_table_header),
+                ],
+                [
+                    Paragraph("Mixto (Efe + Transf)", style_table_cell),
+                    Paragraph(f"<font color='#059669'><b>{format_cop(monto_inicial_efe)}</b></font>", style_table_cell),
+                    Paragraph(f"<font color='#0284C7'><b>{format_cop(monto_inicial_trans)}</b></font>", style_table_cell),
+                    Paragraph(f"<b>{banco_inicial or 'Bancario General'}</b>", style_table_cell),
+                    Paragraph(referencia_inicial or "Sin Referencia", style_ref_wrap),
+                ],
+            ]
+            pago_table = Table(pago_rows, colWidths=[95, 105, 105, 115, 128])
+        else:
+            pago_rows = [
+                [
+                    Paragraph("<b>Modalidad</b>", style_table_header),
+                    Paragraph("<b>Destino de Fondos</b>", style_table_header),
+                    Paragraph("<b>Monto en Efectivo</b>", style_table_header),
+                    Paragraph("<b>Concepto de Recepción</b>", style_table_header),
+                ],
+                [
+                    Paragraph("Efectivo en Caja", style_table_cell),
+                    Paragraph("Caja General / POS", style_table_cell),
+                    Paragraph(f"<font color='#059669'><b>{format_cop(card_2_monto)}</b></font>", style_table_cell_bold),
+                    Paragraph("Fondos recibidos a satisfacción en taquilla al momento de la venta.", style_table_cell),
+                ],
+            ]
+            pago_table = Table(pago_rows, colWidths=[110, 110, 110, 218])
+
+        pago_table_styles = [
+            ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#1E293B")),
+            ("BOX", (0, 0), (-1, -1), 0.5, c_border),
+            ("INNERGRID", (0, 0), (-1, -1), 0.5, c_border),
+            ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+            ("TOPPADDING", (0, 0), (-1, -1), 3),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
+            ("LEFTPADDING", (0, 0), (-1, -1), 5),
+            ("RIGHTPADDING", (0, 0), (-1, -1), 5),
+        ]
+        if trans_list and len(trans_list) > 0:
+            pago_table_styles.extend([
+                ("SPAN", (0, -1), (-1, -1)),
+                ("BACKGROUND", (0, -1), (-1, -1), colors.HexColor("#F1F5F9")),
+            ])
+        pago_table.setStyle(TableStyle(pago_table_styles))
+        story.append(pago_table)
+        story.append(Spacer(1, 4 if not es_contado and monto_financiado_val > 0 else 8))
 
     # 6. PLAN DE PAGOS MENSUAL O INHABILITACIÓN POR RECHAZO
     if es_rechazado:
@@ -1084,7 +1256,7 @@ def generar_pdf_recibo_venta(credito: Credito) -> bytes:
             )
         )
         story.append(cron_table)
-        story.append(Spacer(1, 8))
+        story.append(Spacer(1, 4))
 
     # 7. CLÁUSULAS CONTRACTUALES GENERALES RESUMIDAS (CONFIGURABLES)
     clausulas_texto = formatear_texto_reportlab(cfg_pdf.get("clausulas_venta"))
@@ -1100,8 +1272,8 @@ def generar_pdf_recibo_venta(credito: Credito) -> bytes:
                 ("BOX", (0, 0), (-1, -1), 0.5, c_border),
                 ("LEFTPADDING", (0, 0), (-1, -1), 8),
                 ("RIGHTPADDING", (0, 0), (-1, -1), 8),
-                ("TOPPADDING", (0, 0), (-1, -1), 5),
-                ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
+                ("TOPPADDING", (0, 0), (-1, -1), 4),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
             ]
         )
     )
@@ -1110,7 +1282,7 @@ def generar_pdf_recibo_venta(credito: Credito) -> bytes:
     # Empaquetado en KeepTogether para asegurar que las firmas nunca queden huérfanas
     firmas_block = []
     firmas_block.append(clausulas_table)
-    firmas_block.append(Spacer(1, 10))
+    firmas_block.append(Spacer(1, 6))
 
     # Cargar firmas digitales capturadas si existen
     firma_titular_b64 = (
@@ -1302,6 +1474,15 @@ def generar_pdf_recibo_abono(
         leading=10,
         textColor=c_text,
     )
+    style_ref_wrap = ParagraphStyle(
+        "AbonoRefWrap",
+        parent=base_styles["Normal"],
+        fontName="Helvetica",
+        fontSize=7,
+        leading=8.5,
+        textColor=c_text,
+        wordWrap="CJK",
+    )
     style_amount_big = ParagraphStyle(
         "AbonoAmountBig",
         parent=base_styles["Normal"],
@@ -1372,7 +1553,12 @@ def generar_pdf_recibo_abono(
         estado_color = "#0284C7"
 
     valor_abonado_val = Decimal(str(getattr(abono, "valor_abonado", 0) or 0))
-    metodo_pago_str = (getattr(abono, "metodo_pago", None) or "efectivo").upper()
+    metodo_raw = (getattr(abono, "metodo_pago", None) or "efectivo").lower().strip()
+    metodo_pago_str = metodo_raw.upper()
+    banco_abono = (getattr(abono, "banco_transferencia", None) or "").strip()
+    referencia_abono = (getattr(abono, "referencia_pago", None) or "").strip()
+    monto_efe_abono = Decimal(str(getattr(abono, "monto_efectivo", None) or 0))
+    monto_trans_abono = Decimal(str(getattr(abono, "monto_transferencia", None) or 0))
 
     # Resolver Participantes
     credito = getattr(abono, "credito", None)
@@ -1478,12 +1664,32 @@ def generar_pdf_recibo_abono(
         ),
     ]
 
+    if metodo_raw == "transferencia":
+        b_str = f" - {banco_abono}" if banco_abono else ""
+        ref_str = f" (Ref: {referencia_abono})" if referencia_abono else ""
+        medio_pago_line = f"<b>Medio de Pago:</b> Transferencia{b_str}{ref_str}"
+        metodo_liquidado_cobrador = f"Transferencia Bancaria ({banco_abono or 'General'})"
+    elif metodo_raw == "mixto":
+        detalles_mix = []
+        if monto_efe_abono > 0:
+            detalles_mix.append(f"Efe: {format_cop(monto_efe_abono)}")
+        if monto_trans_abono > 0:
+            b_str = f" [{banco_abono}]" if banco_abono else ""
+            detalles_mix.append(f"Trans: {format_cop(monto_trans_abono)}{b_str}")
+        ref_str = f" Ref: {referencia_abono}" if referencia_abono else ""
+        desc_mix = " + ".join(detalles_mix) if detalles_mix else "Efectivo + Transferencia"
+        medio_pago_line = f"<b>Medio de Pago:</b> Mixto ({desc_mix}{ref_str})"
+        metodo_liquidado_cobrador = f"Pago Mixto (Efectivo + Transf. {banco_abono or 'General'})"
+    else:
+        medio_pago_line = "<b>Medio de Pago:</b> Efectivo en Caja"
+        metodo_liquidado_cobrador = "Efectivo en Terreno"
+
     meta_header_lines = [
         f"<b>Contrato Asociado:</b> {codigo_ctr}",
         f"<b>Modalidad de Recaudo:</b> <font color='{tipo_badge_color}'><b>{tipo_recibo_badge}</b></font>",
         f"<b>Fecha de Recaudo:</b> {fecha_abono_str}",
         f"<b>Cobrador en Ruta:</b> {cobrador_nombre}",
-        f"<b>Medio de Pago:</b> {metodo_pago_str}",
+        medio_pago_line,
         f"<b>Estado Caja:</b> <font color='{estado_color}'><b>{estado_label}</b></font>",
     ]
 
@@ -1533,7 +1739,7 @@ def generar_pdf_recibo_abono(
             f"<b>Cobrador / Receptor:</b> {cobrador_nombre}<br/>"
             f"<b>Teléfono / Contacto:</b> {cobrador_tel}<br/>"
             f"<b>Modalidad de Recaudo:</b> En Terreno / Ruta Asignada<br/>"
-            f"<b>Método Liquidado:</b> {metodo_pago_str}<br/>"
+            f"<b>Método Liquidado:</b> {metodo_liquidado_cobrador}<br/>"
             f"<b>Certificación:</b> Recaudo con verificación digital auditada",
             style_card_value,
         ),
@@ -1754,6 +1960,19 @@ def generar_pdf_recibo_abono(
         else f"Pago Total Cuota #{cuota_afectada_num}"
     )
 
+    if metodo_raw == "transferencia":
+        forma_pago_cell = Paragraph(
+            f"<b>Transferencia</b><br/><font size='6.5' color='#0284C7'>{banco_abono or 'Bancario General'}</font><br/><font size='6' color='#475569'>Ref: {referencia_abono or 'S/R'}</font>",
+            style_ref_wrap,
+        )
+    elif metodo_raw == "mixto":
+        forma_pago_cell = Paragraph(
+            f"<b>Mixto</b><br/><font size='6' color='#059669'>Efe: {format_cop(monto_efe_abono)}</font><br/><font size='6' color='#0284C7'>{banco_abono or 'Transf'}: {format_cop(monto_trans_abono)}</font><br/><font size='6' color='#475569'>Ref: {referencia_abono or 'S/R'}</font>",
+            style_ref_wrap,
+        )
+    else:
+        forma_pago_cell = Paragraph("<b>Efectivo</b><br/><font size='6.5' color='#059669'>En Caja / Terreno</font>", style_card_value)
+
     detalles_pago = [
         [
             Paragraph("<b>Concepto</b>", style_card_label),
@@ -1765,12 +1984,12 @@ def generar_pdf_recibo_abono(
         [
             Paragraph(concepto_str, style_card_value),
             Paragraph(f"Contrato {codigo_ctr}", style_card_value),
-            Paragraph(metodo_pago_str, style_card_value),
+            forma_pago_cell,
             Paragraph(f"<font color='{'#DC2626' if es_abono_parcial else '#64748B'}'>{format_cop(saldo_insoluto_val)}</font>", style_card_value),
             Paragraph(f"<b>{format_cop(valor_abonado_val)}</b>", style_card_value),
         ],
     ]
-    detalles_table = Table(detalles_pago, colWidths=[155, 100, 95, 100, 98])
+    detalles_table = Table(detalles_pago, colWidths=[140, 95, 125, 95, 93])
     detalles_table.setStyle(
         TableStyle(
             [
@@ -1787,7 +2006,79 @@ def generar_pdf_recibo_abono(
         )
     )
     story.append(detalles_table)
-    story.append(Spacer(1, 8))
+    story.append(Spacer(1, 4))
+
+    # Desglose de múltiples comprobantes de transferencia si aplican (Hito 3)
+    abono_trans_list = getattr(abono, "transferencias", None) or []
+    if abono_trans_list and len(abono_trans_list) > 0:
+        trans_heading = Table(
+            [[Paragraph("<b>COMPROBANTES Y DESGLOSE DE TRANSFERENCIAS (PAGOS DIVIDIDOS)</b>", style_section_heading)]],
+            colWidths=[548],
+        )
+        trans_heading.setStyle(
+            TableStyle(
+                [
+                    ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#F1F5F9")),
+                    ("LEFTPADDING", (0, 0), (-1, -1), 6),
+                    ("TOPPADDING", (0, 0), (-1, -1), 3),
+                    ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
+                ]
+            )
+        )
+        story.append(trans_heading)
+        story.append(Spacer(1, 2))
+
+        trans_rows = [
+            [
+                Paragraph("<b>Modalidad</b>", style_card_label),
+                Paragraph("<b>Entidad Bancaria</b>", style_card_label),
+                Paragraph("<b>No. Referencia / Comprobante</b>", style_card_label),
+                Paragraph("<b>Monto Acreditado</b>", style_card_label),
+                Paragraph("<b>Certificación</b>", style_card_label),
+            ]
+        ]
+        if metodo_raw == "mixto" and monto_efe_abono > Decimal("0.00"):
+            trans_rows.append([
+                Paragraph("Efectivo en Terreno", style_card_value),
+                Paragraph("Cobro en Ruta", style_card_value),
+                Paragraph("Comprobante Físico", style_ref_wrap),
+                Paragraph(f"<b>{format_cop(monto_efe_abono)}</b>", style_card_value),
+                Paragraph("<font color='#059669'><b>RECIBIDO</b></font>", style_card_value),
+            ])
+        for idx_at, at in enumerate(abono_trans_list, 1):
+            trans_rows.append([
+                Paragraph(f"Transferencia #{idx_at}" if len(abono_trans_list) > 1 else "Transferencia Bancaria", style_card_value),
+                Paragraph(f"<b>{at.entidad_bancaria}</b>", style_card_value),
+                Paragraph(at.referencia_pago, style_ref_wrap),
+                Paragraph(f"<b>{format_cop(at.monto)}</b>", style_card_value),
+                Paragraph("<font color='#059669'><b>VALIDADO EN LÍNEA</b></font>", style_card_value),
+            ])
+        suma_transf_abn = sum(Decimal(str(getattr(at, "monto", 0) or 0)) for at in abono_trans_list)
+        efectivo_abn = monto_efe_abono if metodo_raw == "mixto" else Decimal("0.00")
+        total_pagado_abn = efectivo_abn + suma_transf_abn
+        trans_rows.append([
+            Paragraph(f"<b>Total Pagado: {format_cop(total_pagado_abn)} COP (Efectivo: {format_cop(efectivo_abn)} + Transferencias: {format_cop(suma_transf_abn)})</b>", style_card_value),
+            "", "", "", ""
+        ])
+        abono_trans_table = Table(trans_rows, colWidths=[110, 115, 135, 95, 93])
+        abono_trans_table.setStyle(
+            TableStyle(
+                [
+                    ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#F8FAFC")),
+                    ("BOX", (0, 0), (-1, -1), 0.5, c_border),
+                    ("INNERGRID", (0, 0), (-1, -1), 0.5, c_border),
+                    ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+                    ("TOPPADDING", (0, 0), (-1, -1), 3),
+                    ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
+                    ("LEFTPADDING", (0, 0), (-1, -1), 5),
+                    ("RIGHTPADDING", (0, 0), (-1, -1), 5),
+                    ("SPAN", (0, -1), (-1, -1)),
+                    ("BACKGROUND", (0, -1), (-1, -1), colors.HexColor("#F1F5F9")),
+                ]
+            )
+        )
+        story.append(abono_trans_table)
+        story.append(Spacer(1, 6))
 
     # 6. DECLARACIÓN DE VALIDEZ LEGAL (CONFIGURABLE)
     legal_text = formatear_texto_reportlab(cfg_pdf.get("certificacion_recaudo"))

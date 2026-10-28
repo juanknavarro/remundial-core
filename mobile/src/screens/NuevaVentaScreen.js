@@ -15,6 +15,7 @@ import {
   AppState,
   Linking,
   Switch,
+  Modal,
 } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import apiClient, { STORAGE_KEYS as AUTH_STORAGE_KEYS } from '../api/client';
@@ -23,6 +24,7 @@ import { useSync } from '../context/SyncContext';
 import InFrameModal from '../components/InFrameModal';
 import SignatureCanvas from '../components/SignatureCanvas';
 import CitySelectorModal, { inferirDepartamento } from '../components/CitySelectorModal';
+import BankSelectorModal from '../components/BankSelectorModal';
 import ProductCard from '../components/ProductCard';
 import {
   guardarBorradorVenta,
@@ -133,8 +135,31 @@ const calcularCronogramaCuotas = (fechaInicialStr, numCuotas, frecuencia = 'mens
 };
 
 export default function NuevaVentaScreen({ route, navigation }) {
-  const { user, userRole, token: authToken } = useAuth();
-  const { encolarVenta, isOnline } = useSync();
+  const { user, userRole, token: authToken, logout } = useAuth();
+  const { encolarVenta, isOnline, bancos } = useSync();
+
+  // Estado y helper para el modal universal de alertas (Web + Mobile)
+  const [modalAlerta, setModalAlerta] = useState({
+    visible: false,
+    titulo: '',
+    mensaje: '',
+    tipo: 'warning', // 'warning' | 'error' | 'success' | 'info'
+    botones: [],
+  });
+
+  const mostrarAlertaUniversal = (titulo, mensaje, botones = null, tipo = 'warning') => {
+    const botonesEfectivos = (Array.isArray(botones) && botones.length > 0)
+      ? botones
+      : [{ text: 'Entendido', onPress: () => setModalAlerta((prev) => ({ ...prev, visible: false })) }];
+
+    setModalAlerta({
+      visible: true,
+      titulo: titulo || 'Aviso del Sistema',
+      mensaje: typeof mensaje === 'string' ? mensaje : JSON.stringify(mensaje),
+      tipo,
+      botones: botonesEfectivos,
+    });
+  };
 
   // Estados de datos maestros
   const [clientes, setClientes] = useState([]);
@@ -178,6 +203,17 @@ export default function NuevaVentaScreen({ route, navigation }) {
 
   // Pagos Mixtos en Cuota Inicial
   const [metodoPagoInicial, setMetodoPagoInicial] = useState('Efectivo');
+  const [bancoTransferencia, setBancoTransferencia] = useState('');
+  const [modalBancoVisible, setModalBancoVisible] = useState(false);
+  const [compEditandoBancoId, setCompEditandoBancoId] = useState(null);
+  const [comprobantes, setComprobantes] = useState([
+    { id: '1', banco: '', referencia: '', monto: '' }
+  ]);
+  const [focusedVoucherId, setFocusedVoucherId] = useState(null);
+  const [errorReferenciaDuplicada, setErrorReferenciaDuplicada] = useState(null);
+  const [modalConfirmarLimpiar, setModalConfirmarLimpiar] = useState(false);
+  const [modalEliminarTransfVisible, setModalEliminarTransfVisible] = useState(false);
+  const [transfAEliminarId, setTransfAEliminarId] = useState(null);
   const [montoEfectivoInput, setMontoEfectivoInput] = useState('');
   const [montoTransferenciaInput, setMontoTransferenciaInput] = useState('');
   const [referenciaPagoInicial, setReferenciaPagoInicial] = useState('');
@@ -264,6 +300,11 @@ export default function NuevaVentaScreen({ route, navigation }) {
     setTipoPago('mensual');
     setCuotaInicialInput('0');
     setMetodoPagoInicial('Efectivo');
+    setBancoTransferencia('');
+    setComprobantes([{ id: '1', banco: '', referencia: '', monto: '' }]);
+    setCompEditandoBancoId(null);
+    setErrorReferenciaDuplicada(null);
+    setModalConfirmarLimpiar(false);
     setMontoEfectivoInput('');
     setMontoTransferenciaInput('');
     setReferenciaPagoInicial('');
@@ -336,9 +377,11 @@ export default function NuevaVentaScreen({ route, navigation }) {
           const manejaStock = p.maneja_stock !== false;
           const stockDisp = p.stock != null ? Number(p.stock) : 0;
           if (manejaStock && stockDisp <= 0) {
-            Alert.alert(
+            mostrarAlertaUniversal(
               'Artículo Agotado en Bodega',
-              `El producto "${p.nombre}" (SKU: ${p.sku}) no cuenta con existencias disponibles en almacén.`
+              `El producto "${p.nombre}" (SKU: ${p.sku}) no cuenta con existencias disponibles en almacén.`,
+              null,
+              'warning'
             );
           } else {
             setItemsVenta([crearItemVentaDesdeProducto(p)]);
@@ -371,9 +414,11 @@ export default function NuevaVentaScreen({ route, navigation }) {
             const manejaStock = p.maneja_stock !== false;
             const stockDisp = p.stock != null ? Number(p.stock) : 0;
             if (manejaStock && stockDisp <= 0) {
-              Alert.alert(
+              mostrarAlertaUniversal(
                 'Artículo Agotado en Bodega',
-                `El producto "${p.nombre}" (SKU: ${p.sku}) no cuenta con existencias disponibles en almacén.`
+                `El producto "${p.nombre}" (SKU: ${p.sku}) no cuenta con existencias disponibles en almacén.`,
+                null,
+                'warning'
               );
             } else {
               setItemsVenta([crearItemVentaDesdeProducto(p)]);
@@ -464,9 +509,11 @@ export default function NuevaVentaScreen({ route, navigation }) {
           const manejaStock = p.maneja_stock !== false;
           const stockDisp = p.stock != null ? Number(p.stock) : 0;
           if (manejaStock && stockDisp <= 0) {
-            Alert.alert(
+            mostrarAlertaUniversal(
               'Artículo Agotado en Bodega',
-              `El producto "${p.nombre}" (SKU: ${p.sku}) no cuenta con existencias disponibles en almacén.`
+              `El producto "${p.nombre}" (SKU: ${p.sku}) no cuenta con existencias disponibles en almacén.`,
+              null,
+              'warning'
             );
           } else {
             setItemsVenta([crearItemVentaDesdeProducto(p)]);
@@ -514,6 +561,7 @@ export default function NuevaVentaScreen({ route, navigation }) {
         if (draft.tipoPago) setTipoPago(draft.tipoPago);
         if (draft.cuotaInicialInput) setCuotaInicialInput(draft.cuotaInicialInput);
         if (draft.metodoPagoInicial) setMetodoPagoInicial(draft.metodoPagoInicial);
+        if (draft.bancoTransferencia) setBancoTransferencia(draft.bancoTransferencia);
         if (draft.montoEfectivoInput) setMontoEfectivoInput(draft.montoEfectivoInput);
         if (draft.montoTransferenciaInput) setMontoTransferenciaInput(draft.montoTransferenciaInput);
         if (draft.referenciaPagoInicial) setReferenciaPagoInicial(draft.referenciaPagoInicial);
@@ -552,6 +600,7 @@ export default function NuevaVentaScreen({ route, navigation }) {
             tipoPago,
             cuotaInicialInput,
             metodoPagoInicial,
+            bancoTransferencia,
             montoEfectivoInput,
             montoTransferenciaInput,
             referenciaPagoInicial,
@@ -586,6 +635,7 @@ export default function NuevaVentaScreen({ route, navigation }) {
         tipoPago,
         cuotaInicialInput,
         metodoPagoInicial,
+        bancoTransferencia,
         montoEfectivoInput,
         montoTransferenciaInput,
         referenciaPagoInicial,
@@ -662,6 +712,72 @@ export default function NuevaVentaScreen({ route, navigation }) {
     return Math.round(montoFinanciado / numeroCuotas);
   }, [modalidad, montoFinanciado, numeroCuotas]);
 
+  const montoObjetivo = useMemo(() => {
+    return modalidad === 'contado' ? totalArticulos : cuotaInicial;
+  }, [modalidad, totalArticulos, cuotaInicial]);
+
+  const totalTransferencias = useMemo(() => {
+    return comprobantes.reduce((sum, c) => sum + (parseFloat(c.monto) || 0), 0);
+  }, [comprobantes]);
+
+  const totalIngresado = useMemo(() => {
+    if (metodoPagoInicial === 'Efectivo') return montoObjetivo;
+    if (metodoPagoInicial === 'Transferencia') return totalTransferencias;
+    return (parseFloat(montoEfectivoInput) || 0) + totalTransferencias;
+  }, [metodoPagoInicial, montoObjetivo, totalTransferencias, montoEfectivoInput]);
+
+  const diferenciaCaja = useMemo(() => {
+    if (montoObjetivo <= 0) return 0;
+    return Math.round((montoObjetivo - totalIngresado) * 100) / 100;
+  }, [montoObjetivo, totalIngresado]);
+
+  const comprobantesValidos = useMemo(() => {
+    if (metodoPagoInicial === 'Efectivo') return true;
+    return (
+      comprobantes.length > 0 &&
+      comprobantes.every((c) => (c.banco || '').trim() !== '' && (c.referencia || '').trim() !== '' && (parseFloat(c.monto) || 0) > 0)
+    );
+  }, [metodoPagoInicial, comprobantes]);
+
+  const hayRefsDuplicadasInternas = useMemo(() => {
+    const refs = comprobantes.map((c) => (c.referencia || '').trim().toUpperCase()).filter(Boolean);
+    return new Set(refs).size !== refs.length;
+  }, [comprobantes]);
+
+  const agregarComprobante = () => {
+    if (comprobantes.length >= 3) return;
+    const baseTrans = metodoPagoInicial === 'Mixto' ? Math.max(0, montoObjetivo - (parseFloat(montoEfectivoInput) || 0)) : montoObjetivo;
+    const sumaActual = comprobantes.reduce((sum, c) => sum + (parseFloat(c.monto) || 0), 0);
+    const restante = Math.max(0, baseTrans - sumaActual);
+    const newId = String(Date.now() + Math.random());
+    setFocusedVoucherId(newId);
+    setComprobantes((prev) => [
+      ...prev,
+      { id: newId, banco: '', referencia: '', monto: restante > 0 ? String(restante) : '' }
+    ]);
+  };
+
+  const eliminarComprobante = (id) => {
+    if (comprobantes.length <= 1) return;
+    setTransfAEliminarId(id);
+    setModalEliminarTransfVisible(true);
+  };
+
+  const confirmarEliminarComprobante = () => {
+    if (transfAEliminarId) {
+      setComprobantes((prev) => prev.filter((c) => c.id !== transfAEliminarId));
+    }
+    setModalEliminarTransfVisible(false);
+    setTransfAEliminarId(null);
+  };
+
+  const actualizarComprobante = (id, campo, valor) => {
+    setComprobantes((prev) =>
+      prev.map((c) => (c.id === id ? { ...c, [campo]: valor } : c))
+    );
+    setErrorReferenciaDuplicada(null);
+  };
+
   // Sincronización reactiva de fechaPrimeraCuota según la modalidad manual, automática o dinámica
   useEffect(() => {
     if (modalidadProyeccion === 'dinamica') {
@@ -695,9 +811,11 @@ export default function NuevaVentaScreen({ route, navigation }) {
 
     // 1. Excepción de Cuadros: Si maneja_stock === false, se vende libremente
     if (manejaStock && stockDisp <= 0) {
-      Alert.alert(
+      mostrarAlertaUniversal(
         'Artículo Agotado en Bodega',
-        `El producto "${p.nombre}" (SKU: ${p.sku}) no cuenta con existencias físicas en almacén (Stock: 0). No es posible añadirlo a la venta hasta su reabastecimiento.`
+        `El producto "${p.nombre}" (SKU: ${p.sku}) no cuenta con existencias físicas en almacén (Stock: 0). No es posible añadirlo a la venta hasta su reabastecimiento.`,
+        null,
+        'warning'
       );
       return;
     }
@@ -706,9 +824,11 @@ export default function NuevaVentaScreen({ route, navigation }) {
     const itemExistente = itemsVenta.find((item) => item.producto_id === p.id);
     if (itemExistente && manejaStock) {
       if (itemExistente.cantidad + 1 > stockDisp) {
-        Alert.alert(
+        mostrarAlertaUniversal(
           'Límite de Existencias en Bodega',
-          `Solo hay ${stockDisp} unidades disponibles de "${p.nombre}". Ya tienes ${itemExistente.cantidad} en la orden de venta.`
+          `Solo hay ${stockDisp} unidades disponibles de "${p.nombre}". Ya tienes ${itemExistente.cantidad} en la orden de venta.`,
+          null,
+          'warning'
         );
         return;
       }
@@ -742,9 +862,11 @@ export default function NuevaVentaScreen({ route, navigation }) {
         const stockDisp = prodEnCatalogo ? (prodEnCatalogo.stock ?? 0) : (item.stock ?? 0);
 
         if (manejaStock && item.cantidad + delta > stockDisp) {
-          Alert.alert(
+          mostrarAlertaUniversal(
             'Límite de Existencias en Bodega',
-            `No es posible añadir más unidades de "${item.nombre}". Solo quedan ${stockDisp} unidades disponibles en almacén.`
+            `No es posible añadir más unidades de "${item.nombre}". Solo quedan ${stockDisp} unidades disponibles en almacén.`,
+            null,
+            'warning'
           );
           return prev;
         }
@@ -773,11 +895,11 @@ export default function NuevaVentaScreen({ route, navigation }) {
     if (isSubmitting) return;
 
     if (!clienteSeleccionado) {
-      Alert.alert('Cliente requerido', 'Selecciona el cliente titular de la operación.');
+      mostrarAlertaUniversal('Cliente Requerido', 'Por favor selecciona el cliente titular de la operación antes de continuar.', null, 'warning');
       return;
     }
     if (itemsVenta.length === 0) {
-      Alert.alert('Artículos requeridos', 'Agrega al menos un producto a la venta.');
+      mostrarAlertaUniversal('Artículos Requeridos', 'Agrega al menos un producto a la orden de venta.', null, 'warning');
       return;
     }
 
@@ -788,9 +910,11 @@ export default function NuevaVentaScreen({ route, navigation }) {
       const stockDisponible = prodEnCatalogo ? (prodEnCatalogo.stock ?? 0) : (item.stock ?? 0);
 
       if (manejaStock && item.cantidad > stockDisponible) {
-        Alert.alert(
+        mostrarAlertaUniversal(
           'Stock Insuficiente en Almacén',
-          `El artículo "${item.nombre}" supera el inventario disponible en bodega (${item.cantidad} solicitadas, ${stockDisponible} disponibles). Ajusta las cantidades antes de transmitir la venta.`
+          `El artículo "${item.nombre}" supera el inventario disponible en bodega (${item.cantidad} solicitadas, ${stockDisponible} disponibles). Ajusta las cantidades antes de transmitir la venta.`,
+          null,
+          'warning'
         );
         return;
       }
@@ -799,16 +923,20 @@ export default function NuevaVentaScreen({ route, navigation }) {
     // Validación de políticas de riesgo para venta a crédito
     if (modalidad === 'credito') {
       if (!codeudorNombre.trim()) {
-        Alert.alert(
+        mostrarAlertaUniversal(
           'Codeudor Requerido',
-          'Para originar una venta a crédito debes registrar el nombre completo del codeudor solidario.'
+          'Para originar una venta a crédito debes registrar el nombre completo del codeudor solidario.',
+          null,
+          'warning'
         );
         return;
       }
       if (!codeudorTelefono.trim()) {
-        Alert.alert(
+        mostrarAlertaUniversal(
           'Teléfono de Codeudor Requerido',
-          'Ingresa el teléfono de contacto del codeudor solidario para el estudio y verificación crediticia.'
+          'Ingresa el teléfono de contacto del codeudor solidario para el estudio y verificación crediticia.',
+          null,
+          'warning'
         );
         return;
       }
@@ -817,53 +945,54 @@ export default function NuevaVentaScreen({ route, navigation }) {
     // Validación estricta de Pago Mixto / Transferencia (Solo si monto a pagar > 0)
     const montoEsperadoPago = modalidad === 'contado' ? totalArticulos : cuotaInicial;
 
-    if (montoEsperadoPago > 0) {
-      if (metodoPagoInicial === 'Mixto') {
-        const efectivoVal = parseFloat(montoEfectivoInput) || 0;
-        const transVal = parseFloat(montoTransferenciaInput) || 0;
-        const sumaMixta = Math.round((efectivoVal + transVal) * 100) / 100;
-        const totalEsperado = Math.round(montoEsperadoPago * 100) / 100;
+    if (montoEsperadoPago > 0 && metodoPagoInicial !== 'Efectivo') {
+      if (diferenciaCaja !== 0) {
+        mostrarAlertaUniversal(
+          'Descuadre matemático de caja',
+          `El total ingresado (${formatCOP(totalIngresado)}) no coincide con ${modalidad === 'contado' ? 'el total de la venta' : 'la cuota inicial'} (${formatCOP(montoEsperadoPago)}). ${diferenciaCaja > 0 ? `Faltan ${formatCOP(diferenciaCaja)} COP.` : `Sobran ${formatCOP(Math.abs(diferenciaCaja))} COP.`}`,
+          null,
+          'error'
+        );
+        return;
+      }
 
-        if (sumaMixta !== totalEsperado) {
-          Alert.alert(
-            'Error',
-            modalidad === 'contado'
-              ? 'La suma de efectivo y transferencia debe coincidir con el valor total de la venta de contado.'
-              : 'La suma de efectivo y transferencia debe coincidir con la cuota inicial total.'
-          );
-          return;
-        }
+      if (!comprobantesValidos) {
+        mostrarAlertaUniversal(
+          'Comprobantes Incompletos',
+          'Cada comprobante bancario debe incluir entidad bancaria, número de referencia válido y un monto mayor a cero.',
+          null,
+          'warning'
+        );
+        return;
+      }
 
-        if (transVal > 0 && !referenciaPagoInicial.trim()) {
-          Alert.alert(
-            'Referencia Requerida',
-            'Por favor ingresa el número de comprobante o referencia de la transferencia.'
-          );
-          return;
-        }
-      } else if (metodoPagoInicial === 'Transferencia') {
-        if (!referenciaPagoInicial.trim()) {
-          Alert.alert(
-            'Referencia Requerida',
-            'Por favor ingresa el número de comprobante o referencia de la transferencia.'
-          );
-          return;
-        }
+      if (hayRefsDuplicadasInternas) {
+        mostrarAlertaUniversal(
+          'Comprobantes Duplicados',
+          'No puede ingresar números de referencia idénticos en comprobantes distintos de la misma venta.',
+          null,
+          'error'
+        );
+        return;
       }
     }
 
     // Validación estricta de firmas: Titular y Vendedor son obligatorias; Codeudor es opcional
     if (!firmaTitular) {
-      Alert.alert(
+      mostrarAlertaUniversal(
         'Firma del Titular Requerida',
-        'Por favor capture la firma táctil del cliente titular en el recuadro de firmas antes de transmitir la venta.'
+        'Por favor capture la firma digital del cliente titular en el recuadro correspondiente antes de transmitir la venta.',
+        null,
+        'warning'
       );
       return;
     }
     if (!firmaVendedor) {
-      Alert.alert(
+      mostrarAlertaUniversal(
         'Firma del Asesor Requerida',
-        'Por favor estampe su firma táctil de asesor comercial en el recuadro correspondiente antes de enviar el contrato.'
+        'Por favor estampe su firma digital de asesor comercial en el recuadro correspondiente antes de enviar el contrato.',
+        null,
+        'warning'
       );
       return;
     }
@@ -876,9 +1005,11 @@ export default function NuevaVentaScreen({ route, navigation }) {
       if (modalidadProyeccion === 'dinamica') {
         const fDynStr = formatDateISO(fechaPrimeraCuota);
         if (!fDynStr || !/^\d{4}-\d{2}-\d{2}$/.test(fDynStr)) {
-          Alert.alert(
+          mostrarAlertaUniversal(
             'Fecha de Primer Pago Requerida',
-            'En modalidad dinámica es obligatorio seleccionar la fecha del primer cobro.'
+            'En modalidad dinámica es obligatorio seleccionar la fecha del primer cobro.',
+            null,
+            'warning'
           );
           setIsSubmitting(false);
           return;
@@ -900,6 +1031,7 @@ export default function NuevaVentaScreen({ route, navigation }) {
       // Si cuotaInicial === 0 (o montoBase === 0), fuerza de forma predeterminada:
       // metodo_pago_inicial: 'Efectivo', monto_inicial_efectivo: 0, monto_inicial_transferencia: 0, referencia_pago_inicial: ''
       const metodoPagoFinal = esMontoCero ? 'Efectivo' : (metodoPagoInicial || 'Efectivo');
+      const esEfectivoPuro = metodoPagoFinal === 'Efectivo' || esMontoCero;
 
       const montoInicialEfectivo = esMontoCero
         ? 0
@@ -909,15 +1041,18 @@ export default function NuevaVentaScreen({ route, navigation }) {
 
       const montoInicialTransferencia = esMontoCero
         ? 0
-        : (metodoPagoFinal === 'Mixto'
-            ? (parseFloat(montoTransferenciaInput) || 0)
-            : (metodoPagoFinal === 'Transferencia' ? montoBase : 0));
+        : (metodoPagoFinal === 'Mixto' || metodoPagoFinal === 'Transferencia'
+            ? totalTransferencias
+            : 0);
 
-      const refPagoInicial = esMontoCero
-        ? ''
-        : ((metodoPagoFinal === 'Transferencia' || (metodoPagoFinal === 'Mixto' && montoInicialTransferencia > 0))
-            ? (referenciaPagoInicial.trim() || '')
-            : '');
+      // FASE 2: Si el pago es en Efectivo, banco y referencia viajan explícitamente como null para evitar choque Pydantic (422)
+      const refPagoInicial = esEfectivoPuro
+        ? null
+        : (comprobantes.map((c) => (c.referencia || '').trim()).filter(Boolean).join(' / ') || null);
+
+      const finalBancoTransferencia = esEfectivoPuro
+        ? null
+        : (comprobantes[0]?.banco?.trim() || null);
 
       // Objetos de respaldo para crédito
       const codeudorObj = modalidad === 'credito' && codeudorNombre.trim() ? {
@@ -939,9 +1074,10 @@ export default function NuevaVentaScreen({ route, navigation }) {
         tipo_pago: modalidad === 'contado' ? 'mensual' : tipoPago,
         cuota_inicial: modalidad === 'contado' ? totalArticulos : cuotaInicial,
         metodo_pago_inicial: metodoPagoFinal,
+        banco_transferencia: esEfectivoPuro ? null : finalBancoTransferencia,
         monto_inicial_efectivo: montoInicialEfectivo,
         monto_inicial_transferencia: montoInicialTransferencia,
-        referencia_pago_inicial: refPagoInicial,
+        referencia_pago_inicial: esEfectivoPuro ? null : refPagoInicial,
         monto_financiado: montoFinanciado,
         numero_cuotas: modalidad === 'contado' ? 1 : numeroCuotas,
         valor_cuota: valorCuota,
@@ -956,6 +1092,15 @@ export default function NuevaVentaScreen({ route, navigation }) {
           cantidad: item.cantidad,
           valor_unitario_acordado: item.valor_unitario,
         })),
+        ...(!esMontoCero && !esEfectivoPuro && comprobantes.length > 0 ? {
+          transferencias: comprobantes
+            .filter((c) => (parseFloat(c.monto) || 0) > 0)
+            .map((c) => ({
+              entidad_bancaria: (c.banco || '').trim(),
+              referencia_pago: (c.referencia || '').trim(),
+              monto: parseFloat(c.monto) || 0,
+            }))
+        } : {}),
         codeudor: codeudorObj,
         referencia: referenciaObj,
         firma_titular: firmaTitular || null,
@@ -975,9 +1120,10 @@ export default function NuevaVentaScreen({ route, navigation }) {
         tipo_pago: tipoPago,
         cuota_inicial: modalidad === 'contado' ? totalArticulos : cuotaInicial,
         metodo_pago_inicial: metodoPagoFinal,
+        banco_transferencia: esEfectivoPuro ? null : finalBancoTransferencia,
         monto_inicial_efectivo: montoInicialEfectivo,
         monto_inicial_transferencia: montoInicialTransferencia,
-        referencia_pago_inicial: refPagoInicial,
+        referencia_pago_inicial: esEfectivoPuro ? '' : (refPagoInicial || ''),
         departamento_venta: departamentoVenta.trim() || 'Córdoba',
         ciudad_venta: ciudadVenta.trim() || 'Montería',
         generacion_automatica_contrato: contratoAutomatico,
@@ -995,9 +1141,47 @@ export default function NuevaVentaScreen({ route, navigation }) {
       const res = await encolarVenta(payload, meta);
 
       if (!res || !res.ok) {
-        Alert.alert(
-          'Aviso de Validación',
-          res?.error || 'No fue posible originar la venta. Verifique los datos ingresados.'
+        setIsSubmitting(false);
+
+        // MANEJO CRÍTICO DE SESIÓN EXPIRADA (HTTP 401)
+        if (
+          res?.status === 401 ||
+          (res?.error && String(res.error).toLowerCase().includes('sesión') && String(res.error).toLowerCase().includes('expirada')) ||
+          (res?.error && String(res.error).toLowerCase().includes('token'))
+        ) {
+          mostrarAlertaUniversal(
+            '🔒 Sesión Expirada',
+            'Tu sesión de trabajo ha vencido o el token de seguridad ya no es válido. Por favor inicia sesión nuevamente para continuar.',
+            [
+              {
+                text: 'Iniciar Sesión',
+                onPress: async () => {
+                  try {
+                    await logout();
+                  } catch (_) {}
+                  navigation.reset({
+                    index: 0,
+                    routes: [{ name: 'Login' }],
+                  });
+                },
+              },
+            ],
+            'error'
+          );
+          return;
+        }
+
+        const isDuplicado = res?.status === 409 || (res?.error && String(res.error).toLowerCase().includes('referencia'));
+        const alertTitulo = isDuplicado ? '⚠️ Comprobante Bancario Duplicado' : 'Aviso de Validación';
+        const alertMsg = res?.error || 'No fue posible originar la venta. Verifique los datos ingresados.';
+        if (isDuplicado) {
+          setErrorReferenciaDuplicada(alertMsg);
+        }
+        mostrarAlertaUniversal(
+          alertTitulo,
+          alertMsg,
+          [{ text: isDuplicado ? 'Corregir Referencia' : 'Aceptar' }],
+          isDuplicado ? 'warning' : 'error'
         );
         return;
       }
@@ -1059,7 +1243,48 @@ export default function NuevaVentaScreen({ route, navigation }) {
       });
     } catch (error) {
       console.error('[NuevaVentaScreen] Error originando crédito:', error);
-      Alert.alert('Error en Venta', 'Ocurrió un error inesperado al procesar la transacción.');
+      setIsSubmitting(false);
+
+      if (
+        error?.response?.status === 401 ||
+        (error?.message && String(error.message).includes('401')) ||
+        (error?.response?.data?.detail && String(error.response.data.detail).toLowerCase().includes('token'))
+      ) {
+        mostrarAlertaUniversal(
+          '🔒 Sesión Expirada',
+          'Tu sesión de trabajo ha vencido o el token de seguridad ya no es válido. Por favor inicia sesión nuevamente para continuar.',
+          [
+            {
+              text: 'Iniciar Sesión',
+              onPress: async () => {
+                try {
+                  await logout();
+                } catch (_) {}
+                navigation.reset({
+                  index: 0,
+                  routes: [{ name: 'Login' }],
+                });
+              },
+            },
+          ],
+          'error'
+        );
+        return;
+      }
+
+      const isDuplicado = error?.response?.status === 409 || (error?.message && String(error.message).toLowerCase().includes('referencia'));
+      const msg = error?.response?.data?.detail || error.message || 'Ocurrió un error inesperado al procesar la transacción.';
+      const alertTitulo = isDuplicado ? '⚠️ Comprobante Bancario Duplicado' : 'Error en Venta';
+      const alertMsg = typeof msg === 'string' ? msg : JSON.stringify(msg);
+      if (isDuplicado) {
+        setErrorReferenciaDuplicada(alertMsg);
+      }
+      mostrarAlertaUniversal(
+        alertTitulo,
+        alertMsg,
+        [{ text: isDuplicado ? 'Corregir Referencia' : 'Aceptar' }],
+        isDuplicado ? 'warning' : 'error'
+      );
     } finally {
       setIsSubmitting(false);
     }
@@ -1074,17 +1299,21 @@ export default function NuevaVentaScreen({ route, navigation }) {
       ventaExitosa?.id_contrato_codigo;
 
     if (!idContrato || idContrato === 'CTR-TEMP') {
-      Alert.alert(
-        'Comprobante no disponible',
-        'No se ha encontrado un identificador válido para este contrato.'
+      mostrarAlertaUniversal(
+        'Comprobante No Disponible',
+        'No se ha encontrado un identificador válido para este contrato.',
+        null,
+        'warning'
       );
       return;
     }
 
     if (ventaExitosa?.offline) {
-      Alert.alert(
+      mostrarAlertaUniversal(
         'Venta Guardada Localmente (Offline)',
-        'Esta venta fue almacenada en la cola de sincronización local de su dispositivo. El comprobante PDF estará disponible una vez que se restablezca la conexión y se sincronice con el servidor.'
+        'Esta venta fue almacenada en la cola de sincronización local de su dispositivo. El comprobante PDF estará disponible una vez que se restablezca la conexión y se sincronice con el servidor.',
+        null,
+        'info'
       );
       return;
     }
@@ -1137,9 +1366,11 @@ export default function NuevaVentaScreen({ route, navigation }) {
       }
     } catch (err) {
       console.error('[NuevaVentaScreen] Error al descargar PDF:', err);
-      Alert.alert(
+      mostrarAlertaUniversal(
         'Comprobante PDF',
-        err.message || 'No se pudo descargar el archivo en este momento. Verifique la conexión con el servidor.'
+        err.message || 'No se pudo descargar el archivo en este momento. Verifique la conexión con el servidor.',
+        null,
+        'error'
       );
     } finally {
       setIsDownloadingPdf(false);
@@ -1180,7 +1411,7 @@ export default function NuevaVentaScreen({ route, navigation }) {
       }
     } catch (err) {
       console.warn('[NuevaVentaScreen] Error al abrir WhatsApp:', err);
-      Alert.alert('WhatsApp', 'No fue posible abrir WhatsApp en este dispositivo.');
+      mostrarAlertaUniversal('WhatsApp', 'No fue posible abrir WhatsApp en este dispositivo.', null, 'warning');
     }
   };
 
@@ -1214,7 +1445,7 @@ export default function NuevaVentaScreen({ route, navigation }) {
       }
     } catch (err) {
       console.warn('[NuevaVentaScreen] Error al abrir correo:', err);
-      Alert.alert('Correo Electrónico', 'No fue posible abrir la aplicación de correo.');
+      mostrarAlertaUniversal('Correo Electrónico', 'No fue posible abrir la aplicación de correo.', null, 'warning');
     }
   };
 
@@ -1240,11 +1471,7 @@ export default function NuevaVentaScreen({ route, navigation }) {
   // Selector reutilizable de método de pago (Aplica tanto a Contado como a Cuota Inicial de Crédito)
   const renderSelectorMetodoPago = () => {
     const esContado = modalidad === 'contado';
-    const montoObjetivo = esContado ? totalArticulos : cuotaInicial;
     const isCero = !montoObjetivo || montoObjetivo <= 0;
-    const sumaMixta = Math.round(((parseFloat(montoEfectivoInput) || 0) + (parseFloat(montoTransferenciaInput) || 0)) * 100) / 100;
-    const montoObjetivoRedondeado = Math.round(montoObjetivo * 100) / 100;
-    const estaCuadrado = sumaMixta === montoObjetivoRedondeado;
 
     return (
       <View style={styles.metodoPagoBox}>
@@ -1282,14 +1509,21 @@ export default function NuevaVentaScreen({ route, navigation }) {
                   if (metodo === 'Efectivo') {
                     setMontoEfectivoInput(montoObjetivo > 0 ? String(montoObjetivo) : '');
                     setMontoTransferenciaInput('0');
+                    setComprobantes([{ id: '1', banco: '', referencia: '', monto: '' }]);
                   } else if (metodo === 'Transferencia') {
                     setMontoEfectivoInput('0');
                     setMontoTransferenciaInput(montoObjetivo > 0 ? String(montoObjetivo) : '');
+                    setComprobantes([
+                      { id: '1', banco: comprobantes[0]?.banco || '', referencia: comprobantes[0]?.referencia || '', monto: montoObjetivo > 0 ? String(montoObjetivo) : '' }
+                    ]);
                   } else if (metodo === 'Mixto') {
                     if (montoObjetivo > 0) {
                       const mitad = Math.floor(montoObjetivo / 2);
                       setMontoEfectivoInput(String(mitad));
                       setMontoTransferenciaInput(String(montoObjetivo - mitad));
+                      setComprobantes([
+                        { id: '1', banco: comprobantes[0]?.banco || '', referencia: comprobantes[0]?.referencia || '', monto: String(montoObjetivo - mitad) }
+                      ]);
                     }
                   }
                 }}
@@ -1314,45 +1548,41 @@ export default function NuevaVentaScreen({ route, navigation }) {
           })}
         </View>
 
-        {/* Si es 'Transferencia': Campo para Número de Comprobante / Referencia (Oculto si no hay monto a cobrar) */}
-        {!isCero && metodoPagoInicial === 'Transferencia' && (
-          <View style={styles.metodoDetalleBox}>
-            <Text style={styles.fieldLabel}>NÚMERO DE COMPROBANTE / REFERENCIA *</Text>
-            <TextInput
-              style={styles.fieldInput}
-              placeholder="Ej. Nequi, Bancolombia, Daviplata (Ref. #)"
-              placeholderTextColor="#94A3B8"
-              value={referenciaPagoInicial}
-              onChangeText={setReferenciaPagoInicial}
-              autoCapitalize="characters"
-            />
-            <Text style={styles.fieldHelpText}>
-              {esContado
-                ? 'Código o número de aprobación bancario del pago total de contado.'
-                : 'Código o número de aprobación bancario del anticipo.'}
-            </Text>
-          </View>
-        )}
-
-        {/* Si es 'Mixto': Dos inputs numéricos, aviso de sugerencia 50/50 y campo de Referencia (Completamente oculto si no hay monto a cobrar) */}
-        {!isCero && metodoPagoInicial === 'Mixto' && (
+        {/* Sección de Transferencia o Mixto con múltiples comprobantes y cuadre en vivo */}
+        {!isCero && (metodoPagoInicial === 'Transferencia' || metodoPagoInicial === 'Mixto') && (
           <View style={styles.metodoDetalleBox}>
             <View style={styles.cuadreBoxHeader}>
-              <Text style={styles.cuadreBoxTitle}>DESGLOSE DE PAGO SIMULTÁNEO</Text>
+              <Text style={styles.cuadreBoxTitle}>
+                {metodoPagoInicial === 'Mixto' ? 'DESGLOSE DE PAGO SIMULTÁNEO' : 'COMPROBANTES BANCARIOS'}
+              </Text>
               {montoObjetivo > 0 && (
-                <View style={[styles.cuadreBadge, estaCuadrado ? styles.cuadreBadgeOk : styles.cuadreBadgeWarn]}>
-                  <Text style={[styles.cuadreBadgeText, estaCuadrado ? styles.cuadreBadgeTextOk : styles.cuadreBadgeTextWarn]}>
-                    {estaCuadrado
-                      ? `✓ Cuadrado: ${formatCOP(montoObjetivo)}`
-                      : `⚠️ Total: ${formatCOP(sumaMixta)} de ${formatCOP(montoObjetivo)}`}
+                <View
+                  style={[
+                    styles.cuadreBadge,
+                    diferenciaCaja === 0
+                      ? styles.cuadreBadgeOk
+                      : (diferenciaCaja < 0 ? styles.cuadreBadgeError : styles.cuadreBadgeOk),
+                  ]}
+                >
+                  <Text
+                    style={[
+                      styles.cuadreBadgeText,
+                      diferenciaCaja === 0
+                        ? styles.cuadreBadgeTextOk
+                        : (diferenciaCaja < 0 ? styles.cuadreBadgeTextError : styles.cuadreBadgeTextOk),
+                    ]}
+                  >
+                    {diferenciaCaja > 0 && `Faltan ${formatCOP(diferenciaCaja)} COP`}
+                    {diferenciaCaja < 0 && `Sobra ${formatCOP(Math.abs(diferenciaCaja))} COP`}
+                    {diferenciaCaja === 0 && '✓ Cuadre exacto ($0 COP)'}
                   </Text>
                 </View>
               )}
             </View>
 
-            <View style={styles.formRowTwoCols}>
-              <View style={{ flex: 1, justifyContent: 'flex-end' }}>
-                <Text style={styles.fieldLabel}>EFECTIVO *</Text>
+            {metodoPagoInicial === 'Mixto' && (
+              <View style={{ marginBottom: 6 }}>
+                <Text style={styles.fieldLabel}>MONTO EN EFECTIVO (COP) *</Text>
                 <TextInput
                   style={styles.fieldInput}
                   keyboardType="numeric"
@@ -1361,37 +1591,115 @@ export default function NuevaVentaScreen({ route, navigation }) {
                   value={montoEfectivoInput}
                   onChangeText={setMontoEfectivoInput}
                 />
+                <Text style={styles.sugerenciaMixtoText}>
+                  ⚠️ Valores sugeridos. Verifica y ajusta el dinero físico recibido.
+                </Text>
               </View>
-              <View style={{ flex: 1, justifyContent: 'flex-end' }}>
-                <Text style={styles.fieldLabel}>TRANSFERENCIA *</Text>
-                <TextInput
-                  style={styles.fieldInput}
-                  keyboardType="numeric"
-                  placeholder="0"
-                  placeholderTextColor="#94A3B8"
-                  value={montoTransferenciaInput}
-                  onChangeText={setMontoTransferenciaInput}
-                />
+            )}
+
+            {/* Sub-bloque de Comprobantes Bancarios */}
+            <View style={{ marginTop: 4 }}>
+              <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+                <Text style={[styles.fieldLabel, { marginBottom: 0 }]}>
+                  TRANSFERENCIAS ({comprobantes.length}/3)
+                </Text>
+                {comprobantes.length < 3 && (
+                  <TouchableOpacity
+                    onPress={agregarComprobante}
+                    style={styles.btnAddVoucher}
+                    activeOpacity={0.8}
+                  >
+                    <Text style={styles.btnAddVoucherText}>+ Agregar comprobante (Máx 3)</Text>
+                  </TouchableOpacity>
+                )}
               </View>
-            </View>
 
-            <Text style={styles.sugerenciaMixtoText}>
-              ⚠️ Valores sugeridos. Verifica y ajusta el dinero físico recibido.
-            </Text>
+              {comprobantes.map((comp, idx) => (
+                <View key={comp.id} style={styles.voucherCard}>
+                  <View style={styles.voucherCardHeader}>
+                    <Text style={styles.voucherCardTitle}>Comprobante #{idx + 1}</Text>
+                    {comprobantes.length > 1 && (
+                      <TouchableOpacity
+                        onPress={() => eliminarComprobante(comp.id)}
+                        style={styles.voucherDeleteBtn}
+                      >
+                        <Text style={styles.voucherDeleteBtnText}>✕ Eliminar</Text>
+                      </TouchableOpacity>
+                    )}
+                  </View>
 
-            <View style={{ marginTop: 8 }}>
-              <Text style={styles.fieldLabel}>NÚMERO DE COMPROBANTE / REFERENCIA *</Text>
-              <TextInput
-                style={styles.fieldInput}
-                placeholder="Ej. Nequi, Bancolombia, Daviplata (Ref. #)"
-                placeholderTextColor="#94A3B8"
-                value={referenciaPagoInicial}
-                onChangeText={setReferenciaPagoInicial}
-                autoCapitalize="characters"
-              />
-              <Text style={styles.fieldHelpText}>
-                Número de comprobante bancario para la parte en transferencia.
-              </Text>
+                  <Text style={[styles.fieldLabel, { fontSize: 9, marginBottom: 2 }]}>ENTIDAD BANCARIA *</Text>
+                  <TouchableOpacity
+                    style={[
+                      styles.bankPickerTrigger,
+                      !comp.banco && styles.bankPickerTriggerEmpty,
+                      { paddingVertical: 8, paddingHorizontal: 10, borderRadius: 8 },
+                    ]}
+                    onPress={() => {
+                      setCompEditandoBancoId(comp.id);
+                      setModalBancoVisible(true);
+                    }}
+                    activeOpacity={0.8}
+                  >
+                    <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                      <Text style={{ marginRight: 6, fontSize: 13 }}>🏛️</Text>
+                      <Text
+                        style={[
+                          styles.bankPickerTriggerText,
+                          { fontSize: 12 },
+                          !comp.banco && styles.bankPickerTriggerTextPlaceholder,
+                        ]}
+                      >
+                        {comp.banco || 'Seleccione un banco...'}
+                      </Text>
+                    </View>
+                    <Text style={{ color: '#94A3B8', fontSize: 10 }}>▼</Text>
+                  </TouchableOpacity>
+
+                  <View style={{ flexDirection: 'row', gap: 6 }}>
+                    <View style={{ flex: 1.2 }}>
+                      <Text style={[styles.fieldLabel, { fontSize: 9, marginBottom: 2 }]}>NO. REFERENCIA *</Text>
+                      <TextInput
+                        style={[styles.fieldInput, { paddingVertical: 6, fontSize: 12 }]}
+                        placeholder="Comprobante / Aprobación"
+                        placeholderTextColor="#94A3B8"
+                        value={comp.referencia}
+                        onChangeText={(val) => actualizarComprobante(comp.id, 'referencia', val)}
+                        autoCapitalize="characters"
+                      />
+                    </View>
+                    <View style={{ flex: 1 }}>
+                      <Text style={[styles.fieldLabel, { fontSize: 9, marginBottom: 2 }]}>MONTO (COP) *</Text>
+                      <TextInput
+                        style={[styles.fieldInput, { paddingVertical: 6, fontSize: 12 }]}
+                        keyboardType="numeric"
+                        placeholder="0"
+                        placeholderTextColor="#94A3B8"
+                        value={comp.monto}
+                        onChangeText={(val) => actualizarComprobante(comp.id, 'monto', val)}
+                        autoFocus={focusedVoucherId === comp.id}
+                        selectTextOnFocus
+                      />
+                    </View>
+                  </View>
+                </View>
+              ))}
+
+              {hayRefsDuplicadasInternas && (
+                <View style={[styles.errorBannerBox, { marginTop: 6 }]}>
+                  <Text style={styles.errorBannerText}>
+                    ⚠️ No puede ingresar números de referencia idénticos en comprobantes distintos.
+                  </Text>
+                </View>
+              )}
+
+              {errorReferenciaDuplicada && (
+                <View style={[styles.errorBannerBox, { marginTop: 6 }]}>
+                  <Text style={styles.errorBannerText}>
+                    ⚠️ {errorReferenciaDuplicada}
+                  </Text>
+                </View>
+              )}
             </View>
           </View>
         )}
@@ -1420,20 +1728,7 @@ export default function NuevaVentaScreen({ route, navigation }) {
           style={styles.resetHeaderBtn}
           onPress={() => {
             if (itemsVenta.length > 0 || clienteSeleccionado) {
-              if (Platform.OS === 'web') {
-                if (typeof window !== 'undefined' && window.confirm('¿Deseas reiniciar el formulario y limpiar todos los datos de la venta?')) {
-                  resetearFormularioCompleto();
-                }
-              } else {
-                Alert.alert(
-                  'Reiniciar Formulario',
-                  '¿Deseas limpiar todos los campos y empezar una venta en blanco?',
-                  [
-                    { text: 'Cancelar', style: 'cancel' },
-                    { text: 'Limpiar Todo', style: 'destructive', onPress: resetearFormularioCompleto },
-                  ]
-                );
-              }
+              setModalConfirmarLimpiar(true);
             } else {
               resetearFormularioCompleto();
             }
@@ -1723,26 +2018,49 @@ export default function NuevaVentaScreen({ route, navigation }) {
             </View>
           ) : (
             <View style={{ gap: 12, marginTop: 8 }}>
-              {/* Modalidad Unificada: Crédito Mensual (Fin de Mes) */}
+              {/* Modalidad Unificada vs Modalidad Dinámica */}
               <View>
                 <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
                   <Text style={styles.fieldLabel}>FRECUENCIA DE COBRO *</Text>
-                  <Text style={{ fontSize: 9, fontWeight: '800', color: '#047857' }}>MODALIDAD UNIFICADA</Text>
+                  <Text style={{
+                    fontSize: 9,
+                    fontWeight: '800',
+                    color: modalidadProyeccion === 'dinamica' ? '#4F46E5' : '#047857',
+                  }}>
+                    {modalidadProyeccion === 'dinamica' ? 'MODALIDAD DINÁMICA' : 'MODALIDAD UNIFICADA'}
+                  </Text>
                 </View>
-                <View style={styles.modalidadUnificadaBox}>
-                  <View style={styles.modalidadUnificadaIconBox}>
-                    <Text style={styles.modalidadUnificadaIconText}>30/31</Text>
+                {modalidadProyeccion === 'dinamica' ? (
+                  <View style={[styles.modalidadUnificadaBox, { borderColor: '#818CF8', backgroundColor: '#EEF2FF' }]}>
+                    <View style={[styles.modalidadUnificadaIconBox, { backgroundColor: '#4F46E5' }]}>
+                      <Text style={[styles.modalidadUnificadaIconText, { color: '#FFFFFF', fontSize: 13 }]}>📅</Text>
+                    </View>
+                    <View style={{ flex: 1 }}>
+                      <Text style={[styles.modalidadUnificadaTitle, { color: '#1E1B4B' }]}>Crédito Dinámico (En Ruta)</Text>
+                      <Text style={[styles.modalidadUnificadaSub, { color: '#4338CA' }]}>
+                        Fechas y frecuencias de cobro acordadas y agendadas directamente en terreno
+                      </Text>
+                    </View>
+                    <View style={[styles.modalidadUnificadaTag, { backgroundColor: '#C7D2FE' }]}>
+                      <Text style={[styles.modalidadUnificadaTagText, { color: '#312E81' }]}>DINÁMICA</Text>
+                    </View>
                   </View>
-                  <View style={{ flex: 1 }}>
-                    <Text style={styles.modalidadUnificadaTitle}>Crédito Mensual (Fin de Mes)</Text>
-                    <Text style={styles.modalidadUnificadaSub}>
-                      Vencimiento automático fijado al último día de cada mes
-                    </Text>
+                ) : (
+                  <View style={styles.modalidadUnificadaBox}>
+                    <View style={styles.modalidadUnificadaIconBox}>
+                      <Text style={styles.modalidadUnificadaIconText}>30/31</Text>
+                    </View>
+                    <View style={{ flex: 1 }}>
+                      <Text style={styles.modalidadUnificadaTitle}>Crédito Mensual (Fin de Mes)</Text>
+                      <Text style={styles.modalidadUnificadaSub}>
+                        Vencimiento automático fijado al último día de cada mes
+                      </Text>
+                    </View>
+                    <View style={styles.modalidadUnificadaTag}>
+                      <Text style={styles.modalidadUnificadaTagText}>EXCLUSIVO</Text>
+                    </View>
                   </View>
-                  <View style={styles.modalidadUnificadaTag}>
-                    <Text style={styles.modalidadUnificadaTagText}>EXCLUSIVO</Text>
-                  </View>
-                </View>
+                )}
               </View>
 
               {/* Cuota Inicial */}
@@ -1962,7 +2280,9 @@ export default function NuevaVentaScreen({ route, navigation }) {
                     <View style={styles.financialSummaryCard}>
                       <Text style={styles.financialSummaryLabel}>PLAZO PACTADO</Text>
                       <Text style={styles.financialSummaryVal}>{numeroCuotas} Cuotas</Text>
-                      <Text style={styles.financialSummaryFoot}>Mensual (Fin de Mes)</Text>
+                      <Text style={styles.financialSummaryFoot}>
+                        {modalidadProyeccion === 'dinamica' ? 'Dinámica (En Ruta)' : 'Mensual (Fin de Mes)'}
+                      </Text>
                     </View>
 
                     <View style={[styles.financialSummaryCard, styles.financialSummaryCardHighlight]}>
@@ -2294,9 +2614,27 @@ export default function NuevaVentaScreen({ route, navigation }) {
 
         {/* BOTÓN DE TRANSMISIÓN FINAL */}
         <TouchableOpacity
-          style={[styles.transmitBtn, (isSubmitting || itemsVenta.length === 0) && styles.transmitBtnDisabled]}
+          style={[
+            styles.transmitBtn,
+            (isSubmitting ||
+              itemsVenta.length === 0 ||
+              (montoObjetivo > 0 && metodoPagoInicial !== 'Efectivo' && (
+                diferenciaCaja !== 0 ||
+                !comprobantesValidos ||
+                hayRefsDuplicadasInternas
+              ))
+            ) && styles.transmitBtnDisabled,
+          ]}
           onPress={handleTransmitirVenta}
-          disabled={isSubmitting || itemsVenta.length === 0}
+          disabled={
+            isSubmitting ||
+            itemsVenta.length === 0 ||
+            (montoObjetivo > 0 && metodoPagoInicial !== 'Efectivo' && (
+              diferenciaCaja !== 0 ||
+              !comprobantesValidos ||
+              hayRefsDuplicadasInternas
+            ))
+          }
           accessibilityRole="button"
         >
           {isSubmitting ? (
@@ -2653,6 +2991,170 @@ export default function NuevaVentaScreen({ route, navigation }) {
         }}
         title="Seleccionar Ciudad de Venta"
       />
+
+      {/* Modal Personalizado React Native: Confirmar Limpieza de Formulario */}
+      <Modal
+        visible={modalConfirmarLimpiar}
+        transparent={true}
+        animationType="fade"
+        onRequestClose={() => setModalConfirmarLimpiar(false)}
+      >
+        <View style={styles.confirmModalOverlay}>
+          <View style={styles.confirmModalCard}>
+            <View style={styles.confirmModalIconBox}>
+              <Text style={{ fontSize: 26 }}>🗑️</Text>
+            </View>
+            <Text style={styles.confirmModalTitle}>¿Reiniciar Formulario?</Text>
+            <Text style={styles.confirmModalMessage}>
+              Esta acción limpiará todos los campos, productos agregados y firmas para iniciar una venta desde cero.
+            </Text>
+            <View style={styles.confirmModalActions}>
+              <TouchableOpacity
+                style={styles.confirmModalBtnCancel}
+                onPress={() => setModalConfirmarLimpiar(false)}
+                activeOpacity={0.8}
+              >
+                <Text style={styles.confirmModalBtnCancelText}>Cancelar</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={styles.confirmModalBtnConfirm}
+                onPress={() => {
+                  setModalConfirmarLimpiar(false);
+                  resetearFormularioCompleto();
+                }}
+                activeOpacity={0.8}
+              >
+                <Text style={styles.confirmModalBtnConfirmText}>Sí, Limpiar Todo</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Modal Personalizado: Confirmar Eliminación de Transferencia (UI de Marca) */}
+      <InFrameModal
+        visible={modalEliminarTransfVisible}
+        transparent={true}
+        animationType="fade"
+        onRequestClose={() => {
+          setModalEliminarTransfVisible(false);
+          setTransfAEliminarId(null);
+        }}
+      >
+        <View style={styles.confirmModalOverlay}>
+          <View style={styles.confirmModalCard}>
+            <View style={styles.confirmModalIconBox}>
+              <Text style={{ fontSize: 26 }}>🗑️</Text>
+            </View>
+            <Text style={styles.confirmModalTitle}>Confirmar Acción</Text>
+            <Text style={styles.confirmModalMessage}>
+              ¿Seguro que desea <Text style={{ fontWeight: 'bold' }}>eliminar</Text> esta transferencia?
+            </Text>
+            <View style={styles.confirmModalActions}>
+              <TouchableOpacity
+                style={styles.confirmModalBtnCancel}
+                onPress={() => {
+                  setModalEliminarTransfVisible(false);
+                  setTransfAEliminarId(null);
+                }}
+                activeOpacity={0.8}
+              >
+                <Text style={styles.confirmModalBtnCancelText}>Cancelar</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={styles.confirmModalBtnConfirm}
+                onPress={confirmarEliminarComprobante}
+                activeOpacity={0.8}
+              >
+                <Text style={styles.confirmModalBtnConfirmText}>Eliminar</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </InFrameModal>
+
+      {/* Modal Selector de Entidad Bancaria */}
+      <BankSelectorModal
+        visible={modalBancoVisible}
+        onClose={() => {
+          setModalBancoVisible(false);
+          setCompEditandoBancoId(null);
+        }}
+        bancos={bancos}
+        selectedBanco={
+          compEditandoBancoId
+            ? (comprobantes.find((c) => c.id === compEditandoBancoId)?.banco || '')
+            : bancoTransferencia
+        }
+        onSelectBanco={(b) => {
+          if (compEditandoBancoId) {
+            actualizarComprobante(compEditandoBancoId, 'banco', b);
+          } else {
+            setBancoTransferencia(b);
+          }
+          setErrorReferenciaDuplicada(null);
+        }}
+      />
+
+      {/* ========================================================================= */}
+      {/* MODAL INSTITUCIONAL UNIVERSAL: ALERTAS Y VALIDACIONES (WEB + MOBILE)       */}
+      {/* ========================================================================= */}
+      <InFrameModal
+        visible={modalAlerta.visible}
+        transparent={true}
+        animationType="fade"
+        onRequestClose={() => setModalAlerta((prev) => ({ ...prev, visible: false }))}
+      >
+        <View style={styles.confirmModalOverlay}>
+          <View style={styles.confirmModalCard}>
+            <View style={[
+              styles.confirmModalIconBox,
+              modalAlerta.tipo === 'error' && { backgroundColor: '#FEE2E2' },
+              modalAlerta.tipo === 'warning' && { backgroundColor: '#FEF3C7' },
+              modalAlerta.tipo === 'success' && { backgroundColor: '#DCFCE7' },
+              modalAlerta.tipo === 'info' && { backgroundColor: '#EEF2FF' },
+            ]}>
+              <Text style={{ fontSize: 26 }}>
+                {modalAlerta.tipo === 'error' ? '🚨' : (modalAlerta.tipo === 'success' ? '✓' : (modalAlerta.tipo === 'info' ? 'ℹ️' : '⚠️'))}
+              </Text>
+            </View>
+            <Text style={styles.confirmModalTitle}>{modalAlerta.titulo}</Text>
+            <Text style={styles.confirmModalMessage}>{modalAlerta.mensaje}</Text>
+            <View style={[styles.confirmModalActions, modalAlerta.botones.length === 1 && { justifyContent: 'center' }]}>
+              {modalAlerta.botones.map((btn, idx) => (
+                <TouchableOpacity
+                  key={idx}
+                  style={[
+                    styles.confirmModalBtnConfirm,
+                    modalAlerta.botones.length > 1 && idx === 0 && styles.confirmModalBtnCancel,
+                    modalAlerta.botones.length === 1 && {
+                      flex: 1,
+                      backgroundColor: modalAlerta.tipo === 'error' ? '#EF4444' : (modalAlerta.tipo === 'success' ? '#059669' : '#0F172A'),
+                    },
+                    btn.style === 'destructive' && { backgroundColor: '#DC2626' },
+                  ]}
+                  onPress={() => {
+                    setModalAlerta((prev) => ({ ...prev, visible: false }));
+                    if (typeof btn.onPress === 'function') {
+                      btn.onPress();
+                    }
+                  }}
+                  activeOpacity={0.8}
+                >
+                  <Text
+                    style={[
+                      styles.confirmModalBtnConfirmText,
+                      modalAlerta.botones.length > 1 && idx === 0 && styles.confirmModalBtnCancelText,
+                    ]}
+                  >
+                    {btn.text}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+          </View>
+        </View>
+      </InFrameModal>
 
     </SafeAreaView>
   );
@@ -4326,6 +4828,10 @@ const styles = StyleSheet.create({
     backgroundColor: '#FFFBEB',
     borderColor: '#FDE68A',
   },
+  cuadreBadgeError: {
+    backgroundColor: '#FEF2F2',
+    borderColor: '#FECACA',
+  },
   cuadreBadgeText: {
     fontSize: 10,
     fontWeight: '800',
@@ -4336,10 +4842,182 @@ const styles = StyleSheet.create({
   cuadreBadgeTextWarn: {
     color: '#B45309',
   },
+  cuadreBadgeTextError: {
+    color: '#DC2626',
+  },
+  btnAddVoucher: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    backgroundColor: '#EFF6FF',
+    borderRadius: 6,
+    borderWidth: 1,
+    borderColor: '#BFDBFE',
+  },
+  btnAddVoucherText: {
+    fontSize: 10,
+    fontWeight: '700',
+    color: '#1D4ED8',
+  },
+  voucherCard: {
+    backgroundColor: '#F8FAFC',
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    padding: 8,
+    gap: 6,
+    marginTop: 6,
+  },
+  voucherCardHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    borderBottomWidth: 1,
+    borderBottomColor: '#E2E8F0',
+    paddingBottom: 4,
+  },
+  voucherCardTitle: {
+    fontSize: 10,
+    fontWeight: '800',
+    color: '#334155',
+  },
+  voucherDeleteBtn: {
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    backgroundColor: '#FEE2E2',
+    borderRadius: 4,
+  },
+  voucherDeleteBtnText: {
+    fontSize: 10,
+    color: '#DC2626',
+    fontWeight: '800',
+  },
   sugerenciaMixtoText: {
     fontSize: 10,
     color: '#D97706',
     marginTop: 4,
     fontWeight: '600',
+  },
+  bankPickerTrigger: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    backgroundColor: '#F8FAFC',
+    borderWidth: 1.5,
+    borderColor: '#CBD5E1',
+    borderRadius: 12,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+  },
+  bankPickerTriggerEmpty: {
+    borderColor: '#94A3B8',
+    backgroundColor: '#F1F5F9',
+  },
+  bankPickerTriggerError: {
+    borderColor: '#EF4444',
+    backgroundColor: '#FEF2F2',
+  },
+  bankPickerTriggerText: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: '#0F172A',
+  },
+  bankPickerTriggerTextPlaceholder: {
+    color: '#64748B',
+    fontWeight: '500',
+  },
+  fieldInputError: {
+    borderColor: '#EF4444',
+    borderWidth: 2,
+    backgroundColor: '#FEF2F2',
+  },
+  errorBannerBox: {
+    marginTop: 6,
+    padding: 10,
+    backgroundColor: '#FEF2F2',
+    borderWidth: 1,
+    borderColor: '#FECACA',
+    borderRadius: 10,
+  },
+  errorBannerText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#B91C1C',
+    lineHeight: 16,
+  },
+  confirmModalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(15, 23, 42, 0.75)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 20,
+    zIndex: 99999,
+  },
+  confirmModalCard: {
+    width: '100%',
+    maxWidth: 360,
+    backgroundColor: '#FFFFFF',
+    borderRadius: 24,
+    padding: 24,
+    alignItems: 'center',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 10 },
+    shadowOpacity: 0.25,
+    shadowRadius: 15,
+    elevation: 20,
+  },
+  confirmModalIconBox: {
+    width: 56,
+    height: 56,
+    borderRadius: 28,
+    backgroundColor: '#FEE2E2',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 16,
+  },
+  confirmModalTitle: {
+    fontSize: 18,
+    fontWeight: 'bold',
+    color: '#0F172A',
+    marginBottom: 8,
+    textAlign: 'center',
+  },
+  confirmModalMessage: {
+    fontSize: 13,
+    color: '#64748B',
+    textAlign: 'center',
+    lineHeight: 18,
+    marginBottom: 20,
+  },
+  confirmModalActions: {
+    flexDirection: 'row',
+    gap: 12,
+    width: '100%',
+  },
+  confirmModalBtnCancel: {
+    flex: 1,
+    paddingVertical: 12,
+    borderRadius: 14,
+    backgroundColor: '#F1F5F9',
+    alignItems: 'center',
+  },
+  confirmModalBtnCancelText: {
+    fontSize: 13,
+    fontWeight: 'bold',
+    color: '#475569',
+  },
+  confirmModalBtnConfirm: {
+    flex: 1,
+    paddingVertical: 12,
+    borderRadius: 14,
+    backgroundColor: '#EF4444',
+    alignItems: 'center',
+  },
+  confirmModalBtnConfirmText: {
+    fontSize: 13,
+    fontWeight: 'bold',
+    color: '#FFFFFF',
   },
 });

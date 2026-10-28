@@ -47,6 +47,13 @@ interface OperacionReporte {
   valor_cuota: number;
   tipo_pago: string;
   estado: string;
+  metodo_pago_inicial?: string;
+  es_pago_dividido?: boolean;
+  transferencias?: {
+    entidad_bancaria: string;
+    referencia_pago: string;
+    monto: number;
+  }[];
   ciudad_venta?: string;
   numero_contrato?: string;
   articulos: {
@@ -68,6 +75,8 @@ interface MetricasReporte {
   operaciones_credito: number;
   operaciones_contado: number;
 }
+
+type TipoVenta = 'todos' | 'credito' | 'contado' | 'pagos_divididos';
 
 interface ClienteOption {
   id: string;
@@ -99,7 +108,8 @@ export default function ReportesHistoricosPage() {
   const [periodoPreset, setPeriodoPreset] = useState<PeriodoPreset>('mes');
   const [fechaInicio, setFechaInicio] = useState<string>('');
   const [fechaFin, setFechaFin] = useState<string>('');
-  const [tipoVenta, setTipoVenta] = useState<'todos' | 'credito' | 'contado'>('todos');
+  const [tipoVenta, setTipoVenta] = useState<'todos' | 'credito' | 'contado' | 'pagos_divididos'>('todos');
+  const [mesSelector, setMesSelector] = useState<string>('');
   const [search, setSearch] = useState<string>('');
   const [ciudadesOperativas, setCiudadesOperativas] = useState<string[]>([]);
   const [ciudadFiltro, setCiudadFiltro] = useState<string>('todas');
@@ -358,12 +368,35 @@ export default function ReportesHistoricosPage() {
     }
   };
 
+  // Conteo dinámico de Pagos Divididos para el título de la pestaña
+  const conteoPagosDivididos = useMemo(() => {
+    return operaciones.filter(
+      (op) =>
+        op.es_pago_dividido ||
+        (op.transferencias && op.transferencias.length > 1) ||
+        op.metodo_pago_inicial?.toLowerCase() === 'mixto'
+    ).length;
+  }, [operaciones]);
+
+  // Filtrado de operaciones (incluyendo aislamiento de Pagos Divididos)
+  const operacionesFiltradas = useMemo(() => {
+    if (tipoVenta === 'pagos_divididos') {
+      return operaciones.filter(
+        (op) =>
+          op.es_pago_dividido ||
+          (op.transferencias && op.transferencias.length > 1) ||
+          op.metodo_pago_inicial?.toLowerCase() === 'mixto'
+      );
+    }
+    return operaciones;
+  }, [operaciones, tipoVenta]);
+
   // Paginación en cliente
-  const totalPaginas = Math.ceil(operaciones.length / itemsPorPagina) || 1;
+  const totalPaginas = Math.ceil(operacionesFiltradas.length / itemsPorPagina) || 1;
   const operacionesPaginadas = useMemo(() => {
     const inicio = (paginaActual - 1) * itemsPorPagina;
-    return operaciones.slice(inicio, inicio + itemsPorPagina);
-  }, [operaciones, paginaActual, itemsPorPagina]);
+    return operacionesFiltradas.slice(inicio, inicio + itemsPorPagina);
+  }, [operacionesFiltradas, paginaActual, itemsPorPagina]);
 
   // Clientes filtrados en el buscador de cliente
   const clientesFiltradosDropdown = catalogoClientes
@@ -465,22 +498,30 @@ export default function ReportesHistoricosPage() {
             ))}
           </div>
 
-          {/* Filtro por Tipo de Venta (Crédito vs Contado) */}
-          <div className="flex items-center gap-1.5 bg-slate-100 p-1 rounded-xl w-full sm:w-auto">
+          {/* Filtro por Tipo de Venta y Pagos Divididos */}
+          <div className="flex items-center gap-1.5 bg-slate-100 p-1 rounded-xl w-full sm:w-auto overflow-x-auto">
             {(
               [
                 { id: 'todos', label: 'Todas las Ventas' },
                 { id: 'credito', label: 'Solo Créditos' },
                 { id: 'contado', label: 'Solo Contado' },
-              ] as const
+                { id: 'pagos_divididos', label: `Pagos Divididos (${conteoPagosDivididos})` },
+              ] as { id: TipoVenta; label: string }[]
             ).map((t) => (
               <button
                 key={t.id}
-                onClick={() => setTipoVenta(t.id)}
+                onClick={() => {
+                  setTipoVenta(t.id);
+                  if (t.id === 'pagos_divididos') {
+                    aplicarPresetFechas('hoy');
+                  }
+                }}
                 className={cn(
-                  'px-3 py-1 rounded-lg text-xs font-semibold transition-all cursor-pointer',
+                  'px-3 py-1 rounded-lg text-xs font-semibold transition-all cursor-pointer whitespace-nowrap',
                   tipoVenta === t.id
-                    ? 'bg-white text-slate-900 shadow-xs'
+                    ? t.id === 'pagos_divididos'
+                      ? 'bg-purple-900 text-white shadow-xs'
+                      : 'bg-white text-slate-900 shadow-xs'
                     : 'text-slate-600 hover:text-slate-900'
                 )}
               >
@@ -493,8 +534,8 @@ export default function ReportesHistoricosPage() {
         {/* Fila 2: Inputs de Fecha + Ciudad + Cliente + Búsqueda Contrato */}
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-12 gap-3 pt-3 border-t border-slate-100">
           
-          {/* Fechas personalizadas */}
-          <div className="lg:col-span-3 flex items-center gap-2">
+          {/* Fechas personalizadas y selector de mes */}
+          <div className="lg:col-span-4 flex items-center gap-2">
             <div className="flex-1">
               <label className="block text-[11px] font-bold text-slate-600 mb-1">
                 FECHA DESDE
@@ -505,6 +546,7 @@ export default function ReportesHistoricosPage() {
                 onChange={(e) => {
                   setFechaInicio(e.target.value);
                   setPeriodoPreset('personalizado');
+                  setMesSelector('');
                 }}
                 className="w-full px-2.5 py-1.5 text-xs rounded-xl border border-slate-200 bg-slate-50/50 text-slate-800 focus:bg-white focus:ring-2 focus:ring-slate-900 transition-all"
               />
@@ -519,8 +561,34 @@ export default function ReportesHistoricosPage() {
                 onChange={(e) => {
                   setFechaFin(e.target.value);
                   setPeriodoPreset('personalizado');
+                  setMesSelector('');
                 }}
                 className="w-full px-2.5 py-1.5 text-xs rounded-xl border border-slate-200 bg-slate-50/50 text-slate-800 focus:bg-white focus:ring-2 focus:ring-slate-900 transition-all"
+              />
+            </div>
+            <div className="w-[125px]">
+              <label className="block text-[11px] font-bold text-purple-700 mb-1 flex items-center gap-1">
+                <Calendar className="w-3 h-3 text-purple-600" />
+                MES
+              </label>
+              <input
+                type="month"
+                value={mesSelector}
+                onChange={(e) => {
+                  const val = e.target.value;
+                  setMesSelector(val);
+                  if (val) {
+                    const [yyyy, mm] = val.split('-');
+                    const primerDia = `${yyyy}-${mm}-01`;
+                    const ultimoDiaNum = new Date(Number(yyyy), Number(mm), 0).getDate();
+                    const ultimoDia = `${yyyy}-${mm}-${String(ultimoDiaNum).padStart(2, '0')}`;
+                    setFechaInicio(primerDia);
+                    setFechaFin(ultimoDia);
+                    setPeriodoPreset('personalizado');
+                  }
+                }}
+                className="w-full px-2 py-1.5 text-xs rounded-xl border border-purple-200 bg-purple-50/50 text-purple-900 focus:bg-white focus:ring-2 focus:ring-purple-700 transition-all cursor-pointer"
+                title="Seleccionar mes completo para consultar historial"
               />
             </div>
           </div>
@@ -841,16 +909,28 @@ export default function ReportesHistoricosPage() {
                       {/* Modalidad */}
                       <td className="px-4 py-3.5">
                         {esContado ? (
-                          <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-emerald-50 text-emerald-700 border border-emerald-200">
-                            <Banknote className="w-3 h-3" />
-                            Contado
-                          </span>
+                          <div className="space-y-1">
+                            <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-emerald-50 text-emerald-700 border border-emerald-200">
+                              <Banknote className="w-3 h-3" />
+                              Contado
+                            </span>
+                            {(op.es_pago_dividido || (op.transferencias && op.transferencias.length > 1) || op.metodo_pago_inicial?.toLowerCase() === 'mixto') && (
+                              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-purple-50 text-purple-700 border border-purple-200 block w-fit">
+                                Pago Dividido
+                              </span>
+                            )}
+                          </div>
                         ) : (
-                          <div className="space-y-0.5">
+                          <div className="space-y-1">
                             <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-blue-50 text-blue-700 border border-blue-200">
                               <CreditCard className="w-3 h-3" />
                               Crédito
                             </span>
+                            {(op.es_pago_dividido || (op.transferencias && op.transferencias.length > 1) || op.metodo_pago_inicial?.toLowerCase() === 'mixto') && (
+                              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-purple-50 text-purple-700 border border-purple-200 block w-fit">
+                                Pago Dividido
+                              </span>
+                            )}
                             <span className="text-[10px] text-slate-500 block font-medium">
                               {op.numero_cuotas} cuotas ({op.tipo_pago})
                             </span>

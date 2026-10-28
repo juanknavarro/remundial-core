@@ -162,6 +162,8 @@ export function limpiarItemsFallidosCola() {
     try {
       const cola = await obtenerCola();
       const nuevaCola = cola.filter((item) => {
+        // En cuarentena por conflicto de inventario: PRESERVAR SIEMPRE para resolución manual del vendedor
+        if (item.status === 'conflicto_stock') return true;
         if (item.status === 'failed') return false;
         if (item.lastError && (item.lastError.includes('400') || item.lastError.includes('cancelado') || item.lastError.includes('Bad Request'))) {
           return false;

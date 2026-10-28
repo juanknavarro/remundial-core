@@ -144,6 +144,11 @@ class Credito(Base):
         String(100),
         nullable=True,
     )
+    banco_transferencia: Mapped[Optional[str]] = mapped_column(
+        String(100),
+        nullable=True,
+        index=True,
+    )
     monto_inicial_efectivo: Mapped[Optional[Decimal]] = mapped_column(
         Numeric(12, 2),
         nullable=True,
@@ -201,6 +206,12 @@ class Credito(Base):
     abonos = relationship(
         "Abono",
         back_populates="credito",
+        cascade="all, delete-orphan",
+        lazy="selectin",
+    )
+    transferencias = relationship(
+        "DetalleTransferencia",
+        back_populates="venta",
         cascade="all, delete-orphan",
         lazy="selectin",
     )

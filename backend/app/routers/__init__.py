@@ -1,7 +1,9 @@
 """Routers de la API."""
 
 from app.routers.abonos import router as abonos_router
+from app.routers.auditoria import router as auditoria_router
 from app.routers.auth import router as auth_router
+from app.routers.bancos import router as bancos_router
 from app.routers.clientes import router as clientes_router
 from app.routers.configuracion import router as configuracion_router
 from app.routers.creditos import router as creditos_router
@@ -12,7 +14,9 @@ from app.routers.usuarios import router as usuarios_router
 
 __all__ = [
     "abonos_router",
+    "auditoria_router",
     "auth_router",
+    "bancos_router",
     "clientes_router",
     "configuracion_router",
     "creditos_router",

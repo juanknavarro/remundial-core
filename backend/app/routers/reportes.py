@@ -56,6 +56,7 @@ async def _obtener_datos_reporte(
             selectinload(Credito.cliente),
             selectinload(Credito.vendedor),
             selectinload(Credito.detalles).selectinload(CreditoDetalle.producto),
+            selectinload(Credito.transferencias),
         )
         .order_by(desc(Credito.creado_en))
     )
@@ -122,6 +123,12 @@ async def _obtener_datos_reporte(
         # Aplicar filtro de tipo si no es 'todos'
         if tipo_venta in ("credito", "contado") and tipo_str != tipo_venta:
             continue
+        es_dividido = bool(
+            (c.metodo_pago_inicial and c.metodo_pago_inicial.strip().lower() == "mixto")
+            or (c.transferencias and len(c.transferencias) > 1)
+        )
+        if tipo_venta == "pagos_divididos" and not es_dividido:
+            continue
 
         monto_total = Decimal(str(c.monto_financiado or 0)) + Decimal(str(c.cuota_inicial or 0))
         saldo_pend = Decimal(str(c.saldo_pendiente or 0))
@@ -176,6 +183,19 @@ async def _obtener_datos_reporte(
             "estado": c.estado.value if hasattr(c.estado, "value") else str(c.estado),
             "articulos": articulos_list,
             "articulos_resumen": articulos_resumen_txt,
+            "metodo_pago_inicial": c.metodo_pago_inicial,
+            "es_pago_dividido": bool(
+                (c.metodo_pago_inicial and c.metodo_pago_inicial.strip().lower() == "mixto")
+                or (c.transferencias and len(c.transferencias) > 1)
+            ),
+            "transferencias": [
+                {
+                    "entidad_bancaria": t.entidad_bancaria,
+                    "referencia_pago": t.referencia_pago,
+                    "monto": float(t.monto),
+                }
+                for t in (c.transferencias or [])
+            ],
         })
 
     total_ops = len(operaciones_raw)
