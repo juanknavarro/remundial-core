@@ -76,6 +76,10 @@ export default function SupervisorDashboard({ navigation }) {
   // Estados de Marca Blanca y Empresa
   const [empresaNombre, setEmpresaNombre] = useState("Remundial Arte's");
 
+  // Estados para alertas de Ventas Anuladas & Devoluciones
+  const [anuladasPendientesCount, setAnuladasPendientesCount] = useState(0);
+  const [anuladasMontoPendiente, setAnuladasMontoPendiente] = useState(0);
+
   // =========================================================================
   // CARGA DE DATOS ASÍNCRONA (REPLICANDO LA LÓGICA DE web/src/app/dashboard/page.tsx)
   // =========================================================================
@@ -87,11 +91,12 @@ export default function SupervisorDashboard({ navigation }) {
     }
 
     try {
-      const [resResumen, resCreditos, resAbonos, resCobradores] = await Promise.allSettled([
+      const [resResumen, resCreditos, resAbonos, resCobradores, resAnuladas] = await Promise.allSettled([
         apiClient.get('/reportes/resumen-gerencial'),
         apiClient.get('/creditos'),
         apiClient.get('/abonos'),
         apiClient.get('/usuarios?rol=cobrador'),
+        apiClient.get('/auditoria/anuladas'),
       ]);
 
       if (resResumen.status === 'fulfilled' && resResumen.value?.data) {
@@ -128,15 +133,37 @@ export default function SupervisorDashboard({ navigation }) {
           }
         } catch (_) {}
       }
+
+      // Auditoría de Ventas Anuladas & Devoluciones
+      if (resAnuladas.status === 'fulfilled' && Array.isArray(resAnuladas.value?.data)) {
+        const anuladas = resAnuladas.value.data;
+        const pend = anuladas.filter((v) => v.estado_devolucion === 'PENDIENTE_REEMBOLSO_TRANSFERENCIA');
+        setAnuladasPendientesCount(pend.length);
+        setAnuladasMontoPendiente(pend.reduce((acc, c) => acc + Number(c.monto_total || 0), 0));
+        guardarEnCache('@remundial_cache_ventas_anuladas', anuladas);
+      } else {
+        const cachedAnuladas = await obtenerDeCache('@remundial_cache_ventas_anuladas');
+        if (Array.isArray(cachedAnuladas)) {
+          const pend = cachedAnuladas.filter((v) => v.estado_devolucion === 'PENDIENTE_REEMBOLSO_TRANSFERENCIA');
+          setAnuladasPendientesCount(pend.length);
+          setAnuladasMontoPendiente(pend.reduce((acc, c) => acc + Number(c.monto_total || 0), 0));
+        }
+      }
     } catch (err) {
       console.warn('[SupervisorDashboard] Error consultando métricas:', err);
       // Fallback a caché local en modo offline
-      const [cachedCreditos, cachedAbonos] = await Promise.all([
+      const [cachedCreditos, cachedAbonos, cachedAnuladas] = await Promise.all([
         obtenerDeCache(STORAGE_KEYS.CACHE_CREDITOS),
         obtenerDeCache(STORAGE_KEYS.CACHE_ABONOS),
+        obtenerDeCache('@remundial_cache_ventas_anuladas'),
       ]);
       if (Array.isArray(cachedCreditos)) setCreditos(cachedCreditos);
       if (Array.isArray(cachedAbonos)) setAbonos(cachedAbonos);
+      if (Array.isArray(cachedAnuladas)) {
+        const pend = cachedAnuladas.filter((v) => v.estado_devolucion === 'PENDIENTE_REEMBOLSO_TRANSFERENCIA');
+        setAnuladasPendientesCount(pend.length);
+        setAnuladasMontoPendiente(pend.reduce((acc, c) => acc + Number(c.monto_total || 0), 0));
+      }
     } finally {
       setIsLoading(false);
       setIsRefreshing(false);
@@ -164,10 +191,18 @@ export default function SupervisorDashboard({ navigation }) {
 
     cargarConfigYDatos();
 
+    // Actualizar datos automáticamente al enfocar / volver al dashboard
+    const unsubscribeFocus = navigation?.addListener?.('focus', () => {
+      if (isMounted) {
+        cargarDatos(true);
+      }
+    });
+
     return () => {
       isMounted = false;
+      unsubscribeFocus?.();
     };
-  }, [cargarDatos]);
+  }, [navigation, cargarDatos]);
 
   // =========================================================================
   // CÁLCULO DE KPIS GERENCIALES (TOTAL RECAUDADO HOY, CRÉDITOS ACTIVOS, MORA)
@@ -742,6 +777,37 @@ export default function SupervisorDashboard({ navigation }) {
             </View>
 
             {/* ========================================================================= */}
+            {/* ALERTA: REEMBOLSOS BANCARIOS PENDIENTES POR GIRAR                         */}
+            {/* ========================================================================= */}
+            {anuladasPendientesCount > 0 && (
+              <TouchableOpacity
+                style={styles.bannerDevoluciones}
+                onPress={() => navigation.navigate('VentasAnuladasScreen')}
+                activeOpacity={0.85}
+              >
+                <View style={styles.bannerDevolucionesLeft}>
+                  <View style={styles.bannerDevolucionesIconBadge}>
+                    <Text style={styles.bannerDevolucionesIcon}>⏳</Text>
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <View style={styles.bannerDevolucionesTopRow}>
+                      <Text style={styles.bannerDevolucionesTitle}>Reembolsos Pendientes</Text>
+                      <View style={styles.bannerDevolucionesCounterBadge}>
+                        <Text style={styles.bannerDevolucionesCounterText}>
+                          {anuladasPendientesCount} {anuladasPendientesCount === 1 ? 'caso' : 'casos'}
+                        </Text>
+                      </View>
+                    </View>
+                    <Text style={styles.bannerDevolucionesSubtitle}>
+                      Por girar: {formatCOP(anuladasMontoPendiente)} • Tocar para auditar
+                    </Text>
+                  </View>
+                </View>
+                <Text style={styles.bannerDevolucionesArrow}>→</Text>
+              </TouchableOpacity>
+            )}
+
+            {/* ========================================================================= */}
             {/* ACCESO RÁPIDO A POS */}
             {/* ========================================================================= */}
             <TouchableOpacity
@@ -1216,7 +1282,23 @@ export default function SupervisorDashboard({ navigation }) {
                   <Text style={styles.menuGridSub}>Radicación directa</Text>
                 </TouchableOpacity>
 
-                {/* Opción 10: Acerca de */}
+                {/* Opción 10: Devoluciones & Reembolsos */}
+                <TouchableOpacity
+                  style={styles.menuGridItem}
+                  onPress={() => {
+                    setMenuVisible(false);
+                    navigation.navigate('VentasAnuladasScreen');
+                  }}
+                  activeOpacity={0.75}
+                >
+                  <View style={[styles.menuGridIconCircle, { backgroundColor: '#FEF3C7' }]}>
+                    <Text style={styles.menuGridIconText}>🔄</Text>
+                  </View>
+                  <Text style={styles.menuGridTitle}>Devoluciones & Reembolsos</Text>
+                  <Text style={styles.menuGridSub}>Ventas anuladas en ruta</Text>
+                </TouchableOpacity>
+
+                {/* Opción 11: Acerca de */}
                 <TouchableOpacity
                   style={styles.menuGridItem}
                   onPress={() => {
@@ -1695,6 +1777,75 @@ const styles = StyleSheet.create({
     fontSize: 11,
     fontWeight: '600',
     color: '#64748B',
+  },
+  // BANNER DEVOLUCIONES PENDIENTES
+  bannerDevoluciones: {
+    backgroundColor: '#FFFBEB',
+    borderRadius: 18,
+    borderWidth: 1.5,
+    borderColor: '#FDE68A',
+    padding: 14,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 14,
+    shadowColor: '#D97706',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.08,
+    shadowRadius: 6,
+    elevation: 2,
+  },
+  bannerDevolucionesLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    flex: 1,
+  },
+  bannerDevolucionesIconBadge: {
+    width: 38,
+    height: 38,
+    borderRadius: 12,
+    backgroundColor: '#FEF3C7',
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: '#FDE68A',
+  },
+  bannerDevolucionesIcon: {
+    fontSize: 18,
+  },
+  bannerDevolucionesTopRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  bannerDevolucionesTitle: {
+    fontSize: 13,
+    fontWeight: '800',
+    color: '#92400E',
+  },
+  bannerDevolucionesCounterBadge: {
+    backgroundColor: '#F59E0B',
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 6,
+  },
+  bannerDevolucionesCounterText: {
+    fontSize: 10,
+    fontWeight: '800',
+    color: '#FFFFFF',
+  },
+  bannerDevolucionesSubtitle: {
+    fontSize: 11,
+    color: '#B45309',
+    marginTop: 2,
+    fontWeight: '600',
+  },
+  bannerDevolucionesArrow: {
+    fontSize: 18,
+    fontWeight: '800',
+    color: '#D97706',
+    marginLeft: 8,
   },
   // BANNER POS ACTION
   bannerPosAction: {

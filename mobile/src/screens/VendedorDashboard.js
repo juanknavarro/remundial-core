@@ -16,7 +16,7 @@ import {
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useAuth } from '../context/AuthContext';
 import { useSync } from '../context/SyncContext';
-import apiClient, { STORAGE_KEYS, limpiarCredencialesLocales } from '../api/client';
+import apiClient, { limpiarCredencialesLocales } from '../api/client';
 import InFrameModal from '../components/InFrameModal';
 import SignatureCanvas from '../components/SignatureCanvas';
 import { version as appVersion } from '../../package.json';
@@ -33,7 +33,6 @@ export default function VendedorDashboard({ navigation }) {
     obtenerVentasLocalesPendientes,
     obtenerVentasEnConflicto,
     eliminarVentaDeCola,
-    inyectarVentaCuarentena,
     refrescarContador,
     forzarSincronizacion,
     pendingCount,
@@ -395,80 +394,6 @@ export default function VendedorDashboard({ navigation }) {
     }
   };
 
-  // ==========================================
-  // INYECCIÓN TEMPORAL: SIMULACIÓN DE CUARENTENA (TESTING UI)
-  // ==========================================
-  const handleSimularCuarentena = async () => {
-    try {
-      if (inyectarVentaCuarentena) {
-        await inyectarVentaCuarentena();
-      } else {
-        const raw = await AsyncStorage.getItem(STORAGE_KEYS.SYNC_QUEUE || '@remundial_sync_queue');
-        const cola = raw ? JSON.parse(raw) : [];
-        const idSimulado = `VENTA-OFF-TEST-${Date.now()}`;
-        const nuevoItemCuarentena = {
-          id: idSimulado,
-          type: 'venta',
-          status: 'conflicto_stock',
-          createdAt: new Date().toISOString(),
-          retryCount: 1,
-          lastError: 'HTTP 400 Bad Request: Stock insuficiente en almacén (Simulación de cuarentena).',
-          payload: {
-            monto_total: 100000,
-            cuota_inicial: 100000,
-            monto_financiado: 100000,
-            metodo_pago_inicial: 'Mixto',
-            monto_efectivo: 50000,
-            monto_transferencia: 50000,
-            banco_transferencia: 'Bancolombia',
-            referencia_pago_inicial: 'TRANSF-MOCK-9988',
-            detalles: [
-              {
-                producto_id: 888,
-                nombre: 'Juego de Sala Imperial 3 Puestos (Ficticio)',
-                cantidad: 1,
-                valor_unitario_acordado: 100000,
-              },
-            ],
-            cliente: {
-              nombres: 'Prueba Mock',
-              cedula: '1098765432',
-              telefono: '3001234567',
-              direccion: 'Carrera 15 # 45-20',
-              barrio: 'Centro',
-            },
-          },
-          meta: {
-            cliente_nombre: 'Prueba Mock',
-            cliente_cedula: '1098765432',
-            cliente_telefono: '3001234567',
-            articulos_resumen: '1x Juego de Sala Imperial 3 Puestos (Ficticio)',
-            tipo_pago: 'Mixto ($50.000 Efectivo, $50.000 Transferencia)',
-            banco: 'Bancolombia',
-            valor_cuota: 100000,
-            cuotas: 1,
-          },
-        };
-        await AsyncStorage.setItem(
-          STORAGE_KEYS.SYNC_QUEUE || '@remundial_sync_queue',
-          JSON.stringify([nuevoItemCuarentena, ...cola])
-        );
-      }
-
-      // Refrescar inmediatamente ventas y contadores en la UI
-      await cargarVentas();
-      if (refrescarContador) await refrescarContador();
-
-      mostrarNotificacionVendedor(
-        '🧪 Cuarentena Inyectada',
-        'Se inyectó una venta simulada en cuarentena con Pago Mixto ($50.000 Efectivo, $50.000 Transferencia), Cliente "Prueba Mock". Revisa el buzón rojo en pantalla.'
-      );
-    } catch (err) {
-      console.error('[VendedorDashboard] Error al inyectar simulación:', err);
-      mostrarNotificacionVendedor('Error de Simulación', err.message || 'No se pudo inyectar el registro');
-    }
-  };
-
   const abrirGestionConflicto = (item) => {
     setVentaConflictoSeleccionada(item);
     const p = item.payload || {};
@@ -620,17 +545,6 @@ export default function VendedorDashboard({ navigation }) {
         </View>
 
         <View style={styles.topHeaderRightActions}>
-          {/* BOTÓN TEMPORAL DE SIMULACIÓN DE CUARENTENA (TESTING UI) */}
-          <TouchableOpacity
-            style={styles.simularCuarentenaBtn}
-            onPress={handleSimularCuarentena}
-            activeOpacity={0.75}
-            accessibilityRole="button"
-            accessibilityLabel="Simular Cuarentena"
-          >
-            <Text style={styles.simularCuarentenaBtnText}>🧪 Simular Cuarentena</Text>
-          </TouchableOpacity>
-
           {/* FASE 2: GLOBO / BADGE ROJO INDICADOR DE VENTAS EN CUARENTENA */}
           {ventasConflicto.length > 0 && (
             <View style={styles.headerCuarentenaBadge}>
@@ -3016,28 +2930,6 @@ const styles = StyleSheet.create({
   },
   btnDisabled: {
     opacity: 0.6,
-  },
-  // Botón Temporal de Testing Cuarentena
-  simularCuarentenaBtn: {
-    backgroundColor: '#F5F3FF',
-    borderWidth: 1,
-    borderColor: '#C4B5FD',
-    paddingHorizontal: 8,
-    paddingVertical: 5,
-    borderRadius: 8,
-    flexDirection: 'row',
-    alignItems: 'center',
-    shadowColor: '#8B5CF6',
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.12,
-    shadowRadius: 2,
-    elevation: 1,
-  },
-  simularCuarentenaBtnText: {
-    color: '#6D28D9',
-    fontSize: 11,
-    fontWeight: '800',
-    letterSpacing: -0.2,
   },
   // Estilos de Indicadores de Cuarentena (Fase 2)
   headerCuarentenaBadge: {

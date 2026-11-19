@@ -26,6 +26,7 @@ import {
   NuevaVentaScreen,
   CatalogoScreen,
   AcercaDeScreen,
+  VentasAnuladasScreen,
 } from '../screens';
 
 const Stack = createNativeStackNavigator();
@@ -128,6 +129,8 @@ export default function AppNavigator() {
           <Stack.Screen name="Clientes" component={ClientesScreen} />
           <Stack.Screen name="Catalogo" component={CatalogoScreen} />
           <Stack.Screen name="AcercaDe" component={AcercaDeScreen} />
+          <Stack.Screen name="VentasAnuladasScreen" component={VentasAnuladasScreen} />
+          <Stack.Screen name="DevolucionesScreen" component={VentasAnuladasScreen} />
         </Stack.Group>
       ) : (
         // Flujo de Respaldo: Roles no contemplados en móvil de campo

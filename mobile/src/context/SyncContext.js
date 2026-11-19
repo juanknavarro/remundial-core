@@ -744,69 +744,6 @@ export function SyncProvider({ children }) {
     }
   }, [refrescarContador]);
 
-  /**
-   * INYECCIÓN TEMPORAL PARA TESTING UI (HITO 2):
-   * Inserta en la cola local SQLite/AsyncStorage una venta en conflicto_stock
-   */
-  const inyectarVentaCuarentena = useCallback(async () => {
-    try {
-      const cola = await obtenerCola();
-      const idSimulado = `VENTA-OFF-TEST-${Date.now()}`;
-
-      const nuevoItemCuarentena = {
-        id: idSimulado,
-        type: 'venta',
-        status: 'conflicto_stock',
-        createdAt: new Date().toISOString(),
-        retryCount: 1,
-        lastError: 'HTTP 400 Bad Request: Stock insuficiente en almacén (Simulación de cuarentena).',
-        payload: {
-          monto_total: 100000,
-          cuota_inicial: 100000,
-          monto_financiado: 100000,
-          metodo_pago_inicial: 'Mixto',
-          monto_efectivo: 50000,
-          monto_transferencia: 50000,
-          banco_transferencia: 'Bancolombia',
-          referencia_pago_inicial: 'TRANSF-MOCK-9988',
-          detalles: [
-            {
-              producto_id: 888,
-              nombre: 'Juego de Sala Imperial 3 Puestos (Ficticio)',
-              cantidad: 1,
-              valor_unitario_acordado: 100000,
-            },
-          ],
-          cliente: {
-            nombres: 'Prueba Mock',
-            cedula: '1098765432',
-            telefono: '3001234567',
-            direccion: 'Carrera 15 # 45-20',
-            barrio: 'Centro',
-          },
-        },
-        meta: {
-          cliente_nombre: 'Prueba Mock',
-          cliente_cedula: '1098765432',
-          cliente_telefono: '3001234567',
-          articulos_resumen: '1x Juego de Sala Imperial 3 Puestos (Ficticio)',
-          tipo_pago: 'Mixto ($50.000 Efectivo, $50.000 Transferencia)',
-          banco: 'Bancolombia',
-          valor_cuota: 100000,
-          cuotas: 1,
-        },
-      };
-
-      const nuevaCola = [nuevoItemCuarentena, ...cola];
-      await AsyncStorage.setItem(DB_STORAGE_KEYS.SYNC_QUEUE, JSON.stringify(nuevaCola));
-      await refrescarContador();
-      return nuevoItemCuarentena;
-    } catch (err) {
-      console.warn('[SyncContext] Error al inyectar venta en cuarentena:', err);
-      throw err;
-    }
-  }, [refrescarContador]);
-
   return (
     <SyncContext.Provider
       value={{
@@ -825,7 +762,6 @@ export function SyncProvider({ children }) {
         obtenerAbonosLocalesPendientes,
         obtenerVentasEnConflicto,
         eliminarVentaDeCola,
-        inyectarVentaCuarentena,
         refrescarContador,
       }}
     >

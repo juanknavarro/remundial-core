@@ -21,6 +21,11 @@ import {
   guardarEnCache,
   obtenerDeCache,
 } from '../storage/database';
+import {
+  formatCurrencyInput,
+  parseCurrencyInput,
+  cleanNumericString,
+} from '../utils/currency';
 
 const formatCOP = (val) => {
   const num = Math.round(Number(val) || 0);
@@ -229,10 +234,10 @@ export default function ArqueoScreen({ navigation, route }) {
 
   // Sincronizar input de efectivo físico sugerido cuando cambia el cobrador o los totales
   useEffect(() => {
-    setEfectivoEntregadoInput(totalEsperadoGeneral > 0 ? String(totalEsperadoGeneral) : '');
+    setEfectivoEntregadoInput(totalEsperadoGeneral > 0 ? formatCurrencyInput(totalEsperadoGeneral) : '');
   }, [totalEsperadoGeneral, cobradorSeleccionado]);
 
-  const efectivoEntregadoNum = parseFloat(efectivoEntregadoInput) || 0;
+  const efectivoEntregadoNum = parseCurrencyInput(efectivoEntregadoInput);
   const diferencia = efectivoEntregadoNum - totalEsperadoGeneral;
 
   const estadoCuadre = useMemo(() => {
@@ -740,7 +745,7 @@ export default function ArqueoScreen({ navigation, route }) {
                   style={styles.efectivoTextInput}
                   keyboardType="numeric"
                   value={efectivoEntregadoInput}
-                  onChangeText={setEfectivoEntregadoInput}
+                  onChangeText={(val) => setEfectivoEntregadoInput(formatCurrencyInput(val))}
                   placeholder="0"
                   placeholderTextColor="#94A3B8"
                   selectTextOnFocus
@@ -751,7 +756,7 @@ export default function ArqueoScreen({ navigation, route }) {
               <View style={styles.helperChipsRow}>
                 <TouchableOpacity
                   style={styles.helperChip}
-                  onPress={() => setEfectivoEntregadoInput(String(totalEsperadoGeneral))}
+                  onPress={() => setEfectivoEntregadoInput(formatCurrencyInput(totalEsperadoGeneral))}
                   activeOpacity={0.7}
                 >
                   <Text style={styles.helperChipText}>⚡ Auto-llenar Total</Text>
@@ -759,7 +764,7 @@ export default function ArqueoScreen({ navigation, route }) {
 
                 <TouchableOpacity
                   style={styles.helperChip}
-                  onPress={() => setEfectivoEntregadoInput(String(totalEsperadoEfectivo))}
+                  onPress={() => setEfectivoEntregadoInput(formatCurrencyInput(totalEsperadoEfectivo))}
                   activeOpacity={0.7}
                 >
                   <Text style={styles.helperChipText}>💵 Solo Efectivo</Text>

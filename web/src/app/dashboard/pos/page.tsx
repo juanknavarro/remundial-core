@@ -11,6 +11,7 @@ import {
   CheckCircle2,
   DollarSign,
   Plus,
+  ShoppingCart,
   Trash2,
   Sparkles,
   ShieldCheck,
@@ -36,6 +37,7 @@ import {
   Image as ImageIcon,
 } from 'lucide-react';
 import { formatCOP, cn } from '@/lib/utils';
+import { formatCurrencyInput, parseCurrencyInput } from '@/lib/currency';
 import { api, API_BASE_URL } from '@/lib/api';
 import WebSignaturePad from '@/components/WebSignaturePad';
 
@@ -779,12 +781,11 @@ export default function PosOriginacionCreditoPage() {
                 <div className="relative">
                   <span className="absolute left-3 top-2.5 text-xs text-slate-400 font-mono">$</span>
                   <input
-                    type="number"
-                    min="0"
-                    max={montoObjetivo}
+                    type="text"
+                    inputMode="numeric"
                     placeholder="0"
-                    value={montoEfectivo || ''}
-                    onChange={(e) => setMontoEfectivo(parseFloat(e.target.value) || 0)}
+                    value={formatCurrencyInput(montoEfectivo)}
+                    onChange={(e) => setMontoEfectivo(parseCurrencyInput(e.target.value))}
                     className="w-full pl-7 pr-3 py-2.5 rounded-xl border border-slate-200 text-xs font-mono font-semibold text-slate-900 bg-white focus:outline-hidden focus:ring-2 focus:ring-emerald-500"
                   />
                 </div>
@@ -880,11 +881,11 @@ export default function PosOriginacionCreditoPage() {
                         <div className="relative">
                           <span className="absolute left-3 top-2.5 text-xs text-slate-400 font-mono">$</span>
                           <input
-                            type="number"
-                            min="0"
+                            type="text"
+                            inputMode="numeric"
                             placeholder="0"
-                            value={comp.monto || ''}
-                            onChange={(e) => actualizarComprobante(comp.id, 'monto', parseFloat(e.target.value) || 0)}
+                            value={formatCurrencyInput(comp.monto)}
+                            onChange={(e) => actualizarComprobante(comp.id, 'monto', parseCurrencyInput(e.target.value))}
                             autoFocus={focusedVoucherId === comp.id}
                             onFocus={(e) => e.target.select()}
                             className="w-full pl-7 pr-3 py-2 rounded-xl border border-slate-200 text-xs font-mono font-semibold text-slate-900 bg-white focus:outline-hidden focus:ring-2 focus:ring-blue-500 min-h-[38px] h-[38px]"
@@ -2304,12 +2305,19 @@ export default function PosOriginacionCreditoPage() {
                           <Sparkles className="w-3.5 h-3.5 text-purple-700" />
                           <span>VALOR UNITARIO ACORDADO CON EL CLIENTE (COP) *</span>
                         </label>
-                        <input
-                          type="number"
-                          value={precioAcordadoInput}
-                          onChange={(e) => setPrecioAcordadoInput(parseFloat(e.target.value) || 0)}
-                          className="w-full px-3.5 py-2 rounded-xl border border-purple-300 bg-purple-50/50 text-purple-950 font-mono font-bold text-sm focus:bg-white focus:outline-hidden focus:ring-2 focus:ring-purple-600 transition-all min-h-[38px] h-[38px]"
-                        />
+                        <div className="relative">
+                          <span className="absolute left-3.5 top-2.5 text-xs text-purple-700 font-mono font-bold">
+                            $
+                          </span>
+                          <input
+                            type="text"
+                            inputMode="numeric"
+                            placeholder="0"
+                            value={formatCurrencyInput(precioAcordadoInput)}
+                            onChange={(e) => setPrecioAcordadoInput(parseCurrencyInput(e.target.value))}
+                            className="w-full pl-8 pr-3.5 py-2 rounded-xl border border-purple-300 bg-purple-50/50 text-purple-950 font-mono font-bold text-sm focus:bg-white focus:outline-hidden focus:ring-2 focus:ring-purple-600 transition-all min-h-[38px] h-[38px]"
+                          />
+                        </div>
                       </div>
                     ) : (
                       <div>
@@ -2342,7 +2350,7 @@ export default function PosOriginacionCreditoPage() {
                         onClick={handleAgregarAlCarrito}
                         className="flex-1 py-2 px-3 rounded-xl bg-slate-900 hover:bg-slate-800 text-white text-xs font-bold shadow-xs transition-all flex items-center justify-center gap-1.5 cursor-pointer min-h-[38px] h-[38px]"
                       >
-                        <Plus className="w-3.5 h-3.5" />
+                        <ShoppingCart className="w-3.5 h-3.5" />
                         <span>Agregar</span>
                       </button>
                     </div>
@@ -2572,12 +2580,12 @@ export default function PosOriginacionCreditoPage() {
                     <div className="relative">
                       <span className="absolute left-3 top-2.5 text-xs text-slate-400 font-mono">$</span>
                       <input
-                        type="number"
-                        min="0"
+                        type="text"
+                        inputMode="numeric"
                         placeholder="0"
-                        value={cuotaInicial || ''}
+                        value={formatCurrencyInput(cuotaInicial)}
                         onChange={(e) => {
-                          const val = parseFloat(e.target.value) || 0;
+                          const val = parseCurrencyInput(e.target.value);
                           setCuotaInicial(val);
                           if (val <= 0) {
                             setMetodoPagoInicial('Efectivo');

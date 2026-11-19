@@ -35,6 +35,11 @@ import {
   STORAGE_KEYS,
   CACHE_CONFIG,
 } from '../storage/database';
+import {
+  formatCurrencyInput,
+  parseCurrencyInput,
+  cleanNumericString,
+} from '../utils/currency';
 
 const formatCOP = (val) => {
   const num = Math.round(Number(val) || 0);
@@ -559,10 +564,10 @@ export default function NuevaVentaScreen({ route, navigation }) {
         setItemsVenta(enrichedItems);
         if (draft.modalidad) setModalidad(draft.modalidad);
         if (draft.tipoPago) setTipoPago(draft.tipoPago);
-        if (draft.cuotaInicialInput) setCuotaInicialInput(draft.cuotaInicialInput);
+        if (draft.cuotaInicialInput) setCuotaInicialInput(formatCurrencyInput(draft.cuotaInicialInput));
         if (draft.metodoPagoInicial) setMetodoPagoInicial(draft.metodoPagoInicial);
         if (draft.bancoTransferencia) setBancoTransferencia(draft.bancoTransferencia);
-        if (draft.montoEfectivoInput) setMontoEfectivoInput(draft.montoEfectivoInput);
+        if (draft.montoEfectivoInput) setMontoEfectivoInput(formatCurrencyInput(draft.montoEfectivoInput));
         if (draft.montoTransferenciaInput) setMontoTransferenciaInput(draft.montoTransferenciaInput);
         if (draft.referenciaPagoInicial) setReferenciaPagoInicial(draft.referenciaPagoInicial);
         if (draft.numeroCuotas) setNumeroCuotas(draft.numeroCuotas);
@@ -698,7 +703,7 @@ export default function NuevaVentaScreen({ route, navigation }) {
 
   const cuotaInicial = useMemo(() => {
     if (modalidad === 'contado') return totalArticulos;
-    const val = parseFloat(cuotaInicialInput) || 0;
+    const val = parseCurrencyInput(cuotaInicialInput);
     return Math.min(val, totalArticulos);
   }, [modalidad, cuotaInicialInput, totalArticulos]);
 
@@ -717,13 +722,13 @@ export default function NuevaVentaScreen({ route, navigation }) {
   }, [modalidad, totalArticulos, cuotaInicial]);
 
   const totalTransferencias = useMemo(() => {
-    return comprobantes.reduce((sum, c) => sum + (parseFloat(c.monto) || 0), 0);
+    return comprobantes.reduce((sum, c) => sum + parseCurrencyInput(c.monto), 0);
   }, [comprobantes]);
 
   const totalIngresado = useMemo(() => {
     if (metodoPagoInicial === 'Efectivo') return montoObjetivo;
     if (metodoPagoInicial === 'Transferencia') return totalTransferencias;
-    return (parseFloat(montoEfectivoInput) || 0) + totalTransferencias;
+    return parseCurrencyInput(montoEfectivoInput) + totalTransferencias;
   }, [metodoPagoInicial, montoObjetivo, totalTransferencias, montoEfectivoInput]);
 
   const diferenciaCaja = useMemo(() => {
@@ -735,7 +740,7 @@ export default function NuevaVentaScreen({ route, navigation }) {
     if (metodoPagoInicial === 'Efectivo') return true;
     return (
       comprobantes.length > 0 &&
-      comprobantes.every((c) => (c.banco || '').trim() !== '' && (c.referencia || '').trim() !== '' && (parseFloat(c.monto) || 0) > 0)
+      comprobantes.every((c) => (c.banco || '').trim() !== '' && (c.referencia || '').trim() !== '' && parseCurrencyInput(c.monto) > 0)
     );
   }, [metodoPagoInicial, comprobantes]);
 
@@ -746,14 +751,14 @@ export default function NuevaVentaScreen({ route, navigation }) {
 
   const agregarComprobante = () => {
     if (comprobantes.length >= 3) return;
-    const baseTrans = metodoPagoInicial === 'Mixto' ? Math.max(0, montoObjetivo - (parseFloat(montoEfectivoInput) || 0)) : montoObjetivo;
-    const sumaActual = comprobantes.reduce((sum, c) => sum + (parseFloat(c.monto) || 0), 0);
+    const baseTrans = metodoPagoInicial === 'Mixto' ? Math.max(0, montoObjetivo - parseCurrencyInput(montoEfectivoInput)) : montoObjetivo;
+    const sumaActual = comprobantes.reduce((sum, c) => sum + parseCurrencyInput(c.monto), 0);
     const restante = Math.max(0, baseTrans - sumaActual);
     const newId = String(Date.now() + Math.random());
     setFocusedVoucherId(newId);
     setComprobantes((prev) => [
       ...prev,
-      { id: newId, banco: '', referencia: '', monto: restante > 0 ? String(restante) : '' }
+      { id: newId, banco: '', referencia: '', monto: restante > 0 ? formatCurrencyInput(restante) : '' }
     ]);
   };
 
@@ -882,7 +887,7 @@ export default function NuevaVentaScreen({ route, navigation }) {
   };
 
   const modificarPrecioUnitario = (index, nuevoPrecio) => {
-    const parsed = parseFloat(nuevoPrecio) || 0;
+    const parsed = parseCurrencyInput(nuevoPrecio);
     setItemsVenta((prev) => {
       const copy = [...prev];
       copy[index].valor_unitario = parsed;
@@ -1036,7 +1041,7 @@ export default function NuevaVentaScreen({ route, navigation }) {
       const montoInicialEfectivo = esMontoCero
         ? 0
         : (metodoPagoFinal === 'Mixto'
-            ? (parseFloat(montoEfectivoInput) || 0)
+            ? parseCurrencyInput(montoEfectivoInput)
             : (metodoPagoFinal === 'Efectivo' ? montoBase : 0));
 
       const montoInicialTransferencia = esMontoCero
@@ -1094,11 +1099,11 @@ export default function NuevaVentaScreen({ route, navigation }) {
         })),
         ...(!esMontoCero && !esEfectivoPuro && comprobantes.length > 0 ? {
           transferencias: comprobantes
-            .filter((c) => (parseFloat(c.monto) || 0) > 0)
+            .filter((c) => parseCurrencyInput(c.monto) > 0)
             .map((c) => ({
               entidad_bancaria: (c.banco || '').trim(),
               referencia_pago: (c.referencia || '').trim(),
-              monto: parseFloat(c.monto) || 0,
+              monto: parseCurrencyInput(c.monto),
             }))
         } : {}),
         codeudor: codeudorObj,
@@ -1507,22 +1512,22 @@ export default function NuevaVentaScreen({ route, navigation }) {
                   if (isCero) return;
                   setMetodoPagoInicial(metodo);
                   if (metodo === 'Efectivo') {
-                    setMontoEfectivoInput(montoObjetivo > 0 ? String(montoObjetivo) : '');
+                    setMontoEfectivoInput(montoObjetivo > 0 ? formatCurrencyInput(montoObjetivo) : '');
                     setMontoTransferenciaInput('0');
                     setComprobantes([{ id: '1', banco: '', referencia: '', monto: '' }]);
                   } else if (metodo === 'Transferencia') {
                     setMontoEfectivoInput('0');
-                    setMontoTransferenciaInput(montoObjetivo > 0 ? String(montoObjetivo) : '');
+                    setMontoTransferenciaInput(montoObjetivo > 0 ? formatCurrencyInput(montoObjetivo) : '');
                     setComprobantes([
-                      { id: '1', banco: comprobantes[0]?.banco || '', referencia: comprobantes[0]?.referencia || '', monto: montoObjetivo > 0 ? String(montoObjetivo) : '' }
+                      { id: '1', banco: comprobantes[0]?.banco || '', referencia: comprobantes[0]?.referencia || '', monto: montoObjetivo > 0 ? formatCurrencyInput(montoObjetivo) : '' }
                     ]);
                   } else if (metodo === 'Mixto') {
                     if (montoObjetivo > 0) {
                       const mitad = Math.floor(montoObjetivo / 2);
-                      setMontoEfectivoInput(String(mitad));
-                      setMontoTransferenciaInput(String(montoObjetivo - mitad));
+                      setMontoEfectivoInput(formatCurrencyInput(mitad));
+                      setMontoTransferenciaInput(formatCurrencyInput(montoObjetivo - mitad));
                       setComprobantes([
-                        { id: '1', banco: comprobantes[0]?.banco || '', referencia: comprobantes[0]?.referencia || '', monto: String(montoObjetivo - mitad) }
+                        { id: '1', banco: comprobantes[0]?.banco || '', referencia: comprobantes[0]?.referencia || '', monto: formatCurrencyInput(montoObjetivo - mitad) }
                       ]);
                     }
                   }
@@ -1589,7 +1594,7 @@ export default function NuevaVentaScreen({ route, navigation }) {
                   placeholder="0"
                   placeholderTextColor="#94A3B8"
                   value={montoEfectivoInput}
-                  onChangeText={setMontoEfectivoInput}
+                  onChangeText={(val) => setMontoEfectivoInput(formatCurrencyInput(val))}
                 />
                 <Text style={styles.sugerenciaMixtoText}>
                   ⚠️ Valores sugeridos. Verifica y ajusta el dinero físico recibido.
@@ -1676,7 +1681,7 @@ export default function NuevaVentaScreen({ route, navigation }) {
                         placeholder="0"
                         placeholderTextColor="#94A3B8"
                         value={comp.monto}
-                        onChangeText={(val) => actualizarComprobante(comp.id, 'monto', val)}
+                        onChangeText={(val) => actualizarComprobante(comp.id, 'monto', formatCurrencyInput(val))}
                         autoFocus={focusedVoucherId === comp.id}
                         selectTextOnFocus
                       />
@@ -1963,7 +1968,7 @@ export default function NuevaVentaScreen({ route, navigation }) {
                           <TextInput
                             style={styles.varPriceInput}
                             keyboardType="numeric"
-                            value={String(item.valor_unitario)}
+                            value={item.valor_unitario ? formatCurrencyInput(item.valor_unitario) : ''}
                             onChangeText={(val) => modificarPrecioUnitario(index, val)}
                           />
                         </View>
@@ -2070,7 +2075,7 @@ export default function NuevaVentaScreen({ route, navigation }) {
                   style={styles.fieldInput}
                   keyboardType="numeric"
                   value={cuotaInicialInput}
-                  onChangeText={setCuotaInicialInput}
+                  onChangeText={(val) => setCuotaInicialInput(formatCurrencyInput(val))}
                   placeholder="0"
                 />
                 <Text style={styles.fieldHelpText}>

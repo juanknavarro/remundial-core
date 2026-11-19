@@ -27,6 +27,11 @@ import {
   STORAGE_KEYS as DB_STORAGE_KEYS,
   CACHE_CONFIG,
 } from '../storage/database';
+import {
+  formatCurrencyInput,
+  parseCurrencyInput,
+  cleanNumericString,
+} from '../utils/currency';
 import { version as appVersion } from '../../package.json';
 
 // Función auxiliar de formateo en pesos colombianos
@@ -816,17 +821,17 @@ export default function CobradorDashboard({ navigation }) {
 
   // Cálculos financieros y vouchers para el Modal de Abono
   const valorTotalAbonoNum = useMemo(() => {
-    return parseFloat(String(montoAbono).replace(/[^0-9.-]+/g, '')) || 0;
+    return parseCurrencyInput(montoAbono);
   }, [montoAbono]);
 
   const totalTransferenciasAbono = useMemo(() => {
-    return comprobantesAbono.reduce((sum, c) => sum + (parseFloat(c.monto) || 0), 0);
+    return comprobantesAbono.reduce((sum, c) => sum + parseCurrencyInput(c.monto), 0);
   }, [comprobantesAbono]);
 
   const totalIngresadoAbono = useMemo(() => {
     if (metodoPagoAbono === 'efectivo') return valorTotalAbonoNum;
     if (metodoPagoAbono === 'transferencia') return totalTransferenciasAbono;
-    return (parseFloat(montoEfectivoAbono) || 0) + totalTransferenciasAbono;
+    return parseCurrencyInput(montoEfectivoAbono) + totalTransferenciasAbono;
   }, [metodoPagoAbono, valorTotalAbonoNum, totalTransferenciasAbono, montoEfectivoAbono]);
 
   const diferenciaCajaAbono = useMemo(() => {
@@ -842,7 +847,7 @@ export default function CobradorDashboard({ navigation }) {
         (c) =>
           (c.banco || '').trim() !== '' &&
           (c.referencia || '').trim() !== '' &&
-          (parseFloat(c.monto) || 0) > 0
+          parseCurrencyInput(c.monto) > 0
       )
     );
   }, [metodoPagoAbono, comprobantesAbono]);
@@ -858,9 +863,9 @@ export default function CobradorDashboard({ navigation }) {
     if (comprobantesAbono.length >= 3) return;
     const baseTrans =
       metodoPagoAbono === 'mixto'
-        ? Math.max(0, valorTotalAbonoNum - (parseFloat(montoEfectivoAbono) || 0))
+        ? Math.max(0, valorTotalAbonoNum - parseCurrencyInput(montoEfectivoAbono))
         : valorTotalAbonoNum;
-    const sumaActual = comprobantesAbono.reduce((sum, c) => sum + (parseFloat(c.monto) || 0), 0);
+    const sumaActual = comprobantesAbono.reduce((sum, c) => sum + parseCurrencyInput(c.monto), 0);
     const restante = Math.max(0, baseTrans - sumaActual);
     const newId = String(Date.now() + Math.random());
     setFocusedVoucherAbonoId(newId);
@@ -870,7 +875,7 @@ export default function CobradorDashboard({ navigation }) {
         id: newId,
         banco: '',
         referencia: '',
-        monto: restante > 0 ? String(restante) : '',
+        monto: restante > 0 ? formatCurrencyInput(restante) : '',
       },
     ]);
   };
@@ -1837,14 +1842,14 @@ export default function CobradorDashboard({ navigation }) {
     const cuotaSugerida = cuotaPendiente
       ? String(Math.round(cuotaPendiente.saldo_cuota || cuotaPendiente.valor_exigible || cuotaPendiente.monto || credito.valor_cuota || 0))
       : (credito.valor_cuota ? String(Math.round(credito.valor_cuota)) : '');
-    setMontoAbono(cuotaSugerida);
+    setMontoAbono(formatCurrencyInput(cuotaSugerida));
     setMetodoPagoAbono('efectivo');
     setBancoAbono('');
     setErrorReferenciaAbono(null);
     setCompEditandoBancoAbonoId(null);
     setComprobantesAbono([{ id: '1', banco: '', referencia: '', monto: '' }]);
-    const valSug = parseFloat(cuotaSugerida) || 0;
-    setMontoEfectivoAbono(valSug > 0 ? String(valSug) : '');
+    const valSug = parseCurrencyInput(cuotaSugerida);
+    setMontoEfectivoAbono(valSug > 0 ? formatCurrencyInput(valSug) : '');
     setMontoTransferenciaAbono('0');
     setReferenciaPagoAbono('');
     setGpsCoords(null);
@@ -1856,33 +1861,33 @@ export default function CobradorDashboard({ navigation }) {
     const mLower = String(metodo).toLowerCase();
     setMetodoPagoAbono(mLower);
     setErrorReferenciaAbono(null);
-    const val = parseFloat(String(montoAbono).replace(/[^0-9.-]+/g, '')) || 0;
+    const val = parseCurrencyInput(montoAbono);
     if (mLower === 'efectivo') {
-      setMontoEfectivoAbono(val > 0 ? String(val) : '');
+      setMontoEfectivoAbono(val > 0 ? formatCurrencyInput(val) : '');
       setMontoTransferenciaAbono('0');
       setComprobantesAbono([{ id: '1', banco: '', referencia: '', monto: '' }]);
     } else if (mLower === 'transferencia') {
       setMontoEfectivoAbono('0');
-      setMontoTransferenciaAbono(val > 0 ? String(val) : '');
+      setMontoTransferenciaAbono(val > 0 ? formatCurrencyInput(val) : '');
       setComprobantesAbono([
         {
           id: '1',
           banco: comprobantesAbono[0]?.banco || '',
           referencia: comprobantesAbono[0]?.referencia || '',
-          monto: val > 0 ? String(val) : '',
+          monto: val > 0 ? formatCurrencyInput(val) : '',
         },
       ]);
     } else if (mLower === 'mixto') {
       if (val > 0) {
         const mitad = Math.floor(val / 2);
-        setMontoEfectivoAbono(String(mitad));
-        setMontoTransferenciaAbono(String(val - mitad));
+        setMontoEfectivoAbono(formatCurrencyInput(mitad));
+        setMontoTransferenciaAbono(formatCurrencyInput(val - mitad));
         setComprobantesAbono([
           {
             id: '1',
             banco: comprobantesAbono[0]?.banco || '',
             referencia: comprobantesAbono[0]?.referencia || '',
-            monto: String(val - mitad),
+            monto: formatCurrencyInput(val - mitad),
           },
         ]);
       } else {
@@ -1894,27 +1899,28 @@ export default function CobradorDashboard({ navigation }) {
   };
 
   const actualizarMontoAbono = (nuevoMonto, metodo = metodoPagoAbono) => {
-    setMontoAbono(nuevoMonto);
-    const val = parseFloat(String(nuevoMonto).replace(/[^0-9.-]+/g, '')) || 0;
+    const formatted = formatCurrencyInput(nuevoMonto);
+    setMontoAbono(formatted);
+    const val = parseCurrencyInput(nuevoMonto);
     if (metodo === 'efectivo') {
-      setMontoEfectivoAbono(val > 0 ? String(val) : '');
+      setMontoEfectivoAbono(val > 0 ? formatCurrencyInput(val) : '');
       setMontoTransferenciaAbono('0');
     } else if (metodo === 'transferencia') {
       setMontoEfectivoAbono('0');
-      setMontoTransferenciaAbono(val > 0 ? String(val) : '');
+      setMontoTransferenciaAbono(val > 0 ? formatCurrencyInput(val) : '');
       if (comprobantesAbono.length === 1) {
         setComprobantesAbono((prev) => [
-          { ...prev[0], monto: val > 0 ? String(val) : '' },
+          { ...prev[0], monto: val > 0 ? formatCurrencyInput(val) : '' },
         ]);
       }
     } else if (metodo === 'mixto') {
       if (val > 0) {
         const mitad = Math.floor(val / 2);
-        setMontoEfectivoAbono(String(mitad));
-        setMontoTransferenciaAbono(String(val - mitad));
+        setMontoEfectivoAbono(formatCurrencyInput(mitad));
+        setMontoTransferenciaAbono(formatCurrencyInput(val - mitad));
         if (comprobantesAbono.length === 1) {
           setComprobantesAbono((prev) => [
-            { ...prev[0], monto: String(val - mitad) },
+            { ...prev[0], monto: formatCurrencyInput(val - mitad) },
           ]);
         }
       } else {
@@ -1948,7 +1954,7 @@ export default function CobradorDashboard({ navigation }) {
       return;
     }
 
-    const valor = parseFloat(String(montoAbono).replace(/[^0-9.-]+/g, ''));
+    const valor = parseCurrencyInput(montoAbono);
     console.log("👉 [DEBUG 2 - MONTO] Monto parseado:", { raw: montoAbono, valor });
 
     if (!valor || valor <= 0) {
@@ -2141,17 +2147,17 @@ export default function CobradorDashboard({ navigation }) {
         finalMontoEfectivo = 0;
         finalMontoTransferencia = totalTransferenciasAbono;
       } else if (metodoPagoAbono === 'mixto') {
-        finalMontoEfectivo = parseFloat(montoEfectivoAbono) || 0;
+        finalMontoEfectivo = parseCurrencyInput(montoEfectivoAbono);
         finalMontoTransferencia = totalTransferenciasAbono;
       }
 
       const finalTransferencias = (metodoPagoAbono !== 'efectivo' && comprobantesAbono.length > 0)
         ? comprobantesAbono
-            .filter((c) => (parseFloat(c.monto) || 0) > 0)
+            .filter((c) => parseCurrencyInput(c.monto) > 0)
             .map((c) => ({
               entidad_bancaria: (c.banco || '').trim(),
               referencia_pago: (c.referencia || '').trim(),
-              monto: parseFloat(c.monto) || 0,
+              monto: parseCurrencyInput(c.monto),
             }))
         : null;
 
@@ -4395,7 +4401,7 @@ export default function CobradorDashboard({ navigation }) {
                 const montoCuotaSiguiente = Math.round(Number(cuotas.find((q) => q.numero === cSiguiente)?.valor_exigible || vCuota || 0));
                 const montoDosCuotas = cActual < tCuotas ? (montoCuotaActual + montoCuotaSiguiente) : 0;
 
-                const currentValNum = parseFloat(String(montoAbono).replace(/[^0-9.-]+/g, '')) || 0;
+                const currentValNum = parseCurrencyInput(montoAbono);
                 const isSelected1 = currentValNum === montoCuotaActual && montoCuotaActual > 0;
                 const isSelected2 = montoDosCuotas > 0 ? (currentValNum === montoDosCuotas) : (currentValNum === Math.round(sPendiente) && sPendiente > 0);
 
@@ -4555,7 +4561,7 @@ export default function CobradorDashboard({ navigation }) {
                           placeholder="0"
                           placeholderTextColor="#94A3B8"
                           value={montoEfectivoAbono}
-                          onChangeText={setMontoEfectivoAbono}
+                          onChangeText={(val) => setMontoEfectivoAbono(formatCurrencyInput(val))}
                           editable={!isSubmittingAbono}
                         />
                         <Text style={styles.sugerenciaMixtoText}>
@@ -4645,7 +4651,7 @@ export default function CobradorDashboard({ navigation }) {
                                 placeholder="0"
                                 placeholderTextColor="#94A3B8"
                                 value={comp.monto}
-                                onChangeText={(val) => actualizarComprobanteAbono(comp.id, 'monto', val)}
+                                onChangeText={(val) => actualizarComprobanteAbono(comp.id, 'monto', formatCurrencyInput(val))}
                                 editable={!isSubmittingAbono}
                                 autoFocus={focusedVoucherAbonoId === comp.id}
                                 selectTextOnFocus
@@ -4678,7 +4684,7 @@ export default function CobradorDashboard({ navigation }) {
               {/* Selector de Agendar Siguiente Visita (Exclusivo Modalidad Dinámica con saldo pendiente) */}
               {(() => {
                 const sPendiente = Number(creditoSeleccionado?.saldo_pendiente || 0);
-                const valorAbonoNum = parseFloat(String(montoAbono).replace(/[^0-9.-]+/g, '')) || 0;
+                const valorAbonoNum = parseCurrencyInput(montoAbono);
                 const saldoResultante = Math.max(0, Math.round((sPendiente - valorAbonoNum) * 100) / 100);
                 const esModalidadDinamica = (creditoSeleccionado?.modalidad_proyeccion || modalidadProyeccionGlobal) === 'dinamica';
 
