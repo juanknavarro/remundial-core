@@ -42,37 +42,37 @@ CONFIG_FILE_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), "..",
 
 DEFAULT_CONFIG_PDF = {
     "membrete": {
-        "razon_social": "REMUNDIAL ARTE'S",
-        "subtitulo": "Mueblería, Artesanías, Mecedoras & Cuadros por Encargo",
-        "nit": "901.458.321-0",
-        "regimen": "Régimen Comercial Colombiano",
-        "ciudad": "Montería - Córdoba",
-        "direccion": "Carrera 5 # 31-20, Centro",
-        "telefono_pbx": "(+57) 300 123 4567",
-        "correo": "info@remundialartes.com",
+        "razon_social": "EMPRESA DE COMERCIO Y CRÉDITO",
+        "subtitulo": "Comercialización, Distribución & Ventas Financiadas",
+        "nit": "000.000.000-0",
+        "regimen": "Régimen Comercial",
+        "ciudad": "Ciudad Principal",
+        "direccion": "Dirección Comercial Principal",
+        "telefono_pbx": "(+57) 300 000 0000",
+        "correo": "contacto@miempresa.com",
     },
     "clausulas_venta": (
         "<b>CLÁUSULAS GENERALES DE COMPRAVENTA Y FINANCIACIÓN:</b><br/>"
-        "<b>1. Objeto y Recepción:</b> El CLIENTE adquiere a entera satisfacción los artículos y muebles descritos en este comprobante. "
-        "<b>2. Cuadros al Óleo y Por Encargo:</b> Las obras artísticas por encargo se elaboran a mano con especificaciones acordadas; "
-        "una vez iniciada la producción artística no se admiten cancelaciones ni retractos unilaterales. "
-        "<b>3. Plan de Pagos Mensual:</b> Las cuotas pactadas vencen puntualmente el último día calendario de cada mes respectivo. "
+        "<b>1. Objeto y Recepción:</b> El CLIENTE adquiere a entera satisfacción los artículos y bienes descritos en este comprobante. "
+        "<b>2. Pedidos y Fabricación:</b> Los bienes bajo encargo o especificación especial se alistan según los términos acordados; "
+        "una vez iniciada la orden no se admiten cancelaciones unilaterales. "
+        "<b>3. Plan de Pagos:</b> Las cuotas pactadas vencen puntualmente según la periodicidad acordada. "
         "Los abonos parciales reducen el saldo, y cualquier diferencia insoluta se arrastra a la siguiente exigibilidad sin alterar el plazo. "
-        "<b>4. Reserva de Dominio y Mérito Ejecutivo:</b> Remundial Arte's conserva la propiedad de los bienes hasta el pago total de la obligación. "
+        "<b>4. Reserva de Dominio y Mérito Ejecutivo:</b> LA EMPRESA conserva la propiedad de los bienes hasta el pago total de la obligación. "
         "El presente documento presta mérito ejecutivo de conformidad con la legislación mercantil colombiana."
     ),
     "certificacion_recaudo": (
         "<b>CERTIFICACIÓN DE PAGO:</b> Este recibo digital certifica formalmente la recepción y registro del recaudo "
-        "en las cuentas de Remundial Arte's. La presente constancia amortiza el saldo del contrato especificado y queda "
+        "en las cuentas de la empresa. La presente constancia amortiza el saldo del contrato especificado y queda "
         "asentada de manera inmutable en los libros auxiliares de cartera. Conserve este comprobante para cualquier conciliación contable."
     ),
     "acta_restitucion": {
         "clausula_legal": (
             "<b>CLÁUSULA DE ENTREGA Y RESTITUCIÓN VOLUNTARIA DE BIENES:</b> En la fecha y hora señaladas en el encabezado, "
-            "el CLIENTE / DEUDOR TITULAR hace entrega material, formal y pacífica a REMUNDIAL ARTE'S de los artículos descritos "
+            "el CLIENTE / DEUDOR TITULAR hace entrega material, formal y pacífica a la empresa acreedora de los artículos descritos "
             "en el inventario anterior, en aplicación estricta de las estipulaciones contractuales sobre reserva de dominio y "
             "garantía mobiliaria pactadas en el contrato original de venta a crédito, motivado por la mora grave de tres (3) o más "
-            "cuotas vencidas. REMUNDIAL ARTE'S recibe los bienes en calidad de custodia y para los trámites legales de avalúo, "
+            "cuotas vencidas. La empresa acreedora recibe los bienes en calidad de custodia y para los trámites legales de avalúo, "
             "liquidación y compensación del saldo deudor remanente. Ambas partes declaran haber verificado el estado físico de los "
             "bienes retirados y estampan su consentimiento formal mediante firma digitalizada."
         ),
@@ -396,6 +396,8 @@ class ReciboNumberedCanvas(canvas.Canvas):
     """Canvas de dos pasos para calcular el total exacto de páginas y estampar pie de página corporativo."""
 
     fecha_impresion: str = ""
+    empresa_nombre: str = ""
+    empresa_ciudad: str = ""
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -425,8 +427,10 @@ class ReciboNumberedCanvas(canvas.Canvas):
 
         # Textos de pie de página con timestamp local real idéntico al encabezado
         fecha_str = self.fecha_impresion or obtener_timestamp_local_servidor().strftime("%Y-%m-%d %H:%M:%S")
+        nom_empresa = self.empresa_nombre or "Comprobante Oficial"
+        ciu_part = f" • {self.empresa_ciudad}" if self.empresa_ciudad else ""
         footer_left = (
-            f"Remundial Arte's • Comprobante Digital y Contrato de Venta • Montería, Córdoba • Generado: {fecha_str}"
+            f"{nom_empresa} • Comprobante Digital y Contrato de Venta{ciu_part} • Generado: {fecha_str}"
         )
         footer_right = f"Página {self._pageNumber} de {page_count}"
 
@@ -439,7 +443,7 @@ class ReciboNumberedCanvas(canvas.Canvas):
 def generar_pdf_recibo_venta(credito: Credito) -> bytes:
     """Genera un comprobante oficial de venta y contrato en PDF para un crédito o venta de contado.
     
-    Inspirado en la estructura del talonario físico de "Remundial Arte's" (Montería - Córdoba):
+    Inspirado en la estructura del talonario físico y comercial corporativo:
     - Encabezado corporativo oficial con datos comerciales de la empresa.
     - Metadatos de la operación (N° de Contrato CTR-XXXX, Fecha, Asesor Comercial, Modalidad).
     - Datos del cliente titular y codeudor solidario / referencia.
@@ -633,6 +637,8 @@ def generar_pdf_recibo_venta(credito: Credito) -> bytes:
     dt_local = obtener_timestamp_local_servidor(dt_orden)
     fecha_emision = dt_local.strftime("%d/%m/%Y %I:%M %p")
     ReciboNumberedCanvas.fecha_impresion = fecha_emision
+    ReciboNumberedCanvas.empresa_nombre = m_cfg.get("razon_social") or "Comprobante Oficial"
+    ReciboNumberedCanvas.empresa_ciudad = m_cfg.get("ciudad") or getattr(credito, "ciudad_venta", "") or ""
     asesor_nombre = credito.vendedor.nombre if credito.vendedor else "Asesor de Ventas"
     es_contado = (
         credito.monto_financiado == Decimal("0.00")
@@ -674,7 +680,7 @@ def generar_pdf_recibo_venta(credito: Credito) -> bytes:
     # 2. ENCABEZADO OFICIAL PERSONALIZADO
     # Columna Izquierda: Logo y Razón Social • Columna Derecha: Recuadro Oficial de Comprobante
     header_col_izq = [
-        Paragraph(m_cfg.get("razon_social") or "REMUNDIAL ARTE'S", style_title),
+        Paragraph(m_cfg.get("razon_social") or "EMPRESA DE COMERCIO Y CRÉDITO", style_title),
         Spacer(1, 2),
         Paragraph(
             construir_lineas_membrete_sub(m_cfg, tipo_contacto="Ventas"),
@@ -884,10 +890,11 @@ def generar_pdf_recibo_venta(credito: Credito) -> bytes:
                 ]
             )
     else:
+        nombre_art_defecto = f"Venta de Artículos y Bienes Comerciales • {m_cfg.get('razon_social') or 'Contrato Comercial'}"
         items_rows.append(
             [
                 Paragraph("1", style_table_cell),
-                Paragraph("Venta de Bienes Muebles y Decoración Remundial", style_table_cell),
+                Paragraph(nombre_art_defecto, style_table_cell),
                 Paragraph("Línea Estándar", style_badge_stock),
                 Paragraph("1", style_table_cell),
                 Paragraph(format_cop(credito.cuota_inicial + credito.monto_financiado), style_table_cell),
@@ -1329,10 +1336,10 @@ def generar_pdf_recibo_venta(credito: Credito) -> bytes:
         Paragraph("<font size='5.5' color='#64748B'>Codeudor Solidario y Mancomunado</font>", style_signature_sub),
     ]
 
-    # Columna 3: Por Remundial Arte's (Firma Autorizada)
-    razon_social_firma = m_cfg.get("razon_social") or "REMUNDIAL ARTE'S"
-    ciudad_firma = m_cfg.get("ciudad") or "Montería - Córdoba"
-    sig_remundial = [
+    # Columna 3: Por la Empresa (Firma Autorizada)
+    razon_social_firma = m_cfg.get("razon_social") or "LA EMPRESA"
+    ciudad_firma = m_cfg.get("ciudad") or getattr(credito, "ciudad_venta", "") or "Oficina Comercial"
+    sig_empresa = [
         crear_bloque_firma_imagen(firma_vendedor_b64, fallback_height=24),
         HRFlowable(width="85%", thickness=0.75, color=c_primary, spaceBefore=0, spaceAfter=3),
         Paragraph(f"<b>POR {razon_social_firma}</b><br/>{ciudad_firma}", style_signature_label),
@@ -1340,9 +1347,9 @@ def generar_pdf_recibo_venta(credito: Credito) -> bytes:
         Paragraph("<font size='5.5' color='#64748B'>Firma Autorizada / Sello Comercial</font>", style_signature_sub),
     ]
 
-    # Columnas de firmas simétricas: Titular (182 pt), Codeudor (184 pt), Remundial (182 pt) = 548 pt
+    # Columnas de firmas simétricas: Titular (182 pt), Codeudor (184 pt), Empresa (182 pt) = 548 pt
     firmas_table = Table(
-        [[sig_cliente, sig_codeudor, sig_remundial]],
+        [[sig_cliente, sig_codeudor, sig_empresa]],
         colWidths=[182, 184, 182],
     )
     firmas_table.setStyle(
@@ -1374,7 +1381,7 @@ def generar_pdf_recibo_abono(
 ) -> bytes:
     """Genera un comprobante oficial de recaudo y abono a cartera en formato PDF.
     
-    Estructura corporativa de recibo de caja para Remundial Arte's:
+    Estructura corporativa de recibo de caja oficial:
     - Encabezado oficial comercial de la empresa.
     - Metadatos del comprobante (N° REC-XXXX, Contrato CTR-XXXX, Fecha y Hora Local, Estado).
     - Datos del cliente titular y del cobrador / receptor autorizado.
@@ -1540,6 +1547,8 @@ def generar_pdf_recibo_abono(
     dt_local = obtener_timestamp_local_servidor(dt_abono)
     fecha_abono_str = dt_local.strftime("%Y-%m-%d %H:%M:%S")
     ReciboNumberedCanvas.fecha_impresion = fecha_abono_str
+    ReciboNumberedCanvas.empresa_nombre = m_cfg.get("razon_social") or "Comprobante Oficial"
+    ReciboNumberedCanvas.empresa_ciudad = m_cfg.get("ciudad") or getattr(credito, "ciudad_venta", "") or ""
 
     raw_estado = (abono.estado.value if hasattr(abono.estado, "value") else str(abono.estado)).lower()
     if raw_estado == "conciliado":
@@ -1656,7 +1665,7 @@ def generar_pdf_recibo_abono(
 
     # 3. ENCABEZADO OFICIAL PERSONALIZADO
     header_col_izq = [
-        Paragraph(m_cfg.get("razon_social") or "REMUNDIAL ARTE'S", style_title),
+        Paragraph(m_cfg.get("razon_social") or "EMPRESA DE COMERCIO Y CRÉDITO", style_title),
         Spacer(1, 2),
         Paragraph(
             construir_lineas_membrete_sub(m_cfg, tipo_contacto="Cobranzas"),
@@ -2111,8 +2120,8 @@ def generar_pdf_recibo_abono(
         or (obtener_firma_almacenada(abono.credito_id, "titular") if getattr(abono, "credito_id", None) else None)
     )
 
-    razon_social_abono = m_cfg.get("razon_social") or "Remundial Arte's"
-    ciudad_abono = m_cfg.get("ciudad") or "Montería"
+    razon_social_abono = m_cfg.get("razon_social") or "LA EMPRESA"
+    ciudad_abono = m_cfg.get("ciudad") or "Oficina Comercial"
     sig_cobrador = [
         crear_bloque_firma_imagen(firma_cobrador_b64, fallback_height=24),
         HRFlowable(width="80%", thickness=0.75, color=c_primary, spaceBefore=0, spaceAfter=3),
@@ -2402,13 +2411,17 @@ def generar_pdf_acta_restitucion(
         cuotas_vencidas_num = res_cron.get("cuotas_vencidas_count", 3)
 
     # 1. ENCABEZADO CORPORATIVO PERSONALIZADO
-    razon_social_acta = m_cfg.get("razon_social") or "REMUNDIAL ARTE'S"
-    nit_acta = m_cfg.get("nit") or "900.123.456-7"
-    regimen_acta = m_cfg.get("regimen") or "Régimen Común"
-    dir_acta = m_cfg.get("direccion") or "Calle 29 # 4-56, Centro"
-    ciu_acta = m_cfg.get("ciudad") or "Montería, Córdoba"
-    pbx_acta = m_cfg.get("telefono_pbx") or "300 123 4567"
+    razon_social_acta = m_cfg.get("razon_social") or "LA EMPRESA"
+    nit_acta = m_cfg.get("nit") or "000.000.000-0"
+    regimen_acta = m_cfg.get("regimen") or "Régimen Comercial"
+    dir_acta = m_cfg.get("direccion") or "Dirección Comercial"
+    ciu_acta = m_cfg.get("ciudad") or getattr(credito, "ciudad_venta", "") or "Oficina Comercial"
+    pbx_acta = m_cfg.get("telefono_pbx") or "000 000 0000"
     obs_acta_default = acta_cfg.get("observaciones_defecto") or "Departamento de Cartera y Recuperación de Bienes"
+
+    ReciboNumberedCanvas.fecha_impresion = dt_local_str
+    ReciboNumberedCanvas.empresa_nombre = razon_social_acta
+    ReciboNumberedCanvas.empresa_ciudad = ciu_acta
 
     header_left = [
         Paragraph(f"<b>{razon_social_acta}</b>", style_company_name),
@@ -2709,7 +2722,7 @@ def generar_pdf_acta_restitucion(
         HRFlowable(width="85%", thickness=0.75, color=c_primary, spaceBefore=0, spaceAfter=3),
         Paragraph("<b>GESTOR / COBRADOR AUTORIZADO EN RUTA</b>", style_signature_label),
         Paragraph(f"<b>{cobrador_nombre_final}</b>", style_signature_label),
-        Paragraph("Remundial Arte's • Montería", style_signature_sub),
+        Paragraph(f"{razon_social_acta} • {ciu_acta}", style_signature_sub),
         Paragraph("<font size='6' color='#059669'>Recibe bienes en custodia oficial</font>", style_signature_sub),
         Paragraph(f"<font size='5.5' color='#64748B'>Fecha/Hora: {dt_local_str}</font>", style_signature_sub),
     ]

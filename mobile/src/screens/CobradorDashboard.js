@@ -17,7 +17,7 @@ import * as Location from 'expo-location';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useAuth } from '../context/AuthContext';
 import { useSync } from '../context/SyncContext';
-import apiClient, { STORAGE_KEYS, limpiarCredencialesLocales } from '../api/client';
+import apiClient, { STORAGE_KEYS, limpiarCredencialesLocales, DEFAULT_API_URL } from '../api/client';
 import InFrameModal from '../components/InFrameModal';
 import SignatureCanvas from '../components/SignatureCanvas';
 import BankSelectorModal from '../components/BankSelectorModal';
@@ -278,7 +278,7 @@ function sanitizarTextoPdf(str) {
 }
 
 // Generador de Comprobante Oficial PDF en memoria (Arquitectura Offline-First / Blob de Navegador)
-function generarPdfReciboAbonoOfflineBlob(recibo, cobradorNombre) {
+function generarPdfReciboAbonoOfflineBlob(recibo, cobradorNombre, empresaConfig = null) {
   if (!recibo) throw new Error('No hay datos de recibo para generar PDF.');
 
   const isParcial = Boolean(recibo.es_abono_parcial);
@@ -300,6 +300,10 @@ function generarPdfReciboAbonoOfflineBlob(recibo, cobradorNombre) {
   const gpsLat = Number(recibo.gps?.latitud || 8.756412).toFixed(6);
   const gpsLon = Number(recibo.gps?.longitud || -75.884129).toFixed(6);
 
+  const razonSocial = sanitizarTextoPdf((empresaConfig?.razon_social || recibo?.empresa_razon_social || process.env.EXPO_PUBLIC_APP_NAME || 'SISTEMA COMERCIAL').toUpperCase());
+  const nitEmpresa = sanitizarTextoPdf(empresaConfig?.nit || recibo?.empresa_nit || '000.000.000-0');
+  const ciudadEmpresa = sanitizarTextoPdf(empresaConfig?.ciudad || recibo?.empresa_ciudad || 'Ciudad Principal');
+
   let stream = '';
 
   // Barra de cabecera principal (Azul Marino Corporativo)
@@ -311,7 +315,7 @@ function generarPdfReciboAbonoOfflineBlob(recibo, cobradorNombre) {
   stream += '/F2 18 Tf\n';
   stream += '1 1 1 rg\n';
   stream += '48 732 Td\n';
-  stream += '(REMUNDIAL ARTE\'S) Tj\n';
+  stream += '(' + razonSocial + ') Tj\n';
   stream += 'ET\n';
 
   // Subtítulo
@@ -319,7 +323,7 @@ function generarPdfReciboAbonoOfflineBlob(recibo, cobradorNombre) {
   stream += '/F1 9 Tf\n';
   stream += '0.8 0.85 0.95 rg\n';
   stream += '48 714 Td\n';
-  stream += '(Muebles, Electrodomesticos y Credito Directo - NIT 901.452.889-1) Tj\n';
+  stream += '(Comercializacion, Distribucion y Credito Directo - NIT ' + nitEmpresa + ') Tj\n';
   stream += 'ET\n';
 
   // Banner de Contingencia Local Offline
@@ -586,14 +590,14 @@ function generarPdfReciboAbonoOfflineBlob(recibo, cobradorNombre) {
   stream += '/F1 7.5 Tf\n';
   stream += '0.35 0.4 0.45 rg\n';
   stream += '48 190 Td\n';
-  stream += '(se restablezca el enlace de datos con el servidor central de Remundial Arte\'s, garantizando su conciliacion formal.) Tj\n';
+  stream += '(se restablezca el enlace de datos con el servidor central de ' + razonSocial + ', garantizando su conciliacion formal.) Tj\n';
   stream += 'ET\n';
 
   stream += 'BT\n';
   stream += '/F1 7.5 Tf\n';
   stream += '0.35 0.4 0.45 rg\n';
   stream += '48 178 Td\n';
-  stream += '(Para verificar o solicitar copia oficial digital contacte a Atencion al Cliente Remundial Arte\'s en Monteria, Cordoba.) Tj\n';
+  stream += '(Para verificar o solicitar copia oficial digital contacte a Atencion al Cliente ' + razonSocial + ' en ' + ciudadEmpresa + '.) Tj\n';
   stream += 'ET\n';
 
   // Firmas
@@ -652,7 +656,7 @@ function generarPdfReciboAbonoOfflineBlob(recibo, cobradorNombre) {
   stream += '/F1 7 Tf\n';
   stream += '0.5 0.55 0.6 rg\n';
   stream += '210 45 Td\n';
-  stream += '(Remundial Arte\'s - Sistema ERP de Gestion y Cartera - Pagina 1 de 1) Tj\n';
+  stream += '(' + razonSocial + ' - Sistema ERP de Gestion y Cartera - Pagina 1 de 1) Tj\n';
   stream += 'ET\n';
 
   const encoder = typeof TextEncoder !== 'undefined'
@@ -714,7 +718,8 @@ export default function CobradorDashboard({ navigation }) {
   const [activeTab, setActiveTab] = useState('recaudos');
 
   // Estados dinámicos de Marca Blanca y Versión de la Aplicación
-  const [empresaNombre, setEmpresaNombre] = useState('');
+  const [empresaNombre, setEmpresaNombre] = useState(process.env.EXPO_PUBLIC_APP_NAME || 'Sistema Comercial');
+  const [empresaCiudad, setEmpresaCiudad] = useState('Ciudad Principal');
   const [footerDinamico, setFooterDinamico] = useState(`v${appVersion} • Operaciones de Campo`);
   const [modalidadProyeccionGlobal, setModalidadProyeccionGlobal] = useState('fija');
 
@@ -728,6 +733,9 @@ export default function CobradorDashboard({ navigation }) {
           const emp = cfg.empresa?.razon_social;
           if (emp) {
             setEmpresaNombre(emp);
+          }
+          if (cfg.empresa?.ciudad) {
+            setEmpresaCiudad(cfg.empresa.ciudad);
           }
           if (cfg.reglas_credito?.modalidad_proyeccion) {
             setModalidadProyeccionGlobal(cfg.reglas_credito.modalidad_proyeccion);
@@ -745,6 +753,12 @@ export default function CobradorDashboard({ navigation }) {
         try {
           const resConf = await apiClient.get('/configuracion/parametros');
           if (resConf.data && isMounted) {
+            if (resConf.data.empresa?.razon_social) {
+              setEmpresaNombre(resConf.data.empresa.razon_social);
+            }
+            if (resConf.data.empresa?.ciudad) {
+              setEmpresaCiudad(resConf.data.empresa.ciudad);
+            }
             if (resConf.data.reglas_credito?.modalidad_proyeccion) {
               setModalidadProyeccionGlobal(resConf.data.reglas_credito.modalidad_proyeccion);
             }
@@ -962,7 +976,7 @@ export default function CobradorDashboard({ navigation }) {
       clean = '57' + clean;
     }
     const texto = encodeURIComponent(
-      `Hola ${nombre || ''}, te contacto de Remundial referente al cobro del contrato respaldado (${rol || 'Garantía'}).`
+      `Hola ${nombre || ''}, te contacto de ${empresaNombre || 'la empresa'} referente al cobro del contrato respaldado (${rol || 'Garantía'}).`
     );
     Linking.openURL(`https://wa.me/${clean}?text=${texto}`).catch((err) => {
       console.warn('Error al abrir WhatsApp:', err);
@@ -1785,7 +1799,7 @@ export default function CobradorDashboard({ navigation }) {
   const handleDescargarActaPdf = async () => {
     if (!actaGenerada?.id_contrato) return;
     try {
-      const baseURL = apiClient.defaults.baseURL || 'http://localhost:8000';
+      const baseURL = apiClient.defaults.baseURL || DEFAULT_API_URL;
       const rawToken =
         authToken ||
         (await AsyncStorage.getItem(STORAGE_KEYS.TOKEN)) ||
@@ -2406,7 +2420,7 @@ export default function CobradorDashboard({ navigation }) {
 
       const tokenLimpio = rawToken ? String(rawToken).replace(/^Bearer\s+/i, '').trim() : '';
       const authHeaders = tokenLimpio ? { Authorization: `Bearer ${tokenLimpio}` } : {};
-      const baseURL = apiClient.defaults.baseURL || 'http://localhost:8000';
+      const baseURL = apiClient.defaults.baseURL || DEFAULT_API_URL;
 
       // 1. MODO OFFLINE / COLA LOCAL (ID temporal o registro offline)
       // Enviar a FastAPI /abonos/recibo-offline-pdf para renderizar el PDF oficial con ReportLab (firma real + cobrador)
@@ -2580,7 +2594,7 @@ export default function CobradorDashboard({ navigation }) {
         document.body.removeChild(a);
         window.URL.revokeObjectURL(blobUrl);
       } else {
-        const baseURL = apiClient.defaults.baseURL || 'http://10.0.2.2:8000';
+        const baseURL = apiClient.defaults.baseURL || DEFAULT_API_URL;
         const targetUrl = `${baseURL}/abonos/${idRecibo}/recibo-pdf?token=${encodeURIComponent(tokenLimpio || '')}&cobrador_nombre=${encodeURIComponent(cobradorNombre || '')}`;
         await Linking.openURL(targetUrl);
       }
@@ -2591,7 +2605,7 @@ export default function CobradorDashboard({ navigation }) {
         try {
           const filename = reciboExitoso?.nombre_archivo_pdf || `Recibo_${idRecibo || 'Offline'}.pdf`;
           const cobradorNombre = user?.nombre || user?.nombre_completo || reciboExitoso?.cobrador_nombre || 'Pedro Cobrador';
-          const blob = generarPdfReciboAbonoOfflineBlob(reciboExitoso, cobradorNombre);
+          const blob = generarPdfReciboAbonoOfflineBlob(reciboExitoso, cobradorNombre, { razon_social: empresaNombre, ciudad: empresaCiudad });
           const blobUrl = window.URL.createObjectURL(blob);
           const a = document.createElement('a');
           a.href = blobUrl;
@@ -2632,7 +2646,7 @@ export default function CobradorDashboard({ navigation }) {
     }
 
     const mensaje =
-      `*REMUNDIAL S.A.S. - ${tipoTitulo}*\n\n` +
+      `*${(empresaNombre || 'SISTEMA COMERCIAL').toUpperCase()} - ${tipoTitulo}*\n\n` +
       `Estimado(a) *${reciboExitoso.cliente}*,\n` +
       `Confirmamos el recaudo registrado en terreno por su cobrador autorizado.\n\n` +
       `🧾 *No. Recibo:* ${String(reciboExitoso.id_recibo).slice(0, 8).toUpperCase()}\n` +
@@ -2644,7 +2658,7 @@ export default function CobradorDashboard({ navigation }) {
       `🕒 *Fecha/Hora:* ${reciboExitoso.fecha_completa || ''} ${reciboExitoso.fecha || ''}\n` +
       `📄 *Archivo PDF:* ${nomPdf}\n\n` +
       `Gracias por su compromiso y puntualidad.\n` +
-      `_Remundial S.A.S. - Gestión de Créditos_`;
+      `_${empresaNombre || 'Sistema Comercial'} - Gestión de Créditos_`;
 
     const waUrl = telColombia
       ? `https://api.whatsapp.com/send?phone=${telColombia}&text=${encodeURIComponent(mensaje)}`
@@ -2666,7 +2680,7 @@ export default function CobradorDashboard({ navigation }) {
     if (!reciboExitoso) return;
     const email = reciboExitoso.cliente_correo || '';
     const tipoTitulo = reciboExitoso.es_abono_parcial ? 'Abono Parcial' : 'Pago de Cuota';
-    const asunto = `Comprobante de ${tipoTitulo} - Contrato ${reciboExitoso.numero_contrato} - Remundial`;
+    const asunto = `Comprobante de ${tipoTitulo} - Contrato ${reciboExitoso.numero_contrato} - ${empresaNombre || 'Sistema Comercial'}`;
 
     let detalleInsoluto = '';
     if (reciboExitoso.es_abono_parcial) {
@@ -2689,7 +2703,7 @@ export default function CobradorDashboard({ navigation }) {
       `Saldo Restante: ${formatCOP(reciboExitoso.nuevoSaldo)}\n` +
       `Fecha: ${reciboExitoso.fecha_completa || ''} ${reciboExitoso.fecha || ''}\n` +
       `Documento Oficial: ${reciboExitoso.nombre_archivo_pdf || ''}\n\n` +
-      `Atentamente,\nEquipo de Cobranzas y Recaudos Remundial S.A.S.`;
+      `Atentamente,\nEquipo de Cobranzas y Recaudos - ${empresaNombre || 'Sistema Comercial'}`;
 
     const mailtoUrl = `mailto:${encodeURIComponent(email)}?subject=${encodeURIComponent(asunto)}&body=${encodeURIComponent(cuerpo)}`;
     if (Platform.OS === 'web' && typeof window !== 'undefined') {

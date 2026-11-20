@@ -21,6 +21,7 @@ import {
   guardarEnCache,
   obtenerDeCache,
 } from '../storage/database';
+import { obtenerConfigEmpresa } from '../utils/empresa';
 import {
   formatCurrencyInput,
   parseCurrencyInput,
@@ -122,6 +123,15 @@ export default function ArqueoScreen({ navigation, route }) {
   const [showConfirmModal, setShowConfirmModal] = useState(false);
   const [showComprobanteModal, setShowComprobanteModal] = useState(false);
   const [ultimoCierre, setUltimoCierre] = useState(null);
+  const [empresaNombre, setEmpresaNombre] = useState(process.env.EXPO_PUBLIC_APP_NAME || 'Sistema Comercial');
+
+  useEffect(() => {
+    obtenerConfigEmpresa().then((cfg) => {
+      if (cfg?.razon_social) {
+        setEmpresaNombre(cfg.razon_social);
+      }
+    });
+  }, []);
 
   // =========================================================================
   // CARGA DE DATOS ASÍNCRONA DESDE FASTAPI
@@ -415,7 +425,7 @@ export default function ArqueoScreen({ navigation, route }) {
       `Recaudos Conciliados: ${ultimoCierre.cantidadAbonos}\n` +
       (ultimoCierre.notas ? `Notas: ${ultimoCierre.notas}\n` : '') +
       `------------------------------------\n` +
-      `Remundial Core - Control Operativo`;
+      `${empresaNombre || 'Sistema Comercial'} - Control Operativo`;
 
     try {
       await Share.share({

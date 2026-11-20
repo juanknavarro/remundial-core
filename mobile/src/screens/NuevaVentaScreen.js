@@ -18,7 +18,7 @@ import {
   Modal,
 } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import apiClient, { STORAGE_KEYS as AUTH_STORAGE_KEYS } from '../api/client';
+import apiClient, { STORAGE_KEYS as AUTH_STORAGE_KEYS, DEFAULT_API_URL } from '../api/client';
 import { useAuth } from '../context/AuthContext';
 import { useSync } from '../context/SyncContext';
 import InFrameModal from '../components/InFrameModal';
@@ -170,6 +170,7 @@ export default function NuevaVentaScreen({ route, navigation }) {
   const [clientes, setClientes] = useState([]);
   const [productos, setProductos] = useState([]);
   const [isLoadingData, setIsLoadingData] = useState(false);
+  const [empresaNombre, setEmpresaNombre] = useState(process.env.EXPO_PUBLIC_APP_NAME || 'Sistema Comercial');
 
   // Cliente seleccionado
   const [clienteSeleccionado, setClienteSeleccionado] = useState(
@@ -470,6 +471,9 @@ export default function NuevaVentaScreen({ route, navigation }) {
           const cachedConfigRaw = await AsyncStorage.getItem(CACHE_CONFIG);
           if (cachedConfigRaw) {
             const parsedConfig = JSON.parse(cachedConfigRaw);
+            if (parsedConfig?.empresa?.razon_social) {
+              setEmpresaNombre(parsedConfig.empresa.razon_social);
+            }
             const plazos = parsedConfig?.reglas_credito?.plazos_permitidos;
             if (Array.isArray(plazos) && plazos.length > 0) {
               const clean = plazos
@@ -489,6 +493,9 @@ export default function NuevaVentaScreen({ route, navigation }) {
             .then(async (resConf) => {
               if (resConf?.data) {
                 await AsyncStorage.setItem(CACHE_CONFIG, JSON.stringify(resConf.data));
+                if (resConf.data?.empresa?.razon_social) {
+                  setEmpresaNombre(resConf.data.empresa.razon_social);
+                }
                 const plazos = resConf.data?.reglas_credito?.plazos_permitidos;
                 if (Array.isArray(plazos) && plazos.length > 0) {
                   const clean = plazos
@@ -1340,7 +1347,7 @@ export default function NuevaVentaScreen({ route, navigation }) {
       const filename = ventaExitosa?.nombre_archivo_pdf || `Venta_${ventaExitosa?.id_contrato_codigo || idContrato}.pdf`;
 
       if (Platform.OS === 'web') {
-        const baseURL = apiClient.defaults.baseURL || 'http://localhost:8000';
+        const baseURL = apiClient.defaults.baseURL || DEFAULT_API_URL;
         const queryToken = tokenLimpio ? `?token=${encodeURIComponent(tokenLimpio)}` : '';
         const downloadUrl = `${baseURL}/creditos/${idContrato}/recibo-pdf${queryToken}`;
         const res = await fetch(downloadUrl, {
@@ -1365,7 +1372,7 @@ export default function NuevaVentaScreen({ route, navigation }) {
         document.body.removeChild(a);
         window.URL.revokeObjectURL(blobUrl);
       } else {
-        const baseURL = apiClient.defaults.baseURL || 'http://10.0.2.2:8000';
+        const baseURL = apiClient.defaults.baseURL || DEFAULT_API_URL;
         const targetUrl = `${baseURL}/creditos/${idContrato}/recibo-pdf?token=${encodeURIComponent(tokenLimpio || '')}`;
         await Linking.openURL(targetUrl);
       }
@@ -1391,9 +1398,9 @@ export default function NuevaVentaScreen({ route, navigation }) {
     const nomPdf = ventaExitosa.nombre_archivo_pdf || `Venta_${idCtr}.pdf`;
 
     const mensaje =
-      `*REMUNDIAL - COMPROBANTE OFICIAL DE VENTA*\n\n` +
+      `*${(empresaNombre || 'SISTEMA COMERCIAL').toUpperCase()} - COMPROBANTE OFICIAL DE VENTA*\n\n` +
       `Estimado(a) *${ventaExitosa.cliente}*,\n` +
-      `Se ha originado con éxito su contrato de venta con Remundial.\n\n` +
+      `Se ha originado con éxito su contrato de venta con ${empresaNombre || 'la empresa'}.\n\n` +
       `📋 *No. Contrato:* ${idCtr}\n` +
       (ventaExitosa.numero_contrato ? `📑 *Folio Físico:* ${ventaExitosa.numero_contrato}\n` : '') +
       (ventaExitosa.ciudad_venta ? `📍 *Ciudad de Venta:* ${ventaExitosa.ciudad_venta}\n` : '') +
@@ -1425,10 +1432,10 @@ export default function NuevaVentaScreen({ route, navigation }) {
     if (!ventaExitosa) return;
     const idCtr = ventaExitosa.id_contrato_codigo || ventaExitosa.id_contrato;
     const nomPdf = ventaExitosa.nombre_archivo_pdf || `Venta_${idCtr}.pdf`;
-    const asunto = `Comprobante de Venta - Contrato ${idCtr} - Remundial`;
+    const asunto = `Comprobante de Venta - Contrato ${idCtr} - ${empresaNombre || 'Sistema Comercial'}`;
     const cuerpo =
       `Estimado(a) ${ventaExitosa.cliente},\n\n` +
-      `Adjuntamos el resumen de su contrato originado con Remundial:\n\n` +
+      `Adjuntamos el resumen de su contrato originado con ${empresaNombre || 'la empresa'}:\n\n` +
       `• No. Contrato: ${idCtr}\n` +
       (ventaExitosa.numero_contrato ? `• Folio Físico: ${ventaExitosa.numero_contrato}\n` : '') +
       (ventaExitosa.ciudad_venta ? `• Ciudad de Venta: ${ventaExitosa.ciudad_venta}\n` : '') +
@@ -1438,7 +1445,7 @@ export default function NuevaVentaScreen({ route, navigation }) {
       `• Firmas: Firmado digitalmente en pantalla por Titular y Vendedor.\n` +
       `• Archivo PDF: ${nomPdf}\n\n` +
       `Atentamente,\n` +
-      `Equipo Remundial Core`;
+      `Equipo ${empresaNombre || 'Sistema Comercial'}`;
 
     const mailUrl = `mailto:?subject=${encodeURIComponent(asunto)}&body=${encodeURIComponent(cuerpo)}`;
 
@@ -2828,7 +2835,7 @@ export default function NuevaVentaScreen({ route, navigation }) {
             <Text style={styles.successSubtitle}>
               {ventaExitosa?.offline
                 ? 'Se sincronizará automáticamente al detectar conexión a internet'
-                : 'Remundial Core - Servidor Nube'}
+                : `${empresaNombre || 'Sistema Core'} - Servidor Nube`}
             </Text>
 
             {ventaExitosa && (

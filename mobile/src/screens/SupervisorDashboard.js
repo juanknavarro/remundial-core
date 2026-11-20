@@ -74,7 +74,7 @@ export default function SupervisorDashboard({ navigation }) {
   const [expandedCarteraIndex, setExpandedCarteraIndex] = useState(0);
 
   // Estados de Marca Blanca y Empresa
-  const [empresaNombre, setEmpresaNombre] = useState("Remundial Arte's");
+  const [empresaNombre, setEmpresaNombre] = useState(process.env.EXPO_PUBLIC_APP_NAME || "Sistema Comercial");
 
   // Estados para alertas de Ventas Anuladas & Devoluciones
   const [anuladasPendientesCount, setAnuladasPendientesCount] = useState(0);

@@ -100,6 +100,9 @@ export default function DashboardLayout({
     telefono?: string;
   } | null>(null);
   const [sistemaVersion, setSistemaVersion] = useState<string>(pkg.version || '1.2.0');
+  const [empresaNombre, setEmpresaNombre] = useState<string>('Sistema Core');
+  const [eslogan, setEslogan] = useState<string>('Créditos & Cobranza');
+  const [tieneLogo, setTieneLogo] = useState<boolean>(false);
 
   // Hook global de resiliencia ante suspensión, reconexión de red y control de inactividad
   const { resilienceToast, dismissToast } = useSessionResilience();
@@ -110,6 +113,15 @@ export default function DashboardLayout({
       .then((res) => {
         if (res.data?.sistema?.version) {
           setSistemaVersion(res.data.sistema.version);
+        }
+        if (res.data?.empresa?.razon_social) {
+          setEmpresaNombre(res.data.empresa.razon_social);
+        }
+        if (res.data?.empresa?.eslogan) {
+          setEslogan(res.data.empresa.eslogan);
+        }
+        if (res.data?.empresa?.tiene_logo) {
+          setTieneLogo(Boolean(res.data.empresa.tiene_logo));
         }
       })
       .catch(() => {});
@@ -244,7 +256,7 @@ export default function DashboardLayout({
           </div>
           <div className="text-center space-y-1">
             <p className="text-sm font-bold text-slate-800 tracking-tight">Verificando sesión autorizada...</p>
-            <p className="text-xs text-slate-400">Protección de acceso Remundial Core</p>
+            <p className="text-xs text-slate-400">Protección y control de acceso</p>
           </div>
         </div>
       </div>
@@ -279,15 +291,26 @@ export default function DashboardLayout({
             )}
           >
             <Link href="/dashboard" className="flex items-center gap-3 overflow-hidden">
-              <div className="w-9 h-9 rounded-xl bg-slate-900 flex items-center justify-center text-white font-black shadow-sm shrink-0">
-                <Layers className="w-5 h-5" />
+              <div className="w-9 h-9 rounded-xl bg-slate-900 flex items-center justify-center text-white font-black shadow-sm shrink-0 overflow-hidden">
+                {tieneLogo ? (
+                  <img
+                    src={`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/configuracion/logo`}
+                    alt="Logo"
+                    className="w-full h-full object-contain p-1"
+                    onError={(e) => {
+                      (e.currentTarget as HTMLElement).style.display = 'none';
+                    }}
+                  />
+                ) : (
+                  <Layers className="w-5 h-5" />
+                )}
               </div>
               {!isCollapsed && (
                 <div className="truncate transition-opacity duration-200 animate-in fade-in">
                   <span className="font-bold text-base tracking-tight text-slate-900 flex items-center gap-1.5">
-                    Remundial <span className="text-xs font-semibold px-1.5 py-0.5 rounded bg-slate-100 text-slate-600">Pro</span>
+                    {empresaNombre} <span className="text-xs font-semibold px-1.5 py-0.5 rounded bg-slate-100 text-slate-600">Pro</span>
                   </span>
-                  <span className="text-xs text-slate-600 block truncate">Créditos & Cobranza</span>
+                  <span className="text-xs text-slate-600 block truncate">{eslogan}</span>
                 </div>
               )}
             </Link>

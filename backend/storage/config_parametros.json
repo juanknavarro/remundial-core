@@ -8,7 +8,7 @@
   },
   "identidad_visual": {
     "eslogan_login": "Plataforma Central de Crédito & Cobranza",
-    "eslogan_mobile": "Plataforma Central de Campo & Cobranza",
+    "eslogan_mobile": "El arte a tu alcance con financiamiento transparente",
     "pie_login": "Acceso restringido únicamente a colaboradores autorizados de Remundial.",
     "pie_mobile": "Remundial Core v1.2.0 • Operaciones de Campo",
     "tiene_logo": false,
@@ -31,7 +31,7 @@
     "modalidad_proyeccion": "dinamica"
   },
   "sistema": {
-    "version": "1.2.0",
+    "version": "1.9.0",
     "ambiente": "Producción Local",
     "modulo_migracion_activo": true,
     "formato_migracion": "Excel (.xlsx Multi-Hoja)"

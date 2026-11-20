@@ -15,9 +15,9 @@ export default function LoginPage() {
   const [errorMessage, setErrorMessage] = useState('');
   const [inactivityNotice, setInactivityNotice] = useState<string | null>(null);
   const [brandInfo, setBrandInfo] = useState({
-    razon_social: 'Remundial Core',
+    razon_social: 'Sistema de Cartera & Créditos',
     eslogan_login: 'Plataforma Central de Crédito & Cobranza',
-    pie_login: 'Acceso restringido únicamente a colaboradores autorizados de Remundial.',
+    pie_login: 'Acceso restringido únicamente a colaboradores autorizados.',
     tiene_logo: false,
     logo_url: null as string | null,
   });
@@ -47,9 +47,9 @@ export default function LoginPage() {
             ? (rawUrl.startsWith('http') ? rawUrl : `${api.defaults.baseURL || ''}${rawUrl}`)
             : null;
           setBrandInfo({
-            razon_social: res.data.razon_social || 'Remundial Core',
+            razon_social: res.data.razon_social || 'Sistema de Cartera & Créditos',
             eslogan_login: res.data.eslogan_login || 'Plataforma Central de Crédito & Cobranza',
-            pie_login: res.data.pie_login || 'Acceso restringido únicamente a colaboradores autorizados de Remundial.',
+            pie_login: res.data.pie_login || 'Acceso restringido únicamente a colaboradores autorizados.',
             tiene_logo: Boolean(res.data.tiene_logo),
             logo_url: fullLogoUrl,
           });

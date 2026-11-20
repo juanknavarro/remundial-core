@@ -68,7 +68,7 @@ export default function VendedorDashboard({ navigation }) {
   const [showLogoutModal, setShowLogoutModal] = useState(false);
 
   // Estados dinámicos de Marca Blanca y Versión de la Aplicación
-  const [empresaNombre, setEmpresaNombre] = useState('');
+  const [empresaNombre, setEmpresaNombre] = useState(process.env.EXPO_PUBLIC_APP_NAME || 'Sistema Comercial');
   const [footerDinamico, setFooterDinamico] = useState(`v${appVersion} • Operaciones de Campo`);
 
   useEffect(() => {
@@ -128,7 +128,7 @@ export default function VendedorDashboard({ navigation }) {
       clean = '57' + clean;
     }
     const texto = encodeURIComponent(
-      `Hola ${nombre || ''}, te contacto de Remundial referente al contrato respaldado (${rol || 'Garantía'}).`
+      `Hola ${nombre || ''}, te contacto de ${empresaNombre || 'la empresa'} referente al contrato respaldado (${rol || 'Garantía'}).`
     );
     Linking.openURL(`https://wa.me/${clean}?text=${texto}`).catch((err) => {
       console.warn('Error al abrir WhatsApp:', err);
@@ -512,7 +512,7 @@ export default function VendedorDashboard({ navigation }) {
     const nombreCliente = clienteNombre || 'Cliente';
     const nombreAsesor = asesorNombre || user?.nombre || 'Asesor Comercial';
     const montoFormateado = formatCOP(monto);
-    const mensaje = `Hola ${nombreCliente}, desde Remundial Arte's el asesor ${nombreAsesor} le confirma la anulación oficial de su compra por 'Falta de inventario'. Le confirmamos la devolución de ${montoFormateado} COP. Su cuenta queda saldada.`;
+    const mensaje = `Hola ${nombreCliente}, desde ${empresaNombre || 'la empresa'} el asesor ${nombreAsesor} le confirma la anulación oficial de su compra por 'Falta de inventario'. Le confirmamos la devolución de ${montoFormateado} COP. Su cuenta queda saldada.`;
 
     const waUrl = tel
       ? `https://wa.me/${tel}?text=${encodeURIComponent(mensaje)}`

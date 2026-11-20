@@ -17,7 +17,7 @@ import {
 } from 'react-native';
 import * as Location from 'expo-location';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import apiClient from '../api/client';
+import apiClient, { DEFAULT_API_URL } from '../api/client';
 import InFrameModal from '../components/InFrameModal';
 import SignatureCanvas from '../components/SignatureCanvas';
 import {
@@ -258,7 +258,7 @@ export default function CarteraCriticaScreen({ navigation }) {
   const handleDescargarActaPdf = async (id_contrato, codigo_contrato) => {
     if (!id_contrato) return;
     try {
-      const baseURL = apiClient.defaults.baseURL || 'http://localhost:8000';
+      const baseURL = apiClient.defaults.baseURL || DEFAULT_API_URL;
       const rawToken =
         (await AsyncStorage.getItem(STORAGE_KEYS.TOKEN)) ||
         (await AsyncStorage.getItem('@remundial_token')) ||
@@ -1470,7 +1470,7 @@ export default function CarteraCriticaScreen({ navigation }) {
                       subtitle="Firme para certificar la recepción en custodia de los bienes muebles"
                       obligatorio={true}
                       signerName={supervisorNombre || 'Supervisor de Operaciones'}
-                      signerDoc="Supervisor de Operaciones / Remundial Core"
+                      signerDoc="Supervisor de Operaciones / Control Operativo"
                       value={firmaSupervisorRetiro}
                       onChange={setFirmaSupervisorRetiro}
                       height={125}

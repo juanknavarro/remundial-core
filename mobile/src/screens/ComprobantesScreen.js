@@ -19,6 +19,7 @@ import {
   obtenerDeCache,
   STORAGE_KEYS,
 } from '../storage/database';
+import { obtenerConfigEmpresa } from '../utils/empresa';
 
 const formatCOP = (val) => {
   const num = Math.round(Number(val) || 0);
@@ -45,6 +46,15 @@ export default function ComprobantesScreen({ navigation }) {
   const [busqueda, setBusqueda] = useState('');
   const [filtroTipo, setFiltroTipo] = useState('todos'); // 'todos' | 'abono' | 'venta'
   const [expandedIndex, setExpandedIndex] = useState(0);
+  const [empresaNombre, setEmpresaNombre] = useState(process.env.EXPO_PUBLIC_APP_NAME || 'Sistema Comercial');
+
+  useEffect(() => {
+    obtenerConfigEmpresa().then((cfg) => {
+      if (cfg?.razon_social) {
+        setEmpresaNombre(cfg.razon_social);
+      }
+    });
+  }, []);
 
   // Cargar historial reciente de transacciones (Abonos + Ventas)
   const cargarHistorial = useCallback(async (isPullRefresh = false) => {
@@ -264,7 +274,7 @@ export default function ComprobantesScreen({ navigation }) {
 
       const lineas = [
         '🧾 *COMPROBANTE TRANSACCIONAL OFICIAL*',
-        "🏢 Remundial Arte's • Sistema Core",
+        `🏢 ${empresaNombre || 'Sistema Comercial'} • Sistema Core`,
         '-----------------------------------------',
         `📄 *Folio:* ${item.folio}`,
         `👤 *Cliente:* ${item.cliente}${item.cedula ? ` (CC: ${item.cedula})` : ''}`,

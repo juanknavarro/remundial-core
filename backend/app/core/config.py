@@ -6,7 +6,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     """Configuración global de la aplicación usando variables de entorno."""
 
-    PROJECT_NAME: str = "Remundial Core API"
+    PROJECT_NAME: str = "Sistema Core API"
     VERSION: str = "1.0.0"
     API_V1_STR: str = "/api/v1"
 
@@ -15,13 +15,13 @@ class Settings(BaseSettings):
     POSTGRES_PASSWORD: str = "postgres"
     POSTGRES_HOST: str = "localhost"
     POSTGRES_PORT: int = 5432
-    POSTGRES_DB: str = "remundial_db"
+    POSTGRES_DB: str = "sistema_db"
 
     # URL completa opcional (si se define, toma precedencia sobre las partes individuales)
     DATABASE_URL: Optional[str] = None
 
     # Configuración de Seguridad y JWT
-    SECRET_KEY: str = "remundial_super_secret_jwt_key_production_2026_secure_32bytes"
+    SECRET_KEY: str = "core_platform_jwt_secret_key_production_secure_32bytes"
     ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 60 * 24  # 24 horas para uso en campo
 

@@ -24,7 +24,7 @@ const resolveImageUrl = (imgUrl) => {
   if (trimmed.startsWith('http://') || trimmed.startsWith('https://') || trimmed.startsWith('file://')) {
     return trimmed;
   }
-  const base = apiClient?.defaults?.baseURL || DEFAULT_API_URL || 'http://localhost:8000';
+  const base = apiClient?.defaults?.baseURL || DEFAULT_API_URL;
   const cleanBase = base.endsWith('/') ? base.slice(0, -1) : base;
   const cleanPath = trimmed.startsWith('/') ? trimmed : `/${trimmed}`;
   return `${cleanBase}${cleanPath}`;

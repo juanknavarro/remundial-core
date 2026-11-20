@@ -276,6 +276,7 @@ export default function PosOriginacionCreditoPage() {
   const [firmaCliente, setFirmaCliente] = useState<string | null>(null);
   const [firmaCodeudor, setFirmaCodeudor] = useState<string | null>(null);
   const [firmaSupervisor, setFirmaSupervisor] = useState<string | null>(null);
+  const [empresaRazonSocial, setEmpresaRazonSocial] = useState<string>('LA EMPRESA');
 
   // Sistema Institucional de Notificaciones y Modales de Alerta (Reemplazo de window.alert nativo)
   const [modalNotificacion, setModalNotificacion] = useState<{
@@ -460,6 +461,9 @@ export default function PosOriginacionCreditoPage() {
     const fetchParametros = async () => {
       try {
         const res = await api.get('/configuracion/parametros');
+        if (res.data?.empresa?.razon_social) {
+          setEmpresaRazonSocial(res.data.empresa.razon_social);
+        }
         if (res.data?.reglas_credito?.modalidad_proyeccion) {
           setModalidadProyeccion(res.data.reglas_credito.modalidad_proyeccion);
         }
@@ -1213,7 +1217,7 @@ export default function PosOriginacionCreditoPage() {
             >
               {esContado ? 'Liquidación Inmediata' : 'Venta a Crédito'}
             </span>
-            <span className="text-xs text-slate-600">• Terminal POS Remundial</span>
+            <span className="text-xs text-slate-600">• Terminal POS {empresaRazonSocial !== 'LA EMPRESA' ? empresaRazonSocial : 'Comercial'}</span>
           </div>
           <h1 className="text-2xl sm:text-3xl font-bold tracking-tight text-slate-900">
             Punto de Venta (POS)
@@ -2989,7 +2993,7 @@ export default function PosOriginacionCreditoPage() {
                     subtitle="Visto bueno comercial y certificación oficial de la venta"
                     badgeText="Obligatorio"
                     badgeVariant="required"
-                    pdfMapping="Casilla derecha • POR REMUNDIAL ARTE'S"
+                    pdfMapping={`Casilla derecha • POR ${empresaRazonSocial ? empresaRazonSocial.toUpperCase() : 'LA EMPRESA'}`}
                     onChange={setFirmaSupervisor}
                     height={135}
                     className="md:col-span-2 xl:col-span-1"
