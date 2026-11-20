@@ -1,0 +1,21 @@
+{
+  "id_contrato": "0bd72f57-7b33-4973-a007-53242958ff27",
+  "fecha_acta": "2026-11-19 19:17:48",
+  "motivo": "Incumplimiento grave de pago con acumulación de 4 cuotas morosas vencidas (Causal de restitución prendaria).",
+  "observaciones": "Bienes muebles entregados para custodia oficial y amortización o restitución del saldo deudor.",
+  "cobrador_nombre": "Supervisor",
+  "cuotas_vencidas": 4,
+  "saldo_pendiente": 800000.0,
+  "articulos": [
+    {
+      "producto_id": "d63b7aea-9e32-4f57-9c34-b67b2450fdb3",
+      "nombre": "Cuadro al Óleo Lienzo 120x80cm Paisaje Marino Atardecer",
+      "sku": "ART-001",
+      "cantidad": 1,
+      "reingresado": true,
+      "fecha_reingreso": "2026-11-19 19:20:15",
+      "reingresado_por": "Supervisor",
+      "observaciones_reingreso": "Se debe realizar una pulida y mantenimiento"
+    }
+  ]
+}

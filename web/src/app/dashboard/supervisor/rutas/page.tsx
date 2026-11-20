@@ -22,6 +22,12 @@ import {
 import { formatCOP, cn } from '@/lib/utils';
 import { api } from '@/lib/api';
 
+interface DetalleTransferencia {
+  entidad_bancaria: string;
+  referencia_pago: string;
+  monto: number;
+}
+
 interface Cobrador {
   id: string;
   nombre: string;
@@ -37,6 +43,12 @@ interface AbonoItem {
   fecha: string;
   valor_abonado: number;
   estado: 'registrado' | 'conciliado' | 'anulado';
+  metodo_pago?: string;
+  monto_efectivo?: number;
+  monto_transferencia?: number;
+  banco_transferencia?: string;
+  referencia_pago?: string;
+  transferencias?: DetalleTransferencia[];
   cliente_nombre?: string;
   cliente_cedula?: string;
 }
@@ -47,11 +59,49 @@ interface RutaConsolidada {
   telefono: string;
   zona: string;
   cobrosRealizados: number;
-  totalEsperado: number; // Abonos pendientes por conciliar
-  totalRecaudado: number; // Total acumulado en la jornada
+  totalEsperado: number; // Abonos pendientes por conciliar (Efectivo físico estricto)
+  totalEsperadoEfectivo: number;
+  totalEsperadoTransferencias: number;
+  totalRecaudado: number; // Total acumulado en la jornada (Global)
+  totalRecaudadoEfectivo: number;
+  totalRecaudadoTransferencias: number;
   abonosPendientesCount: number;
   abonosConciliadosCount: number;
   estado: 'pendiente' | 'conciliada' | 'sin_movimiento';
+}
+
+export function calcularDesgloseAbono(abono: AbonoItem) {
+  const metodo = (abono.metodo_pago || 'efectivo').toLowerCase().trim();
+  const valorTotal = Number(abono.valor_abonado || 0);
+
+  if (metodo === 'efectivo') {
+    return { efectivo: valorTotal, transferencia: 0 };
+  }
+
+  if (metodo === 'transferencia') {
+    let montoTrans = Number(abono.monto_transferencia || 0);
+    if (montoTrans <= 0 && Array.isArray(abono.transferencias) && abono.transferencias.length > 0) {
+      montoTrans = abono.transferencias.reduce((acc, t) => acc + Number(t.monto || 0), 0);
+    }
+    if (montoTrans <= 0) {
+      montoTrans = valorTotal;
+    }
+    return { efectivo: 0, transferencia: montoTrans };
+  }
+
+  if (metodo === 'mixto') {
+    let montoTrans = Number(abono.monto_transferencia || 0);
+    if (montoTrans <= 0 && Array.isArray(abono.transferencias) && abono.transferencias.length > 0) {
+      montoTrans = abono.transferencias.reduce((acc, t) => acc + Number(t.monto || 0), 0);
+    }
+    let montoEf = Number(abono.monto_efectivo || 0);
+    if (montoEf <= 0 && valorTotal > montoTrans) {
+      montoEf = valorTotal - montoTrans;
+    }
+    return { efectivo: montoEf, transferencia: montoTrans };
+  }
+
+  return { efectivo: valorTotal, transferencia: 0 };
 }
 
 export default function RutasCobranzaPage() {
@@ -91,6 +141,24 @@ export default function RutasCobranzaPage() {
           estado: a.estado,
           cliente_nombre: a.cliente_nombre,
           cliente_cedula: a.cliente_cedula,
+          metodo_pago: (a.metodo_pago || 'efectivo').toLowerCase().trim(),
+          monto_efectivo:
+            a.monto_efectivo !== undefined && a.monto_efectivo !== null
+              ? Number(a.monto_efectivo)
+              : undefined,
+          monto_transferencia:
+            a.monto_transferencia !== undefined && a.monto_transferencia !== null
+              ? Number(a.monto_transferencia)
+              : undefined,
+          banco_transferencia: a.banco_transferencia || undefined,
+          referencia_pago: a.referencia_pago || undefined,
+          transferencias: Array.isArray(a.transferencias)
+            ? a.transferencias.map((t: any) => ({
+                entidad_bancaria: t.entidad_bancaria || 'Bancolombia',
+                referencia_pago: t.referencia_pago || '',
+                monto: Number(t.monto || 0),
+              }))
+            : undefined,
         }));
         setAbonos(mappedAbonos);
       }
@@ -113,8 +181,25 @@ export default function RutasCobranzaPage() {
       const pendientes = abonosCobrador.filter((a) => a.estado === 'registrado');
       const conciliados = abonosCobrador.filter((a) => a.estado === 'conciliado');
 
-      const totalEsperado = pendientes.reduce((acc, a) => acc + a.valor_abonado, 0);
+      const totalEsperadoEfectivo = pendientes.reduce(
+        (acc, a) => acc + calcularDesgloseAbono(a).efectivo,
+        0
+      );
+      const totalEsperadoTransferencias = pendientes.reduce(
+        (acc, a) => acc + calcularDesgloseAbono(a).transferencia,
+        0
+      );
+      const totalEsperado = totalEsperadoEfectivo;
+
       const totalRecaudado = abonosCobrador.reduce((acc, a) => acc + a.valor_abonado, 0);
+      const totalRecaudadoEfectivo = abonosCobrador.reduce(
+        (acc, a) => acc + calcularDesgloseAbono(a).efectivo,
+        0
+      );
+      const totalRecaudadoTransferencias = abonosCobrador.reduce(
+        (acc, a) => acc + calcularDesgloseAbono(a).transferencia,
+        0
+      );
 
       let estado: 'pendiente' | 'conciliada' | 'sin_movimiento' = 'sin_movimiento';
       if (pendientes.length > 0) {
@@ -130,7 +215,11 @@ export default function RutasCobranzaPage() {
         zona: c.zona,
         cobrosRealizados: abonosCobrador.length,
         totalEsperado,
+        totalEsperadoEfectivo,
+        totalEsperadoTransferencias,
         totalRecaudado,
+        totalRecaudadoEfectivo,
+        totalRecaudadoTransferencias,
         abonosPendientesCount: pendientes.length,
         abonosConciliadosCount: conciliados.length,
         estado,
@@ -143,10 +232,16 @@ export default function RutasCobranzaPage() {
     return abonos.reduce((acc, a) => acc + a.valor_abonado, 0);
   }, [abonos]);
 
-  const totalPendienteCuadre = useMemo(() => {
+  const totalPendienteCuadreEfectivo = useMemo(() => {
     return abonos
       .filter((a) => a.estado === 'registrado')
-      .reduce((acc, a) => acc + a.valor_abonado, 0);
+      .reduce((acc, a) => acc + calcularDesgloseAbono(a).efectivo, 0);
+  }, [abonos]);
+
+  const totalPendienteCuadreTransferencias = useMemo(() => {
+    return abonos
+      .filter((a) => a.estado === 'registrado')
+      .reduce((acc, a) => acc + calcularDesgloseAbono(a).transferencia, 0);
   }, [abonos]);
 
   const rutasPendientesCount = rutasConsolidadas.filter((r) => r.estado === 'pendiente').length;
@@ -230,13 +325,18 @@ export default function RutasCobranzaPage() {
         <div className="bg-white rounded-2xl p-5 border border-slate-200/80 shadow-xs flex items-center justify-between">
           <div>
             <span className="text-[11px] font-bold text-amber-600 uppercase tracking-wider block">
-              Pendiente por Cuadrar
+              Efectivo Pendiente por Cuadrar
             </span>
             <span className="text-2xl font-black font-mono text-amber-600 mt-1 block">
-              {formatCOP(totalPendienteCuadre)}
+              {formatCOP(totalPendienteCuadreEfectivo)}
             </span>
             <span className="text-[11px] text-slate-500 mt-0.5 block">
               {abonos.filter((a) => a.estado === 'registrado').length} recibos sin conciliar
+              {totalPendienteCuadreTransferencias > 0 && (
+                <span className="text-blue-600 font-medium ml-1">
+                  • 🏦 {formatCOP(totalPendienteCuadreTransferencias)} en banco
+                </span>
+              )}
             </span>
           </div>
           <div className="w-11 h-11 rounded-xl bg-amber-50 text-amber-600 flex items-center justify-center shrink-0">
@@ -373,15 +473,33 @@ export default function RutasCobranzaPage() {
                     </div>
 
                     <div className={cn(
-                      'p-4 rounded-xl border',
+                      'p-4 rounded-xl border flex flex-col justify-between',
                       isPendiente ? 'bg-amber-50/50 border-amber-200' : 'bg-emerald-50/40 border-emerald-100'
                     )}>
-                      <span className={cn('text-[11px] font-semibold block', isPendiente ? 'text-amber-800' : 'text-emerald-800')}>
-                        {isPendiente ? 'Pendiente de Entrega en Caja' : 'Efectivo Cuadrado en Caja'}
-                      </span>
-                      <span className={cn('text-xl font-bold font-mono mt-0.5 block', isPendiente ? 'text-amber-900' : 'text-emerald-900')}>
-                        {formatCOP(isPendiente ? ruta.totalEsperado : ruta.totalRecaudado)}
-                      </span>
+                      <div>
+                        <span className={cn('text-[11px] font-semibold block', isPendiente ? 'text-amber-800' : 'text-emerald-800')}>
+                          {isPendiente ? 'Pendiente de Entrega en Caja' : 'Efectivo Cuadrado en Caja'}
+                        </span>
+                        <span className={cn('text-xl font-bold font-mono mt-0.5 block', isPendiente ? 'text-amber-900' : 'text-emerald-900')}>
+                          {formatCOP(isPendiente ? ruta.totalEsperadoEfectivo : ruta.totalRecaudadoEfectivo)}
+                        </span>
+                      </div>
+                      {isPendiente && ruta.totalEsperadoTransferencias > 0 && (
+                        <div className="mt-2 text-[11px] text-amber-800/90 font-medium flex items-center gap-1">
+                          <span>🏦</span>
+                          <span>
+                            <strong className="font-mono">{formatCOP(ruta.totalEsperadoTransferencias)}</strong> en banco
+                          </span>
+                        </div>
+                      )}
+                      {!isPendiente && isConciliada && ruta.totalRecaudadoTransferencias > 0 && (
+                        <div className="mt-2 text-[11px] text-emerald-800/90 font-medium flex items-center gap-1">
+                          <span>🏦</span>
+                          <span>
+                            <strong className="font-mono">{formatCOP(ruta.totalRecaudadoTransferencias)}</strong> en banco
+                          </span>
+                        </div>
+                      )}
                     </div>
                   </div>
 

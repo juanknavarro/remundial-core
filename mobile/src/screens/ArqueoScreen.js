@@ -44,6 +44,50 @@ const formatearFechaHora = (fechaInput) => {
   });
 };
 
+const calcularDesgloseAbono = (a) => {
+  const metodo = (a?.metodo_pago || 'efectivo').toLowerCase().trim();
+  const valorTotal = Number(a?.valor_abonado || a?.monto || 0);
+
+  const sumaTransferenciasArray = Array.isArray(a?.transferencias) && a.transferencias.length > 0
+    ? a.transferencias.reduce((acc, t) => acc + (Number(t?.monto) || 0), 0)
+    : 0;
+
+  let efectivo = 0;
+  let transferencia = 0;
+
+  if (metodo === 'efectivo') {
+    efectivo = valorTotal;
+    transferencia = 0;
+  } else if (metodo === 'transferencia') {
+    efectivo = 0;
+    if (a?.monto_transferencia !== undefined && a?.monto_transferencia !== null && Number(a.monto_transferencia) > 0) {
+      transferencia = Number(a.monto_transferencia);
+    } else if (sumaTransferenciasArray > 0) {
+      transferencia = sumaTransferenciasArray;
+    } else {
+      transferencia = valorTotal;
+    }
+  } else if (metodo === 'mixto') {
+    // 1. Transferencia: monto_transferencia, con respaldo en sumaTransferenciasArray
+    if (a?.monto_transferencia !== undefined && a?.monto_transferencia !== null && Number(a.monto_transferencia) > 0) {
+      transferencia = Number(a.monto_transferencia);
+    } else if (sumaTransferenciasArray > 0) {
+      transferencia = sumaTransferenciasArray;
+    }
+
+    // 2. Efectivo: monto_efectivo o remanente exacto
+    if (a?.monto_efectivo !== undefined && a?.monto_efectivo !== null && Number(a.monto_efectivo) > 0) {
+      efectivo = Number(a.monto_efectivo);
+    } else {
+      efectivo = Math.max(0, valorTotal - transferencia);
+    }
+  } else {
+    efectivo = valorTotal;
+  }
+
+  return { efectivo, transferencia, valorTotal };
+};
+
 export default function ArqueoScreen({ navigation, route }) {
   const initialCobradorId = route?.params?.cobradorId || null;
 
@@ -63,7 +107,12 @@ export default function ArqueoScreen({ navigation, route }) {
 
   // Filtros de recibos en ruta
   const [busqueda, setBusqueda] = useState('');
-  const [filtroPill, setFiltroPill] = useState('todos'); // 'todos' | 'pendientes' | 'conciliados' | 'efectivo' | 'transferencia' | 'saldados'
+  const [filtroPill, setFiltroPill] = useState('todos'); // 'todos' | 'pendientes' | 'conciliados' | 'efectivo' | 'transferencia' | 'mixto' | 'saldados'
+  const [expandedRecibos, setExpandedRecibos] = useState({});
+
+  const toggleExpandRecibo = useCallback((id) => {
+    setExpandedRecibos((prev) => ({ ...prev, [id]: !prev[id] }));
+  }, []);
 
   // Formulario de Arqueo
   const [efectivoEntregadoInput, setEfectivoEntregadoInput] = useState('');
@@ -111,23 +160,44 @@ export default function ArqueoScreen({ navigation, route }) {
       }
 
       if (resAbonos.status === 'fulfilled' && Array.isArray(resAbonos.value?.data)) {
-        const mappedAbonos = resAbonos.value.data.map((a) => ({
-          id_recibo: a.id_recibo,
-          cobrador_id: a.cobrador_id,
-          credito_id: a.credito_id,
-          cliente_nombre: a.cliente_nombre || 'Cliente Titular',
-          cliente_cedula: a.cliente_cedula || '',
-          valor_abonado: Number(a.valor_abonado || 0),
-          fecha: a.fecha,
-          estado: a.estado,
-          cierre_caja_id: a.cierre_caja_id,
-          metodo_pago: (a.metodo_pago || 'efectivo').toLowerCase().trim(),
-          saldo_restante_credito:
-            a.saldo_restante_credito !== undefined && a.saldo_restante_credito !== null
-              ? Number(a.saldo_restante_credito)
-              : undefined,
-          numero_contrato: a.numero_contrato,
-        }));
+        const mappedAbonos = resAbonos.value.data.map((a) => {
+          const metodoPago = (a.metodo_pago || 'efectivo').toLowerCase().trim();
+          const transfArr = Array.isArray(a.transferencias)
+            ? a.transferencias.map((t) => ({
+                entidad_bancaria: t.entidad_bancaria || '',
+                referencia_pago: t.referencia_pago || '',
+                monto: Number(t.monto || 0),
+              }))
+            : [];
+          return {
+            id_recibo: a.id_recibo,
+            cobrador_id: a.cobrador_id,
+            credito_id: a.credito_id,
+            cliente_nombre: a.cliente_nombre || 'Cliente Titular',
+            cliente_cedula: a.cliente_cedula || '',
+            valor_abonado: Number(a.valor_abonado || 0),
+            fecha: a.fecha,
+            estado: a.estado,
+            cierre_caja_id: a.cierre_caja_id,
+            metodo_pago: metodoPago,
+            monto_efectivo:
+              a.monto_efectivo !== undefined && a.monto_efectivo !== null
+                ? Number(a.monto_efectivo)
+                : (metodoPago === 'efectivo' ? Number(a.valor_abonado || 0) : 0),
+            monto_transferencia:
+              a.monto_transferencia !== undefined && a.monto_transferencia !== null
+                ? Number(a.monto_transferencia)
+                : (metodoPago === 'transferencia' ? Number(a.valor_abonado || 0) : 0),
+            banco_transferencia: a.banco_transferencia || null,
+            referencia_pago: a.referencia_pago || null,
+            transferencias: transfArr,
+            saldo_restante_credito:
+              a.saldo_restante_credito !== undefined && a.saldo_restante_credito !== null
+                ? Number(a.saldo_restante_credito)
+                : undefined,
+            numero_contrato: a.numero_contrato,
+          };
+        });
         setAbonos(mappedAbonos);
         guardarEnCache('cache_abonos_arqueo', mappedAbonos);
       } else {
@@ -205,7 +275,11 @@ export default function ArqueoScreen({ navigation, route }) {
   }, [abonosPendientes]);
 
   const pendientesTransferencias = useMemo(() => {
-    return abonosPendientes.filter((a) => a.metodo_pago !== 'efectivo');
+    return abonosPendientes.filter((a) => a.metodo_pago === 'transferencia');
+  }, [abonosPendientes]);
+
+  const pendientesMixto = useMemo(() => {
+    return abonosPendientes.filter((a) => a.metodo_pago === 'mixto');
   }, [abonosPendientes]);
 
   // Clasificación por Impacto en Cartera
@@ -219,26 +293,26 @@ export default function ArqueoScreen({ navigation, route }) {
     );
   }, [abonosPendientes]);
 
-  // Cálculos Financieros del Arqueo
+  // Cálculos Financieros del Arqueo (Cuadre Matemático Exacto con soporte para Mixto)
   const totalEsperadoGeneral = useMemo(() => {
     return abonosPendientes.reduce((acc, a) => acc + a.valor_abonado, 0);
   }, [abonosPendientes]);
 
   const totalEsperadoEfectivo = useMemo(() => {
-    return pendientesEfectivo.reduce((acc, a) => acc + a.valor_abonado, 0);
-  }, [pendientesEfectivo]);
+    return abonosPendientes.reduce((acc, a) => acc + calcularDesgloseAbono(a).efectivo, 0);
+  }, [abonosPendientes]);
 
   const totalEsperadoTransferencias = useMemo(() => {
-    return pendientesTransferencias.reduce((acc, a) => acc + a.valor_abonado, 0);
-  }, [pendientesTransferencias]);
+    return abonosPendientes.reduce((acc, a) => acc + calcularDesgloseAbono(a).transferencia, 0);
+  }, [abonosPendientes]);
 
   // Sincronizar input de efectivo físico sugerido cuando cambia el cobrador o los totales
   useEffect(() => {
-    setEfectivoEntregadoInput(totalEsperadoGeneral > 0 ? formatCurrencyInput(totalEsperadoGeneral) : '');
-  }, [totalEsperadoGeneral, cobradorSeleccionado]);
+    setEfectivoEntregadoInput(totalEsperadoEfectivo > 0 ? formatCurrencyInput(totalEsperadoEfectivo) : '');
+  }, [totalEsperadoEfectivo, cobradorSeleccionado]);
 
   const efectivoEntregadoNum = parseCurrencyInput(efectivoEntregadoInput);
-  const diferencia = efectivoEntregadoNum - totalEsperadoGeneral;
+  const diferencia = efectivoEntregadoNum - totalEsperadoEfectivo;
 
   const estadoCuadre = useMemo(() => {
     if (diferencia === 0) return 'cuadrado';
@@ -252,7 +326,8 @@ export default function ArqueoScreen({ navigation, route }) {
       if (filtroPill === 'pendientes' && a.estado !== 'registrado') return false;
       if (filtroPill === 'conciliados' && a.estado !== 'conciliado') return false;
       if (filtroPill === 'efectivo' && a.metodo_pago !== 'efectivo') return false;
-      if (filtroPill === 'transferencia' && a.metodo_pago === 'efectivo') return false;
+      if (filtroPill === 'transferencia' && a.metodo_pago !== 'transferencia') return false;
+      if (filtroPill === 'mixto' && a.metodo_pago !== 'mixto') return false;
       if (filtroPill === 'saldados' && !(a.saldo_restante_credito !== undefined && a.saldo_restante_credito <= 0)) {
         return false;
       }
@@ -289,7 +364,8 @@ export default function ArqueoScreen({ navigation, route }) {
         id: data?.id,
         cobrador: data?.cobrador_nombre || cobradorSeleccionado.nombre,
         responsable: data?.responsable_nombre || 'Supervisor',
-        totalEsperado: Number(data?.total_esperado ?? totalEsperadoGeneral),
+        totalEsperado: Number(data?.total_esperado ?? totalEsperadoEfectivo),
+        totalGeneral: totalEsperadoGeneral,
         efectivoEntregado: Number(data?.efectivo_entregado ?? efectivoEntregadoNum),
         diferencia: Number(data?.diferencia ?? diferencia),
         cuadreEstado: data?.cuadre_estado || estadoCuadre,
@@ -300,7 +376,7 @@ export default function ArqueoScreen({ navigation, route }) {
         parcialesCount: pendientesParciales.length,
         fechaHora: ahora,
         reciboIds: abonosPendientes.map((a) => a.id_recibo),
-        notas: notasCierre,
+        notas: data?.notas || notasCierre,
       });
 
       setShowConfirmModal(false);
@@ -324,17 +400,18 @@ export default function ArqueoScreen({ navigation, route }) {
 
   const handleCompartirActa = async () => {
     if (!ultimoCierre) return;
+    const totalRuta = ultimoCierre.totalGeneral || (ultimoCierre.totalEfectivo + ultimoCierre.totalTransferencias);
     const texto = `=== ACTA DE ARQUEO Y CIERRE DE CAJA ===\n` +
       `Folio: ${ultimoCierre.id ? String(ultimoCierre.id).slice(0, 8).toUpperCase() : 'N/A'}\n` +
       `Fecha/Hora: ${ultimoCierre.fechaHora}\n` +
       `Cobrador: ${ultimoCierre.cobrador}\n` +
       `Auditor/Supervisor: ${ultimoCierre.responsable}\n` +
       `------------------------------------\n` +
-      `Total Esperado: ${formatCOP(ultimoCierre.totalEsperado)}\n` +
-      `  • Efectivo: ${formatCOP(ultimoCierre.totalEfectivo)}\n` +
-      `  • Transferencia: ${formatCOP(ultimoCierre.totalTransferencias)}\n` +
-      `Efectivo Entregado: ${formatCOP(ultimoCierre.efectivoEntregado)}\n` +
-      `Diferencia: ${formatCOP(ultimoCierre.diferencia)} (${ultimoCierre.cuadreEstado.toUpperCase()})\n` +
+      `Total Recaudado en Ruta: ${formatCOP(totalRuta)}\n` +
+      `  • Efectivo Físico Esperado: ${formatCOP(ultimoCierre.totalEfectivo)}\n` +
+      `  • Transferencias en Banco: ${formatCOP(ultimoCierre.totalTransferencias)}\n` +
+      `Efectivo Físico Entregado: ${formatCOP(ultimoCierre.efectivoEntregado)}\n` +
+      `Diferencia en Caja Física: ${formatCOP(ultimoCierre.diferencia)} (${ultimoCierre.cuadreEstado.toUpperCase()})\n` +
       `Recaudos Conciliados: ${ultimoCierre.cantidadAbonos}\n` +
       (ultimoCierre.notas ? `Notas: ${ultimoCierre.notas}\n` : '') +
       `------------------------------------\n` +
@@ -353,8 +430,24 @@ export default function ArqueoScreen({ navigation, route }) {
   // =========================================================================
   const renderReciboItem = ({ item }) => {
     const esPendiente = item.estado === 'registrado';
-    const esEfectivo = item.metodo_pago === 'efectivo';
+    const metodo = (item.metodo_pago || 'efectivo').toLowerCase().trim();
+    const esEfectivo = metodo === 'efectivo';
+    const esMixto = metodo === 'mixto';
+    const esTransf = metodo === 'transferencia';
     const esSaldado = item.saldo_restante_credito !== undefined && item.saldo_restante_credito <= 0;
+
+    const desglose = calcularDesgloseAbono(item);
+    const isExpanded = !!expandedRecibos[item.id_recibo];
+
+    const transferenciasList = Array.isArray(item.transferencias) && item.transferencias.length > 0
+      ? item.transferencias
+      : (item.banco_transferencia || item.referencia_pago)
+        ? [{
+            entidad_bancaria: item.banco_transferencia || 'Bancolombia',
+            referencia_pago: item.referencia_pago || 'S/R',
+            monto: desglose.transferencia || item.valor_abonado,
+          }]
+        : [];
 
     return (
       <View style={[styles.reciboCard, !esPendiente && styles.reciboCardConciliado]}>
@@ -366,21 +459,29 @@ export default function ArqueoScreen({ navigation, route }) {
             </Text>
           </View>
 
-          <View style={{ flexDirection: 'row', gap: 6 }}>
+          <View style={{ flexDirection: 'row', gap: 6, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
             {/* Badge de Método de Pago */}
             <View
               style={[
                 styles.reciboMetodoBadge,
-                esEfectivo ? styles.reciboMetodoEfectivo : styles.reciboMetodoTransf,
+                esEfectivo
+                  ? styles.reciboMetodoEfectivo
+                  : esMixto
+                  ? styles.reciboMetodoMixto
+                  : styles.reciboMetodoTransf,
               ]}
             >
               <Text
                 style={[
                   styles.reciboMetodoText,
-                  esEfectivo ? styles.reciboMetodoTextEf : styles.reciboMetodoTextTr,
+                  esEfectivo
+                    ? styles.reciboMetodoTextEf
+                    : esMixto
+                    ? styles.reciboMetodoTextMix
+                    : styles.reciboMetodoTextTr,
                 ]}
               >
-                {esEfectivo ? '💵 Efectivo' : '💳 Transf.'}
+                {esEfectivo ? '💵 Efectivo' : esMixto ? '💵+💳 Mixto' : '💳 Transf.'}
               </Text>
             </View>
 
@@ -413,6 +514,58 @@ export default function ArqueoScreen({ navigation, route }) {
             {formatearFechaHora(item.fecha)}
           </Text>
         </View>
+
+        {/* Desglose visual en vivo si es Pago Mixto */}
+        {esMixto && (
+          <View style={styles.reciboMixtoDesgloseRow}>
+            <Text style={styles.reciboMixtoEfText}>
+              💵 Efec: <Text style={styles.reciboMixtoMontoBold}>{formatCOP(desglose.efectivo)}</Text>
+            </Text>
+            <Text style={styles.reciboMixtoSepText}>•</Text>
+            <Text style={styles.reciboMixtoTrText}>
+              💳 Transf: <Text style={styles.reciboMixtoMontoBold}>{formatCOP(desglose.transferencia)}</Text>
+            </Text>
+          </View>
+        )}
+
+        {/* Chip Colapsable para ver Detalle Bancario */}
+        {transferenciasList.length > 0 && (
+          <TouchableOpacity
+            style={styles.reciboTransfToggleBtn}
+            onPress={() => toggleExpandRecibo(item.id_recibo)}
+            activeOpacity={0.7}
+          >
+            <Text style={styles.reciboTransfToggleText}>
+              {isExpanded
+                ? '▴ Ocultar detalle bancario'
+                : `▾ Detalle bancario (${transferenciasList.length} ${transferenciasList.length === 1 ? 'transf.' : 'transfs.'})`}
+            </Text>
+          </TouchableOpacity>
+        )}
+
+        {/* Bloque Desplegado de Transferencias */}
+        {isExpanded && transferenciasList.length > 0 && (
+          <View style={styles.reciboTransfBox}>
+            {transferenciasList.map((t, tIdx) => (
+              <View
+                key={tIdx}
+                style={[styles.reciboTransfItemRow, tIdx > 0 && styles.reciboTransfItemBorder]}
+              >
+                <View style={{ flex: 1, paddingRight: 8 }}>
+                  <Text style={styles.reciboTransfBancoText}>
+                    🏦 {t.entidad_bancaria || 'Transferencia'}
+                  </Text>
+                  <Text style={styles.reciboTransfRefText}>
+                    Ref: {t.referencia_pago || 'Sin referencia'}
+                  </Text>
+                </View>
+                <Text style={styles.reciboTransfMontoText}>
+                  {formatCOP(t.monto)}
+                </Text>
+              </View>
+            ))}
+          </View>
+        )}
 
         {/* Monto y Estado en Cartera */}
         <View style={styles.reciboFooterRow}>
@@ -752,22 +905,24 @@ export default function ArqueoScreen({ navigation, route }) {
                 />
               </View>
 
+              {totalEsperadoTransferencias > 0 && (
+                <View style={styles.efectivoBancarioNotaBox}>
+                  <Text style={styles.efectivoBancarioNotaText}>
+                    ℹ️ Las transferencias ({formatCOP(totalEsperadoTransferencias)}) ingresaron directamente a cuenta bancaria y no se entregan en efectivo físico.
+                  </Text>
+                </View>
+              )}
+
               {/* Botones de Ayuda Rápida (Helper Chips) */}
               <View style={styles.helperChipsRow}>
                 <TouchableOpacity
-                  style={styles.helperChip}
-                  onPress={() => setEfectivoEntregadoInput(formatCurrencyInput(totalEsperadoGeneral))}
-                  activeOpacity={0.7}
-                >
-                  <Text style={styles.helperChipText}>⚡ Auto-llenar Total</Text>
-                </TouchableOpacity>
-
-                <TouchableOpacity
-                  style={styles.helperChip}
+                  style={[styles.helperChip, styles.helperChipPrimary]}
                   onPress={() => setEfectivoEntregadoInput(formatCurrencyInput(totalEsperadoEfectivo))}
                   activeOpacity={0.7}
                 >
-                  <Text style={styles.helperChipText}>💵 Solo Efectivo</Text>
+                  <Text style={styles.helperChipTextPrimary}>
+                    ⚡ Auto-llenar Efectivo ({formatCOP(totalEsperadoEfectivo)})
+                  </Text>
                 </TouchableOpacity>
 
                 <TouchableOpacity
@@ -839,10 +994,10 @@ export default function ArqueoScreen({ navigation, route }) {
                 ]}
               >
                 {estadoCuadre === 'cuadrado'
-                  ? 'El monto físico en mano coincide con el total de recibos en la ruta.'
+                  ? 'El monto físico en mano coincide exactamente con el efectivo esperado en ruta.'
                   : estadoCuadre === 'faltante'
-                  ? 'El dinero entregado en efectivo es menor al registrado en sistema.'
-                  : 'El dinero entregado en efectivo supera el total registrado en sistema.'}
+                  ? 'El dinero entregado en efectivo es menor al efectivo esperado en ruta.'
+                  : 'El dinero entregado en efectivo supera el efectivo esperado en ruta.'}
               </Text>
             </View>
 
@@ -966,6 +1121,23 @@ export default function ArqueoScreen({ navigation, route }) {
               </TouchableOpacity>
 
               <TouchableOpacity
+                style={[
+                  styles.filterPill,
+                  filtroPill === 'mixto' && styles.filterPillActivePurple,
+                ]}
+                onPress={() => setFiltroPill('mixto')}
+              >
+                <Text
+                  style={[
+                    styles.filterPillText,
+                    filtroPill === 'mixto' && styles.filterPillTextActivePurple,
+                  ]}
+                >
+                  💵+💳 Mixto ({pendientesMixto.length})
+                </Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
                 style={[styles.filterPill, filtroPill === 'saldados' && styles.filterPillActiveEmerald]}
                 onPress={() => setFiltroPill('saldados')}
               >
@@ -1060,9 +1232,21 @@ export default function ArqueoScreen({ navigation, route }) {
                 <Text style={styles.confirmSummaryVal}>{abonosPendientes.length} recibos</Text>
               </View>
               <View style={styles.confirmSummaryRow}>
-                <Text style={styles.confirmSummaryLabel}>Total Esperado en Sistema:</Text>
+                <Text style={styles.confirmSummaryLabel}>Total General en Ruta:</Text>
                 <Text style={styles.confirmSummaryVal}>{formatCOP(totalEsperadoGeneral)}</Text>
               </View>
+              <View style={styles.confirmSummaryRow}>
+                <Text style={styles.confirmSummaryLabel}>Efectivo Físico Esperado:</Text>
+                <Text style={styles.confirmSummaryVal}>{formatCOP(totalEsperadoEfectivo)}</Text>
+              </View>
+              {totalEsperadoTransferencias > 0 && (
+                <View style={styles.confirmSummaryRow}>
+                  <Text style={styles.confirmSummaryLabel}>Transferencias en Banco:</Text>
+                  <Text style={[styles.confirmSummaryVal, { color: '#1D4ED8' }]}>
+                    {formatCOP(totalEsperadoTransferencias)}
+                  </Text>
+                </View>
+              )}
               <View style={styles.confirmSummaryRow}>
                 <Text style={styles.confirmSummaryLabel}>Efectivo Físico Entregado:</Text>
                 <Text style={[styles.confirmSummaryVal, { color: '#059669' }]}>
@@ -1071,7 +1255,7 @@ export default function ArqueoScreen({ navigation, route }) {
               </View>
               <View style={styles.confirmSummaryDivider} />
               <View style={styles.confirmSummaryRow}>
-                <Text style={styles.confirmSummaryLabel}>Diferencia Resultante:</Text>
+                <Text style={styles.confirmSummaryLabel}>Diferencia Caja Física:</Text>
                 <Text
                   style={[
                     styles.confirmSummaryVal,
@@ -1168,18 +1352,28 @@ export default function ArqueoScreen({ navigation, route }) {
                   <Text style={styles.actaVal}>{ultimoCierre.cantidadAbonos}</Text>
                 </View>
                 <View style={styles.actaRow}>
-                  <Text style={styles.actaLabel}>Total Esperado:</Text>
-                  <Text style={styles.actaVal}>{formatCOP(ultimoCierre.totalEsperado)}</Text>
+                  <Text style={styles.actaLabel}>Total Recaudado en Ruta:</Text>
+                  <Text style={styles.actaVal}>{formatCOP(ultimoCierre.totalGeneral || (ultimoCierre.totalEfectivo + ultimoCierre.totalTransferencias))}</Text>
                 </View>
                 <View style={styles.actaRow}>
-                  <Text style={styles.actaLabel}>Efectivo Recibido:</Text>
+                  <Text style={styles.actaLabel}>Efectivo Físico Esperado:</Text>
+                  <Text style={styles.actaVal}>{formatCOP(ultimoCierre.totalEfectivo)}</Text>
+                </View>
+                {ultimoCierre.totalTransferencias > 0 && (
+                  <View style={styles.actaRow}>
+                    <Text style={styles.actaLabel}>Transferencias en Banco:</Text>
+                    <Text style={[styles.actaVal, { color: '#1D4ED8' }]}>{formatCOP(ultimoCierre.totalTransferencias)}</Text>
+                  </View>
+                )}
+                <View style={styles.actaRow}>
+                  <Text style={styles.actaLabel}>Efectivo Físico Entregado:</Text>
                   <Text style={[styles.actaVal, { color: '#059669' }]}>
                     {formatCOP(ultimoCierre.efectivoEntregado)}
                   </Text>
                 </View>
                 <View style={styles.actaDivider} />
                 <View style={styles.actaRow}>
-                  <Text style={styles.actaLabel}>Diferencia:</Text>
+                  <Text style={styles.actaLabel}>Diferencia Caja Física:</Text>
                   <Text
                     style={[
                       styles.actaVal,
@@ -1539,6 +1733,7 @@ const styles = StyleSheet.create({
   helperChipsRow: {
     flexDirection: 'row',
     gap: 8,
+    flexWrap: 'wrap',
   },
   helperChip: {
     backgroundColor: '#ECFDF5',
@@ -1548,6 +1743,15 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: '#A7F3D0',
   },
+  helperChipPrimary: {
+    backgroundColor: '#059669',
+    borderColor: '#047857',
+  },
+  helperChipTextPrimary: {
+    fontSize: 11,
+    fontWeight: '800',
+    color: '#FFFFFF',
+  },
   helperChipReset: {
     backgroundColor: '#F1F5F9',
     borderColor: '#E2E8F0',
@@ -1556,6 +1760,21 @@ const styles = StyleSheet.create({
     fontSize: 11,
     fontWeight: '700',
     color: '#065F46',
+  },
+  efectivoBancarioNotaBox: {
+    backgroundColor: '#EFF6FF',
+    borderRadius: 8,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderWidth: 1,
+    borderColor: '#DBEAFE',
+    marginBottom: 8,
+  },
+  efectivoBancarioNotaText: {
+    fontSize: 10.5,
+    fontWeight: '600',
+    color: '#1D4ED8',
+    lineHeight: 14,
   },
   // SEMÁFORO DE CUADRE
   cuadreSemanticoCard: {
@@ -1735,6 +1954,13 @@ const styles = StyleSheet.create({
   filterPillTextActiveEmerald: {
     color: '#065F46',
   },
+  filterPillActivePurple: {
+    backgroundColor: '#F5F3FF',
+    borderColor: '#DDD6FE',
+  },
+  filterPillTextActivePurple: {
+    color: '#6D28D9',
+  },
   reciboCard: {
     backgroundColor: '#FFFFFF',
     borderRadius: 14,
@@ -1777,6 +2003,9 @@ const styles = StyleSheet.create({
   reciboMetodoTransf: {
     backgroundColor: '#EFF6FF',
   },
+  reciboMetodoMixto: {
+    backgroundColor: '#F5F3FF',
+  },
   reciboMetodoText: {
     fontSize: 9,
     fontWeight: '700',
@@ -1785,6 +2014,90 @@ const styles = StyleSheet.create({
     color: '#065F46',
   },
   reciboMetodoTextTr: {
+    color: '#1D4ED8',
+  },
+  reciboMetodoTextMix: {
+    color: '#6D28D9',
+  },
+  reciboMixtoDesgloseRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    backgroundColor: '#F8FAFC',
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 6,
+    marginBottom: 6,
+    borderWidth: 1,
+    borderColor: '#F1F5F9',
+  },
+  reciboMixtoEfText: {
+    fontSize: 10,
+    color: '#065F46',
+    fontWeight: '600',
+  },
+  reciboMixtoSepText: {
+    color: '#CBD5E1',
+    fontWeight: '800',
+    fontSize: 10,
+  },
+  reciboMixtoTrText: {
+    fontSize: 10,
+    color: '#1D4ED8',
+    fontWeight: '600',
+  },
+  reciboMixtoMontoBold: {
+    fontWeight: '800',
+  },
+  reciboTransfToggleBtn: {
+    alignSelf: 'flex-start',
+    backgroundColor: '#EFF6FF',
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 6,
+    borderWidth: 1,
+    borderColor: '#DBEAFE',
+    marginBottom: 6,
+  },
+  reciboTransfToggleText: {
+    fontSize: 9.5,
+    fontWeight: '700',
+    color: '#1E40AF',
+  },
+  reciboTransfBox: {
+    backgroundColor: '#F8FAFC',
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    padding: 8,
+    marginBottom: 6,
+  },
+  reciboTransfItemRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingVertical: 3,
+  },
+  reciboTransfItemBorder: {
+    borderTopWidth: 1,
+    borderTopColor: '#E2E8F0',
+    marginTop: 3,
+    paddingTop: 4,
+  },
+  reciboTransfBancoText: {
+    fontSize: 10.5,
+    fontWeight: '800',
+    color: '#1E293B',
+  },
+  reciboTransfRefText: {
+    fontSize: 9.5,
+    fontWeight: '600',
+    color: '#64748B',
+    fontFamily: Platform.OS === 'ios' ? 'Courier' : 'monospace',
+  },
+  reciboTransfMontoText: {
+    fontSize: 11,
+    fontWeight: '900',
     color: '#1D4ED8',
   },
   reciboEstadoBadge: {

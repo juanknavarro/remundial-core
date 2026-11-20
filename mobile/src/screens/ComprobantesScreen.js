@@ -68,6 +68,32 @@ export default function ComprobantesScreen({ navigation }) {
           if (a.estado === 'anulado') return;
           const fDt = new Date(a.fecha || a.creado_en || Date.now());
           const folio = a.id_recibo ? `REC-${String(a.id_recibo).slice(0, 10).toUpperCase()}` : 'REC-S/N';
+          const metodo = (a.metodo_pago || 'efectivo').toLowerCase().trim();
+          const transfArr = Array.isArray(a.transferencias) && a.transferencias.length > 0
+            ? a.transferencias.map((t) => ({
+                entidad_bancaria: t.entidad_bancaria || '',
+                referencia_pago: t.referencia_pago || '',
+                monto: Number(t.monto || 0),
+              }))
+            : (a.banco_transferencia || a.referencia_pago)
+              ? [{
+                  entidad_bancaria: a.banco_transferencia || 'Bancolombia',
+                  referencia_pago: a.referencia_pago || 'S/R',
+                  monto: Number(a.monto_transferencia || a.valor_abonado || 0),
+                }]
+              : [];
+
+          const sumTransf = transfArr.reduce((acc, t) => acc + (Number(t.monto) || 0), 0);
+          const montoTransf = a.monto_transferencia !== undefined && a.monto_transferencia !== null && Number(a.monto_transferencia) > 0
+            ? Number(a.monto_transferencia)
+            : sumTransf > 0
+            ? sumTransf
+            : (metodo === 'transferencia' ? Number(a.valor_abonado || 0) : 0);
+
+          const montoEf = a.monto_efectivo !== undefined && a.monto_efectivo !== null && Number(a.monto_efectivo) > 0
+            ? Number(a.monto_efectivo)
+            : (metodo === 'efectivo' ? Number(a.valor_abonado || 0) : Math.max(0, Number(a.valor_abonado || 0) - montoTransf));
+
           listaUnificada.push({
             id: `abono-${a.id_recibo}`,
             folio,
@@ -81,6 +107,10 @@ export default function ComprobantesScreen({ navigation }) {
             responsable: a.cobrador?.nombre || a.cobrador_nombre || 'Cobrador en Ruta',
             sector: a.ciudad || a.ciudad_venta || 'Ruta de Cobro',
             contratoReferencia: a.credito_id ? `CTR-${String(a.credito_id).slice(0, 8).toUpperCase()}` : null,
+            metodo_pago: metodo,
+            monto_efectivo: montoEf,
+            monto_transferencia: montoTransf,
+            transferencias: transfArr,
           });
         });
         guardarEnCache(STORAGE_KEYS.CACHE_ABONOS, resAbonos.value.data);
@@ -89,10 +119,13 @@ export default function ComprobantesScreen({ navigation }) {
         if (Array.isArray(cached)) {
           cached.forEach((a) => {
             const fDt = new Date(a.fecha || Date.now());
+            const metodo = (a.metodo_pago || 'efectivo').toLowerCase().trim();
+            const transfArr = Array.isArray(a.transferencias) ? a.transferencias : [];
             listaUnificada.push({
               id: `abono-${a.id_recibo}`,
               folio: `REC-${String(a.id_recibo).slice(0, 10).toUpperCase()}`,
               cliente: a.cliente_nombre || 'Cliente Titular',
+              cedula: a.cliente_cedula || '',
               tipo: 'Abono de Cuota',
               tipoCodigo: 'abono',
               monto: Number(a.valor_abonado || 0),
@@ -100,6 +133,10 @@ export default function ComprobantesScreen({ navigation }) {
               fechaTexto: formatearFechaLarga(fDt),
               responsable: a.cobrador_nombre || 'Cobrador',
               sector: 'Ruta de Cobro',
+              metodo_pago: metodo,
+              monto_efectivo: Number(a.monto_efectivo || (metodo === 'efectivo' ? a.valor_abonado : 0)),
+              monto_transferencia: Number(a.monto_transferencia || (metodo === 'transferencia' ? a.valor_abonado : 0)),
+              transferencias: transfArr,
             });
           });
         }
@@ -111,6 +148,31 @@ export default function ComprobantesScreen({ navigation }) {
           const fDt = new Date(c.creado_en || Date.now());
           const folio = c.codigo_contrato || `CTR-${String(c.id_contrato || '').slice(0, 8).toUpperCase()}`;
           const totalVenta = Number(c.monto_financiado || 0) + Number(c.cuota_inicial || 0);
+          const cInicial = Number(c.cuota_inicial || 0);
+          const metodo = (c.metodo_pago_inicial || (cInicial > 0 ? 'efectivo' : 'credito_directo')).toLowerCase().trim();
+          const transfArr = Array.isArray(c.transferencias) && c.transferencias.length > 0
+            ? c.transferencias.map((t) => ({
+                entidad_bancaria: t.entidad_bancaria || '',
+                referencia_pago: t.referencia_pago || '',
+                monto: Number(t.monto || 0),
+              }))
+            : (c.banco_transferencia || c.referencia_pago_inicial)
+              ? [{
+                  entidad_bancaria: c.banco_transferencia || 'Bancolombia',
+                  referencia_pago: c.referencia_pago_inicial || 'S/R',
+                  monto: Number(c.monto_inicial_transferencia || cInicial || 0),
+                }]
+              : [];
+
+          const sumTransf = transfArr.reduce((acc, t) => acc + (Number(t.monto) || 0), 0);
+          const montoTransf = c.monto_inicial_transferencia !== undefined && c.monto_inicial_transferencia !== null && Number(c.monto_inicial_transferencia) > 0
+            ? Number(c.monto_inicial_transferencia)
+            : sumTransf > 0
+            ? sumTransf
+            : (metodo === 'transferencia' ? cInicial : 0);
+
+          const montoEf = metodo === 'efectivo' ? cInicial : Math.max(0, cInicial - montoTransf);
+
           listaUnificada.push({
             id: `credito-${c.id_contrato}`,
             folio,
@@ -119,11 +181,16 @@ export default function ComprobantesScreen({ navigation }) {
             tipo: c.estado === 'pendiente' ? 'Solicitud de Crédito' : 'Venta Originada',
             tipoCodigo: 'venta',
             monto: totalVenta,
+            cuotaInicial: cInicial,
             fecha: fDt,
             fechaTexto: formatearFechaLarga(fDt),
             responsable: c.vendedor?.nombre || 'Asesor Comercial',
             sector: c.ciudad_venta || c.cliente?.ciudad || 'Punto de Venta',
             contratoReferencia: folio,
+            metodo_pago: metodo,
+            monto_efectivo: montoEf,
+            monto_transferencia: montoTransf,
+            transferencias: transfArr,
           });
         });
         guardarEnCache(STORAGE_KEYS.CACHE_CREDITOS, resCreditos.value.data);
@@ -132,6 +199,8 @@ export default function ComprobantesScreen({ navigation }) {
         if (Array.isArray(cached)) {
           cached.forEach((c) => {
             const fDt = new Date(c.creado_en || Date.now());
+            const metodo = (c.metodo_pago_inicial || 'efectivo').toLowerCase().trim();
+            const transfArr = Array.isArray(c.transferencias) ? c.transferencias : [];
             listaUnificada.push({
               id: `credito-${c.id_contrato}`,
               folio: c.codigo_contrato || `CTR-${String(c.id_contrato).slice(0, 8).toUpperCase()}`,
@@ -143,6 +212,10 @@ export default function ComprobantesScreen({ navigation }) {
               fechaTexto: formatearFechaLarga(fDt),
               responsable: 'Asesor Comercial',
               sector: 'Punto de Venta',
+              metodo_pago: metodo,
+              monto_efectivo: Number(c.cuota_inicial || 0),
+              monto_transferencia: 0,
+              transferencias: transfArr,
             });
           });
         }
@@ -181,27 +254,48 @@ export default function ComprobantesScreen({ navigation }) {
     });
   }, [transacciones, filtroTipo, busqueda]);
 
-  // Función de Compartir nativa de React Native
+  // Función de Compartir nativa de React Native con detalle bancario completo
   const handleCompartir = async (item) => {
     try {
-      const mensaje = [
+      const metodo = (item.metodo_pago || 'efectivo').toLowerCase().trim();
+      let metodoEtiqueta = '💵 Efectivo';
+      if (metodo === 'transferencia') metodoEtiqueta = '💳 Transferencia';
+      if (metodo === 'mixto') metodoEtiqueta = '💵+💳 Pago Mixto (Efectivo + Transferencia)';
+
+      const lineas = [
         '🧾 *COMPROBANTE TRANSACCIONAL OFICIAL*',
         "🏢 Remundial Arte's • Sistema Core",
         '-----------------------------------------',
         `📄 *Folio:* ${item.folio}`,
         `👤 *Cliente:* ${item.cliente}${item.cedula ? ` (CC: ${item.cedula})` : ''}`,
         `📌 *Operación:* ${item.tipo}`,
-        `💰 *Monto:* ${formatCOP(item.monto)}`,
+        `💰 *Monto Total:* ${formatCOP(item.monto)}`,
+        `💳 *Método de Pago:* ${metodoEtiqueta}`,
+      ];
+
+      if (metodo === 'mixto') {
+        lineas.push(`  • *Efectivo:* ${formatCOP(item.monto_efectivo || 0)}`);
+        lineas.push(`  • *Transferencia:* ${formatCOP(item.monto_transferencia || 0)}`);
+      }
+
+      if (Array.isArray(item.transferencias) && item.transferencias.length > 0) {
+        lineas.push('🏦 *Soportes de Transferencia:*');
+        item.transferencias.forEach((t, idx) => {
+          lineas.push(`  ${idx + 1}. ${t.entidad_bancaria || 'Banco'}: ${formatCOP(t.monto)} (Ref: ${t.referencia_pago || 'S/R'})`);
+        });
+      }
+
+      lineas.push(
         `📅 *Fecha:* ${item.fechaTexto}`,
         `📍 *Sede/Ruta:* ${item.sector}`,
         `💼 *Atendido por:* ${item.responsable}`,
         '-----------------------------------------',
-        '✅ Transacción registrada y verificada en el sistema central.',
-      ].join('\n');
+        '✅ Transacción registrada y verificada en el sistema central.'
+      );
 
       await Share.share({
         title: `Comprobante ${item.folio}`,
-        message: mensaje,
+        message: lineas.join('\n'),
       });
     } catch (error) {
       console.warn('[ComprobantesScreen] Error compartiendo comprobante:', error);
@@ -211,6 +305,7 @@ export default function ComprobantesScreen({ navigation }) {
   const renderComprobanteCard = ({ item, index }) => {
     const isExpanded = expandedIndex === index;
     const esAbono = item.tipoCodigo === 'abono';
+    const metodo = (item.metodo_pago || 'efectivo').toLowerCase().trim();
 
     return (
       <View style={[styles.card, isExpanded && styles.cardExpanded]}>
@@ -226,6 +321,35 @@ export default function ComprobantesScreen({ navigation }) {
             </View>
 
             <View style={styles.headerRightGroup}>
+              {/* Badge de Método de Pago */}
+              <View
+                style={[
+                  styles.metodoBadge,
+                  metodo === 'efectivo'
+                    ? styles.metodoBadgeEf
+                    : metodo === 'mixto'
+                    ? styles.metodoBadgeMix
+                    : styles.metodoBadgeTr,
+                ]}
+              >
+                <Text
+                  style={[
+                    styles.metodoBadgeText,
+                    metodo === 'efectivo'
+                      ? styles.metodoTextEf
+                      : metodo === 'mixto'
+                      ? styles.metodoTextMix
+                      : styles.metodoTextTr,
+                  ]}
+                >
+                  {metodo === 'efectivo'
+                    ? '💵 Efec'
+                    : metodo === 'mixto'
+                    ? '💵+💳 Mixto'
+                    : '💳 Transf'}
+                </Text>
+              </View>
+
               <View
                 style={[
                   styles.tipoBadge,
@@ -238,7 +362,7 @@ export default function ComprobantesScreen({ navigation }) {
                     esAbono ? styles.tipoTextAbono : styles.tipoTextVenta,
                   ]}
                 >
-                  {esAbono ? '💵 Abono / Cuota' : '🛍️ Venta Originada'}
+                  {esAbono ? '💵 Abono' : '🛍️ Venta'}
                 </Text>
               </View>
 
@@ -280,6 +404,49 @@ export default function ComprobantesScreen({ navigation }) {
                 <Text style={styles.refText}>Contrato: {item.contratoReferencia}</Text>
               ) : null}
               <Text style={styles.fechaText}>🕒 {item.fechaTexto}</Text>
+
+              {/* Detalle visual de Pago Mixto */}
+              {metodo === 'mixto' && (
+                <View style={styles.mixtoDesgloseBox}>
+                  <Text style={styles.mixtoDesgloseTitle}>Desglose Pago Mixto:</Text>
+                  <View style={styles.mixtoDesgloseRow}>
+                    <Text style={styles.mixtoEfText}>
+                      💵 Efec: <Text style={{ fontWeight: '800' }}>{formatCOP(item.monto_efectivo || 0)}</Text>
+                    </Text>
+                    <Text style={styles.mixtoSepText}>•</Text>
+                    <Text style={styles.mixtoTrText}>
+                      💳 Transf: <Text style={{ fontWeight: '800' }}>{formatCOP(item.monto_transferencia || 0)}</Text>
+                    </Text>
+                  </View>
+                </View>
+              )}
+
+              {/* Soportes Bancarios de Transferencia */}
+              {Array.isArray(item.transferencias) && item.transferencias.length > 0 && (
+                <View style={styles.transfCardBox}>
+                  <Text style={styles.transfCardTitle}>
+                    🏦 Soportes Bancarios ({item.transferencias.length}):
+                  </Text>
+                  {item.transferencias.map((t, tIdx) => (
+                    <View
+                      key={tIdx}
+                      style={[styles.transfCardItem, tIdx > 0 && styles.transfCardItemBorder]}
+                    >
+                      <View style={{ flex: 1, paddingRight: 6 }}>
+                        <Text style={styles.transfCardBanco}>
+                          {t.entidad_bancaria || 'Transferencia'}
+                        </Text>
+                        <Text style={styles.transfCardRef}>
+                          Ref: {t.referencia_pago || 'Sin referencia'}
+                        </Text>
+                      </View>
+                      <Text style={styles.transfCardMonto}>
+                        {formatCOP(t.monto)}
+                      </Text>
+                    </View>
+                  ))}
+                </View>
+              )}
             </View>
 
             {/* Monto detallado y Botón de Compartir */}
@@ -680,6 +847,117 @@ const styles = StyleSheet.create({
     color: '#065F46',
   },
   tipoTextVenta: {
+    color: '#1D4ED8',
+  },
+  metodoBadge: {
+    paddingHorizontal: 6,
+    paddingVertical: 3,
+    borderRadius: 6,
+    borderWidth: 1,
+  },
+  metodoBadgeEf: {
+    backgroundColor: '#ECFDF5',
+    borderColor: '#A7F3D0',
+  },
+  metodoBadgeTr: {
+    backgroundColor: '#EFF6FF',
+    borderColor: '#BFDBFE',
+  },
+  metodoBadgeMix: {
+    backgroundColor: '#F5F3FF',
+    borderColor: '#DDD6FE',
+  },
+  metodoBadgeText: {
+    fontSize: 9.5,
+    fontWeight: '800',
+  },
+  metodoTextEf: {
+    color: '#065F46',
+  },
+  metodoTextTr: {
+    color: '#1D4ED8',
+  },
+  metodoTextMix: {
+    color: '#6D28D9',
+  },
+  mixtoDesgloseBox: {
+    backgroundColor: '#F8FAFC',
+    borderRadius: 8,
+    padding: 8,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    marginTop: 6,
+    marginBottom: 6,
+  },
+  mixtoDesgloseTitle: {
+    fontSize: 9,
+    fontWeight: '800',
+    color: '#64748B',
+    marginBottom: 4,
+    letterSpacing: 0.4,
+  },
+  mixtoDesgloseRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  mixtoEfText: {
+    fontSize: 10.5,
+    color: '#065F46',
+    fontWeight: '600',
+  },
+  mixtoSepText: {
+    color: '#CBD5E1',
+    fontWeight: '800',
+    fontSize: 10,
+  },
+  mixtoTrText: {
+    fontSize: 10.5,
+    color: '#1D4ED8',
+    fontWeight: '600',
+  },
+  transfCardBox: {
+    backgroundColor: '#F8FAFC',
+    borderRadius: 8,
+    padding: 8,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    marginTop: 6,
+    marginBottom: 6,
+  },
+  transfCardTitle: {
+    fontSize: 9,
+    fontWeight: '800',
+    color: '#1E293B',
+    marginBottom: 6,
+    letterSpacing: 0.4,
+  },
+  transfCardItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingVertical: 3,
+  },
+  transfCardItemBorder: {
+    borderTopWidth: 1,
+    borderTopColor: '#E2E8F0',
+    marginTop: 3,
+    paddingTop: 4,
+  },
+  transfCardBanco: {
+    fontSize: 10.5,
+    fontWeight: '800',
+    color: '#1E293B',
+  },
+  transfCardRef: {
+    fontSize: 9.5,
+    fontWeight: '600',
+    color: '#64748B',
+    fontFamily: Platform.OS === 'ios' ? 'Courier' : 'monospace',
+  },
+  transfCardMonto: {
+    fontSize: 11,
+    fontWeight: '900',
     color: '#1D4ED8',
   },
   cardBody: {

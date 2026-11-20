@@ -294,6 +294,7 @@ export default function SupervisorDashboard({ navigation }) {
         estado: a.estado === 'conciliado' ? 'conciliado' : 'completado',
         fecha: new Date(a.fecha || a.creado_en || Date.now()),
         esAbono: true,
+        metodo_pago: (a.metodo_pago || 'efectivo').toLowerCase().trim(),
       });
     });
 
@@ -311,6 +312,7 @@ export default function SupervisorDashboard({ navigation }) {
         estado: c.estado,
         fecha: new Date(c.creado_en || Date.now()),
         esAbono: false,
+        metodo_pago: (c.metodo_pago_inicial || 'efectivo').toLowerCase().trim(),
       });
     });
 
@@ -879,9 +881,39 @@ export default function SupervisorDashboard({ navigation }) {
 
                     <View style={styles.recentItemCenter}>
                       <View style={styles.recentItemTopLine}>
-                        <Text style={styles.recentItemCliente} numberOfLines={1}>
-                          {op.cliente}
-                        </Text>
+                        <View style={styles.recentItemClienteWrap}>
+                          <Text style={styles.recentItemCliente} numberOfLines={1}>
+                            {op.cliente}
+                          </Text>
+                          {/* Badge de Método de Pago */}
+                          <View
+                            style={[
+                              styles.opMetodoBadge,
+                              op.metodo_pago === 'efectivo'
+                                ? styles.opMetodoEf
+                                : op.metodo_pago === 'mixto'
+                                ? styles.opMetodoMix
+                                : styles.opMetodoTr,
+                            ]}
+                          >
+                            <Text
+                              style={[
+                                styles.opMetodoText,
+                                op.metodo_pago === 'efectivo'
+                                  ? styles.opMetodoTextEf
+                                  : op.metodo_pago === 'mixto'
+                                  ? styles.opMetodoTextMix
+                                  : styles.opMetodoTextTr,
+                              ]}
+                            >
+                              {op.metodo_pago === 'efectivo'
+                                ? '💵 Efec'
+                                : op.metodo_pago === 'mixto'
+                                ? '💵+💳 Mixto'
+                                : '💳 Transf'}
+                            </Text>
+                          </View>
+                        </View>
                         <Text
                           style={[
                             styles.recentItemMonto,
@@ -1962,12 +1994,45 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     marginBottom: 2,
   },
+  recentItemClienteWrap: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    marginRight: 8,
+  },
   recentItemCliente: {
     fontSize: 13,
     fontWeight: '700',
     color: '#0F172A',
-    flex: 1,
-    marginRight: 8,
+    flexShrink: 1,
+  },
+  opMetodoBadge: {
+    paddingHorizontal: 5,
+    paddingVertical: 1.5,
+    borderRadius: 4,
+  },
+  opMetodoEf: {
+    backgroundColor: '#ECFDF5',
+  },
+  opMetodoTr: {
+    backgroundColor: '#EFF6FF',
+  },
+  opMetodoMix: {
+    backgroundColor: '#F5F3FF',
+  },
+  opMetodoText: {
+    fontSize: 8.5,
+    fontWeight: '800',
+  },
+  opMetodoTextEf: {
+    color: '#065F46',
+  },
+  opMetodoTextTr: {
+    color: '#1D4ED8',
+  },
+  opMetodoTextMix: {
+    color: '#6D28D9',
   },
   recentItemMonto: {
     fontSize: 13,

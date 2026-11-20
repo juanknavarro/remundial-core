@@ -230,8 +230,34 @@ async def conciliar_ruta_abonos(
     responsable = await db.get(Usuario, responsable_id)
     responsable_nombre = responsable.nombre if responsable else "Secretaría"
 
-    total_esperado = sum((a.valor_abonado for a in abonos_pendientes), Decimal("0.00"))
-    diferencia = efectivo_entregado - total_esperado
+    total_recaudado_general = sum((Decimal(str(a.valor_abonado or 0)) for a in abonos_pendientes), Decimal("0.00"))
+
+    total_esperado_efectivo = Decimal("0.00")
+    total_transferencias = Decimal("0.00")
+
+    for a in abonos_pendientes:
+        metodo = (a.metodo_pago or "efectivo").lower().strip()
+        v_abonado = Decimal(str(a.valor_abonado or 0))
+        if metodo == "efectivo":
+            total_esperado_efectivo += v_abonado
+        elif metodo == "mixto":
+            m_trans = Decimal("0.00")
+            if a.monto_transferencia is not None and Decimal(str(a.monto_transferencia)) > 0:
+                m_trans = Decimal(str(a.monto_transferencia))
+
+            if a.monto_efectivo is not None and Decimal(str(a.monto_efectivo)) > 0:
+                m_ef = Decimal(str(a.monto_efectivo))
+            else:
+                m_ef = max(Decimal("0.00"), v_abonado - m_trans)
+
+            total_esperado_efectivo += m_ef
+            total_transferencias += m_trans
+        elif metodo == "transferencia":
+            total_transferencias += v_abonado
+        else:
+            total_esperado_efectivo += v_abonado
+
+    diferencia = efectivo_entregado - total_esperado_efectivo
 
     if diferencia == Decimal("0.00"):
         cuadre_estado = "cuadrado"
@@ -240,17 +266,24 @@ async def conciliar_ruta_abonos(
     else:
         cuadre_estado = "sobrante"
 
+    detalle_auditoria = (
+        f"[Recaudo Ruta: Total ${total_recaudado_general:,.0f} | "
+        f"Efectivo Físico Esperado: ${total_esperado_efectivo:,.0f} | "
+        f"Transferencias Banco: ${total_transferencias:,.0f}]"
+    )
+    notas_completas = f"{detalle_auditoria} {notas}".strip() if notas else detalle_auditoria
+
     # Registrar el acta oficial en cierres_caja
     nuevo_cierre = CierreCaja(
         cobrador_id=cobrador_id,
         responsable_id=responsable_id,
         fecha_cierre=datetime.now(),
-        total_esperado=total_esperado,
+        total_esperado=total_esperado_efectivo,
         efectivo_entregado=efectivo_entregado,
         diferencia=diferencia,
         cuadre_estado=cuadre_estado,
         abonos_conciliados_count=len(abonos_pendientes),
-        notas=notas,
+        notas=notas_completas,
     )
     db.add(nuevo_cierre)
     await db.flush()  # Obtener el ID generado para relacionar los abonos
@@ -268,14 +301,14 @@ async def conciliar_ruta_abonos(
         "cobrador_nombre": cobrador_nombre,
         "responsable_id": responsable_id,
         "responsable_nombre": responsable_nombre,
-        "total_esperado": total_esperado,
+        "total_esperado": total_esperado_efectivo,
         "efectivo_entregado": efectivo_entregado,
         "diferencia": diferencia,
         "cuadre_estado": cuadre_estado,
         "abonos_conciliados_count": len(abonos_pendientes),
         "fecha_conciliacion": nuevo_cierre.fecha_cierre,
-        "mensaje": f"Conciliación finalizada: {len(abonos_pendientes)} abonos conciliados. Estado de caja: {cuadre_estado}.",
-        "notas": notas,
+        "mensaje": f"Conciliación finalizada: {len(abonos_pendientes)} abonos conciliados. Estado de caja física: {cuadre_estado}.",
+        "notas": notas_completas,
     }
 
 

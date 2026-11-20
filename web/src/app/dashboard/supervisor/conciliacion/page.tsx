@@ -31,6 +31,13 @@ import {
 } from 'lucide-react';
 import { formatCOP, cn } from '@/lib/utils';
 import { api } from '@/lib/api';
+import { formatCurrencyInput, parseCurrencyInput } from '@/lib/currency';
+
+interface DetalleTransferencia {
+  entidad_bancaria: string;
+  referencia_pago: string;
+  monto: number;
+}
 
 interface Cobrador {
   id: string;
@@ -55,6 +62,11 @@ interface AbonoItem {
   metodo_pago: string;
   saldo_restante_credito?: number;
   numero_contrato?: string;
+  monto_efectivo?: number;
+  monto_transferencia?: number;
+  banco_transferencia?: string;
+  referencia_pago?: string;
+  transferencias?: DetalleTransferencia[];
 }
 
 interface CierreHistorial {
@@ -72,7 +84,41 @@ interface CierreHistorial {
   notas?: string;
 }
 
-type FiltroPill = 'todos' | 'pendientes' | 'conciliados' | 'efectivo' | 'transferencia' | 'saldados';
+type FiltroPill = 'todos' | 'pendientes' | 'conciliados' | 'efectivo' | 'transferencia' | 'mixto' | 'saldados';
+
+export function calcularDesgloseAbono(abono: AbonoItem) {
+  const metodo = (abono.metodo_pago || 'efectivo').toLowerCase().trim();
+  const valorTotal = Number(abono.valor_abonado || 0);
+
+  if (metodo === 'efectivo') {
+    return { efectivo: valorTotal, transferencia: 0 };
+  }
+
+  if (metodo === 'transferencia') {
+    let montoTrans = Number(abono.monto_transferencia || 0);
+    if (montoTrans <= 0 && Array.isArray(abono.transferencias) && abono.transferencias.length > 0) {
+      montoTrans = abono.transferencias.reduce((acc, t) => acc + Number(t.monto || 0), 0);
+    }
+    if (montoTrans <= 0) {
+      montoTrans = valorTotal;
+    }
+    return { efectivo: 0, transferencia: montoTrans };
+  }
+
+  if (metodo === 'mixto') {
+    let montoTrans = Number(abono.monto_transferencia || 0);
+    if (montoTrans <= 0 && Array.isArray(abono.transferencias) && abono.transferencias.length > 0) {
+      montoTrans = abono.transferencias.reduce((acc, t) => acc + Number(t.monto || 0), 0);
+    }
+    let montoEf = Number(abono.monto_efectivo || 0);
+    if (montoEf <= 0 && valorTotal > montoTrans) {
+      montoEf = valorTotal - montoTrans;
+    }
+    return { efectivo: montoEf, transferencia: montoTrans };
+  }
+
+  return { efectivo: valorTotal, transferencia: 0 };
+}
 
 function ConciliacionRutasContent() {
   const searchParams = useSearchParams();
@@ -104,6 +150,7 @@ function ConciliacionRutasContent() {
     cobrador: string;
     responsable: string;
     totalEsperado: number;
+    totalEsperadoGeneral?: number;
     efectivoEntregado: number;
     diferencia: number;
     cuadreEstado: string;
@@ -158,6 +205,23 @@ function ConciliacionRutasContent() {
               ? Number(a.saldo_restante_credito)
               : undefined,
           numero_contrato: a.numero_contrato,
+          monto_efectivo:
+            a.monto_efectivo !== undefined && a.monto_efectivo !== null
+              ? Number(a.monto_efectivo)
+              : undefined,
+          monto_transferencia:
+            a.monto_transferencia !== undefined && a.monto_transferencia !== null
+              ? Number(a.monto_transferencia)
+              : undefined,
+          banco_transferencia: a.banco_transferencia || undefined,
+          referencia_pago: a.referencia_pago || undefined,
+          transferencias: Array.isArray(a.transferencias)
+            ? a.transferencias.map((t: any) => ({
+                entidad_bancaria: t.entidad_bancaria || 'Bancolombia',
+                referencia_pago: t.referencia_pago || '',
+                monto: Number(t.monto || 0),
+              }))
+            : undefined,
         }));
         setAbonos(mappedAbonos);
       }
@@ -226,7 +290,11 @@ function ConciliacionRutasContent() {
   }, [abonosPendientes]);
 
   const pendientesTransferencias = useMemo(() => {
-    return abonosPendientes.filter((a) => a.metodo_pago !== 'efectivo');
+    return abonosPendientes.filter((a) => a.metodo_pago === 'transferencia');
+  }, [abonosPendientes]);
+
+  const pendientesMixto = useMemo(() => {
+    return abonosPendientes.filter((a) => a.metodo_pago === 'mixto');
   }, [abonosPendientes]);
 
   // Clasificación por Impacto en Cartera (Parciales vs Saldados)
@@ -246,20 +314,26 @@ function ConciliacionRutasContent() {
   }, [abonosPendientes]);
 
   const totalEsperadoEfectivo = useMemo(() => {
-    return pendientesEfectivo.reduce((acc, a) => acc + a.valor_abonado, 0);
-  }, [pendientesEfectivo]);
+    return abonosPendientes.reduce((acc, a) => acc + calcularDesgloseAbono(a).efectivo, 0);
+  }, [abonosPendientes]);
 
   const totalEsperadoTransferencias = useMemo(() => {
-    return pendientesTransferencias.reduce((acc, a) => acc + a.valor_abonado, 0);
-  }, [pendientesTransferencias]);
+    return abonosPendientes.reduce((acc, a) => acc + calcularDesgloseAbono(a).transferencia, 0);
+  }, [abonosPendientes]);
 
   // Sincronizar input de efectivo físico sugerido
   useEffect(() => {
-    setEfectivoEntregadoInput(totalEsperadoGeneral.toString());
-  }, [totalEsperadoGeneral, cobradorSeleccionado]);
+    if (totalEsperadoEfectivo > 0) {
+      setEfectivoEntregadoInput(formatCurrencyInput(totalEsperadoEfectivo));
+    } else {
+      setEfectivoEntregadoInput('');
+    }
+  }, [totalEsperadoEfectivo, cobradorSeleccionado]);
 
-  const efectivoEntregadoNum = parseFloat(efectivoEntregadoInput) || 0;
-  const diferencia = efectivoEntregadoNum - totalEsperadoGeneral;
+  const efectivoEntregadoNum = parseCurrencyInput(efectivoEntregadoInput);
+  // REGLA DE CAJA FÍSICA ESTRICTA: La diferencia se calcula exclusivamente contra el efectivo físico esperado.
+  // El dinero que entró por transferencia bancaria está en las cuentas bancarias de la empresa y no en manos del cobrador.
+  const diferencia = efectivoEntregadoNum - totalEsperadoEfectivo;
 
   const estadoCuadre = useMemo(() => {
     if (diferencia === 0) return 'cuadrado';
@@ -276,7 +350,8 @@ function ConciliacionRutasContent() {
       if (filtroPill === 'pendientes' && a.estado !== 'registrado') return false;
       if (filtroPill === 'conciliados' && a.estado !== 'conciliado') return false;
       if (filtroPill === 'efectivo' && a.metodo_pago !== 'efectivo') return false;
-      if (filtroPill === 'transferencia' && a.metodo_pago === 'efectivo') return false;
+      if (filtroPill === 'transferencia' && a.metodo_pago !== 'transferencia') return false;
+      if (filtroPill === 'mixto' && a.metodo_pago !== 'mixto') return false;
       if (filtroPill === 'saldados' && !(a.saldo_restante_credito !== undefined && a.saldo_restante_credito <= 0)) {
         return false;
       }
@@ -289,7 +364,13 @@ function ConciliacionRutasContent() {
         (a.cliente_cedula && a.cliente_cedula.toLowerCase().includes(term)) ||
         a.id_recibo.toLowerCase().includes(term) ||
         a.credito_id.toLowerCase().includes(term) ||
-        (a.numero_contrato && a.numero_contrato.toLowerCase().includes(term))
+        (a.numero_contrato && a.numero_contrato.toLowerCase().includes(term)) ||
+        (a.banco_transferencia && a.banco_transferencia.toLowerCase().includes(term)) ||
+        (a.referencia_pago && a.referencia_pago.toLowerCase().includes(term)) ||
+        (a.transferencias && a.transferencias.some((t) =>
+          t.entidad_bancaria.toLowerCase().includes(term) ||
+          t.referencia_pago.toLowerCase().includes(term)
+        ))
       );
     });
   }, [todosAbonosCobrador, filtroPill, busqueda]);
@@ -318,7 +399,8 @@ function ConciliacionRutasContent() {
         id: data?.id,
         cobrador: data?.cobrador_nombre || cobradorSeleccionado.nombre,
         responsable: data?.responsable_nombre || 'Secretaría',
-        totalEsperado: Number(data?.total_esperado ?? totalEsperadoGeneral),
+        totalEsperado: Number(data?.total_esperado ?? totalEsperadoEfectivo),
+        totalEsperadoGeneral: totalEsperadoGeneral,
         efectivoEntregado: Number(data?.efectivo_entregado ?? efectivoEntregadoNum),
         diferencia: Number(data?.diferencia ?? diferencia),
         cuadreEstado: data?.cuadre_estado || estadoCuadre,
@@ -558,10 +640,10 @@ function ConciliacionRutasContent() {
                       {formatCOP(totalEsperadoGeneral)}
                     </p>
 
-                    {/* Desglose Efectivo vs Transferencia */}
-                    <div className="mt-3 grid grid-cols-2 gap-2 text-xs">
+                    {/* Desglose Efectivo vs Transferencia vs Mixto */}
+                    <div className={cn("mt-3 grid gap-2 text-xs", pendientesMixto.length > 0 ? "grid-cols-3" : "grid-cols-2")}>
                       <div className="p-2 rounded-xl bg-slate-50 border border-slate-100">
-                        <span className="text-[10px] uppercase font-bold text-slate-500 block flex items-center gap-1">
+                        <span className="text-[10px] uppercase font-bold text-slate-500 flex items-center gap-1">
                           <Banknote className="w-3 h-3 text-emerald-600" />
                           Efectivo Físico
                         </span>
@@ -569,12 +651,12 @@ function ConciliacionRutasContent() {
                           {formatCOP(totalEsperadoEfectivo)}
                         </span>
                         <span className="text-[10px] text-slate-400 font-mono">
-                          {pendientesEfectivo.length} recibos
+                          {pendientesEfectivo.length} puro(s)
                         </span>
                       </div>
 
                       <div className="p-2 rounded-xl bg-slate-50 border border-slate-100">
-                        <span className="text-[10px] uppercase font-bold text-slate-500 block flex items-center gap-1">
+                        <span className="text-[10px] uppercase font-bold text-slate-500 flex items-center gap-1">
                           <Smartphone className="w-3 h-3 text-blue-600" />
                           Transferencias
                         </span>
@@ -582,9 +664,24 @@ function ConciliacionRutasContent() {
                           {formatCOP(totalEsperadoTransferencias)}
                         </span>
                         <span className="text-[10px] text-slate-400 font-mono">
-                          {pendientesTransferencias.length} recibos
+                          {pendientesTransferencias.length} pura(s)
                         </span>
                       </div>
+
+                      {pendientesMixto.length > 0 && (
+                        <div className="p-2 rounded-xl bg-purple-50/50 border border-purple-100">
+                          <span className="text-[10px] uppercase font-bold text-purple-700 flex items-center gap-1">
+                            <CreditCard className="w-3 h-3 text-purple-600" />
+                            Mixtos
+                          </span>
+                          <span className="font-mono font-bold text-purple-900 block text-xs">
+                            {pendientesMixto.length} rec.
+                          </span>
+                          <span className="text-[10px] text-purple-600/80 font-mono">
+                            Desglosados
+                          </span>
+                        </div>
+                      )}
                     </div>
                   </div>
 
@@ -609,14 +706,15 @@ function ConciliacionRutasContent() {
                     </div>
 
                     <div className="mt-2 relative">
-                      <span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 font-bold text-sm">$</span>
+                      <span className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400 font-bold text-base font-mono">$</span>
                       <input
-                        type="number"
+                        type="text"
+                        inputMode="numeric"
                         disabled={todosAbonosCobrador.length === 0}
                         value={efectivoEntregadoInput}
-                        onChange={(e) => setEfectivoEntregadoInput(e.target.value)}
+                        onChange={(e) => setEfectivoEntregadoInput(formatCurrencyInput(e.target.value))}
                         placeholder="0"
-                        className="w-full pl-8 pr-4 py-2.5 rounded-xl border border-slate-300 text-2xl font-black font-mono text-slate-900 focus:outline-hidden focus:ring-2 focus:ring-slate-900 disabled:bg-slate-50 disabled:text-slate-500"
+                        className="w-full pl-9 pr-4 py-2.5 rounded-xl border border-slate-300 text-2xl font-black font-mono text-slate-900 focus:outline-hidden focus:ring-2 focus:ring-slate-900 disabled:bg-slate-50 disabled:text-slate-500"
                       />
                     </div>
 
@@ -624,22 +722,30 @@ function ConciliacionRutasContent() {
                     <div className="mt-2.5 flex items-center gap-1.5 flex-wrap">
                       <button
                         type="button"
-                        onClick={() => setEfectivoEntregadoInput(totalEsperadoGeneral.toString())}
-                        className="px-2 py-1 rounded-lg bg-slate-100 hover:bg-slate-200 text-[11px] font-semibold text-slate-700 transition-colors cursor-pointer"
+                        onClick={() => setEfectivoEntregadoInput(formatCurrencyInput(totalEsperadoEfectivo))}
+                        className="px-2.5 py-1 rounded-lg bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 text-[11px] font-bold text-emerald-800 transition-colors cursor-pointer"
+                        title="Fijar valor exacto esperado en efectivo físico"
                       >
-                        Auto-llenar Total ({formatCOP(totalEsperadoGeneral)})
+                        Auto-llenar Efectivo ({formatCOP(totalEsperadoEfectivo)})
                       </button>
-                      {totalEsperadoTransferencias > 0 && (
-                        <button
-                          type="button"
-                          onClick={() => setEfectivoEntregadoInput(totalEsperadoEfectivo.toString())}
-                          className="px-2 py-1 rounded-lg bg-blue-50 hover:bg-blue-100 text-[11px] font-semibold text-blue-700 transition-colors cursor-pointer"
-                          title="Fijar solo el valor en efectivo físico"
-                        >
-                          Solo Efectivo ({formatCOP(totalEsperadoEfectivo)})
-                        </button>
-                      )}
+                      <button
+                        type="button"
+                        onClick={() => setEfectivoEntregadoInput('0')}
+                        className="px-2 py-1 rounded-lg bg-slate-100 hover:bg-slate-200 text-[11px] font-semibold text-slate-600 transition-colors cursor-pointer"
+                      >
+                        $ 0
+                      </button>
                     </div>
+
+                    {/* Aviso informativo de transferencias bancarias */}
+                    {totalEsperadoTransferencias > 0 && (
+                      <div className="mt-3 p-2.5 rounded-xl bg-blue-50/70 border border-blue-200/80 text-[11px] text-blue-900 flex items-start gap-1.5 leading-snug">
+                        <Smartphone className="w-3.5 h-3.5 text-blue-600 shrink-0 mt-0.5" />
+                        <span>
+                          Las transferencias (<strong className="font-mono">{formatCOP(totalEsperadoTransferencias)}</strong>) ingresaron directamente a la cuenta bancaria de la empresa y no se entregan en efectivo físico.
+                        </span>
+                      </div>
+                    )}
                   </div>
 
                   <p className="text-[11px] text-slate-500 mt-3 pt-2 border-t border-slate-100">
@@ -751,6 +857,7 @@ function ConciliacionRutasContent() {
                             cobrador: cierreCobrador.cobrador_nombre,
                             responsable: cierreCobrador.responsable_nombre,
                             totalEsperado: cierreCobrador.total_esperado,
+                            totalEsperadoGeneral: cierreCobrador.total_esperado,
                             efectivoEntregado: cierreCobrador.efectivo_entregado,
                             diferencia: cierreCobrador.diferencia,
                             cuadreEstado: cierreCobrador.cuadre_estado,
@@ -877,7 +984,21 @@ function ConciliacionRutasContent() {
                       )}
                     >
                       <Smartphone className="w-3.5 h-3.5" />
-                      Transferencias ({todosAbonosCobrador.filter((a) => a.metodo_pago !== 'efectivo').length})
+                      Transferencias ({todosAbonosCobrador.filter((a) => a.metodo_pago === 'transferencia').length})
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => setFiltroPill('mixto')}
+                      className={cn(
+                        'px-3 py-1 rounded-lg font-semibold transition-colors cursor-pointer shrink-0 flex items-center gap-1',
+                        filtroPill === 'mixto'
+                          ? 'bg-purple-600 text-white'
+                          : 'bg-purple-50 text-purple-700 border border-purple-200 hover:bg-purple-100'
+                      )}
+                    >
+                      <CreditCard className="w-3.5 h-3.5" />
+                      Mixto ({todosAbonosCobrador.filter((a) => a.metodo_pago === 'mixto').length})
                     </button>
 
                     <button
@@ -923,10 +1044,13 @@ function ConciliacionRutasContent() {
                       ) : (
                         abonosFiltrados.map((abono) => {
                           const isConciliado = abono.estado === 'conciliado';
-                          const esTransferencia = abono.metodo_pago !== 'efectivo';
+                          const metodo = (abono.metodo_pago || 'efectivo').toLowerCase().trim();
+                          const esMixto = metodo === 'mixto';
+                          const esTransferencia = metodo === 'transferencia';
                           const esSaldado =
                             abono.saldo_restante_credito !== undefined &&
                             abono.saldo_restante_credito <= 0;
+                          const desglose = calcularDesgloseAbono(abono);
 
                           return (
                             <tr key={abono.id_recibo} className="hover:bg-slate-50/60 transition-colors">
@@ -943,7 +1067,12 @@ function ConciliacionRutasContent() {
                                     <Clock className="w-3 h-3" />
                                     {abono.fecha}
                                   </span>
-                                  {esTransferencia ? (
+                                  {esMixto ? (
+                                    <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-bold bg-purple-50 text-purple-700 border border-purple-200">
+                                      <CreditCard className="w-2.5 h-2.5" />
+                                      💵+💳 Mixto
+                                    </span>
+                                  ) : esTransferencia ? (
                                     <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-bold bg-blue-50 text-blue-700 border border-blue-200">
                                       <Smartphone className="w-2.5 h-2.5" />
                                       Transferencia
@@ -955,6 +1084,14 @@ function ConciliacionRutasContent() {
                                     </span>
                                   )}
                                 </div>
+
+                                {esMixto && (
+                                  <div className="mt-1 text-[10px] font-mono font-medium text-slate-600 bg-purple-50/60 px-2 py-0.5 rounded border border-purple-100 inline-block">
+                                    <span className="text-emerald-700 font-bold">Ef: {formatCOP(desglose.efectivo)}</span>
+                                    <span className="mx-1 text-slate-300">•</span>
+                                    <span className="text-blue-700 font-bold">Tr: {formatCOP(desglose.transferencia)}</span>
+                                  </div>
+                                )}
                               </td>
 
                               {/* Cliente */}
@@ -992,9 +1129,34 @@ function ConciliacionRutasContent() {
                                 </div>
                               </td>
 
-                              {/* Monto Abonado */}
-                              <td className="px-6 py-4 font-mono font-bold text-sm text-slate-900">
-                                {formatCOP(abono.valor_abonado)}
+                              {/* Monto Recaudado & Detalles Bancarios */}
+                              <td className="px-6 py-4">
+                                <span className="font-mono font-bold text-sm text-slate-900 block">
+                                  {formatCOP(abono.valor_abonado)}
+                                </span>
+                                {abono.transferencias && abono.transferencias.length > 0 ? (
+                                  <div className="mt-1 space-y-1">
+                                    {abono.transferencias.map((tr, trIdx) => (
+                                      <div
+                                        key={trIdx}
+                                        className="text-[10px] font-mono bg-blue-50/80 border border-blue-100 rounded px-1.5 py-0.5 text-blue-900 flex items-center justify-between gap-1.5"
+                                      >
+                                        <span className="font-semibold text-blue-700">{tr.entidad_bancaria || 'Banco'}</span>
+                                        <span>{formatCOP(tr.monto)}</span>
+                                        {tr.referencia_pago ? (
+                                          <span className="text-slate-400 text-[9px]">#{tr.referencia_pago}</span>
+                                        ) : null}
+                                      </div>
+                                    ))}
+                                  </div>
+                                ) : (esTransferencia || esMixto) && (abono.banco_transferencia || abono.referencia_pago) ? (
+                                  <div className="mt-1 text-[10px] font-mono text-blue-700 bg-blue-50/60 px-1.5 py-0.5 rounded border border-blue-100 inline-block">
+                                    <span className="font-semibold">{abono.banco_transferencia || 'Transferencia'}</span>
+                                    {abono.referencia_pago && (
+                                      <span className="text-slate-500 ml-1">#{abono.referencia_pago}</span>
+                                    )}
+                                  </div>
+                                ) : null}
                               </td>
 
                               {/* GPS */}
@@ -1131,6 +1293,7 @@ function ConciliacionRutasContent() {
                               cobrador: cierre.cobrador_nombre,
                               responsable: cierre.responsable_nombre,
                               totalEsperado: cierre.total_esperado,
+                              totalEsperadoGeneral: cierre.total_esperado,
                               efectivoEntregado: cierre.efectivo_entregado,
                               diferencia: cierre.diferencia,
                               cuadreEstado: cierre.cuadre_estado,
@@ -1186,25 +1349,31 @@ function ConciliacionRutasContent() {
                 <span className="font-mono font-bold text-slate-900">{formatCOP(totalEsperadoGeneral)}</span>
               </div>
               <div className="flex justify-between text-[11px] text-slate-500 pl-2">
-                <span>• Efectivo Físico ({pendientesEfectivo.length}):</span>
-                <span className="font-mono font-medium">{formatCOP(totalEsperadoEfectivo)}</span>
+                <span>• Efectivo Físico Esperado:</span>
+                <span className="font-mono font-semibold text-emerald-700">{formatCOP(totalEsperadoEfectivo)}</span>
               </div>
               <div className="flex justify-between text-[11px] text-slate-500 pl-2">
-                <span>• Transferencias Bancarias ({pendientesTransferencias.length}):</span>
-                <span className="font-mono font-medium">{formatCOP(totalEsperadoTransferencias)}</span>
+                <span>• Transferencias Bancarias (En banco):</span>
+                <span className="font-mono font-semibold text-blue-700">{formatCOP(totalEsperadoTransferencias)}</span>
               </div>
+              {pendientesMixto.length > 0 && (
+                <div className="flex justify-between text-[11px] text-purple-700 pl-2 font-medium">
+                  <span>• Recaudos Mixtos (Efectivo + Transf.):</span>
+                  <span className="font-mono font-semibold">{pendientesMixto.length} recibos</span>
+                </div>
+              )}
               <div className="flex justify-between text-[11px] text-purple-700 pl-2 font-semibold">
                 <span>• Créditos Saldados en Ruta:</span>
                 <span>{pendientesSaldados.length} contratos cancelados</span>
               </div>
 
               <div className="pt-2 border-t border-slate-200 flex justify-between">
-                <span className="text-slate-700 font-bold">Efectivo Recibido en Caja:</span>
+                <span className="text-slate-700 font-bold">Efectivo Físico Recibido en Caja:</span>
                 <span className="font-mono font-bold text-slate-900">{formatCOP(efectivoEntregadoNum)}</span>
               </div>
 
               <div className="pt-1 flex justify-between font-bold">
-                <span className="text-slate-700">Diferencia de Cuadre:</span>
+                <span className="text-slate-700">Diferencia Caja Física:</span>
                 <span
                   className={cn(
                     'font-mono',
@@ -1300,18 +1469,20 @@ function ConciliacionRutasContent() {
               {/* Ficha Numérica */}
               <div className="p-4 rounded-xl bg-slate-50 border border-slate-200 space-y-2">
                 <div className="flex justify-between">
-                  <span className="text-slate-600">Total Reportado en Sistema:</span>
-                  <span className="font-mono font-bold text-slate-900">{formatCOP(ultimoCierre.totalEsperado)}</span>
+                  <span className="text-slate-600">Total General en Ruta:</span>
+                  <span className="font-mono font-bold text-slate-900">
+                    {formatCOP(ultimoCierre.totalEsperadoGeneral ?? (ultimoCierre.totalEfectivo + ultimoCierre.totalTransferencias))}
+                  </span>
                 </div>
 
                 <div className="flex justify-between text-[11px] text-slate-500 pl-2">
-                  <span>• Recaudos en Efectivo Físico:</span>
-                  <span className="font-mono font-medium">{formatCOP(ultimoCierre.totalEfectivo)}</span>
+                  <span>• Efectivo Físico Esperado:</span>
+                  <span className="font-mono font-semibold text-emerald-700">{formatCOP(ultimoCierre.totalEfectivo)}</span>
                 </div>
 
                 <div className="flex justify-between text-[11px] text-slate-500 pl-2">
-                  <span>• Recaudos en Transferencias:</span>
-                  <span className="font-mono font-medium">{formatCOP(ultimoCierre.totalTransferencias)}</span>
+                  <span>• Transferencias Bancarias (En cuenta):</span>
+                  <span className="font-mono font-semibold text-blue-700">{formatCOP(ultimoCierre.totalTransferencias)}</span>
                 </div>
 
                 <div className="flex justify-between pt-1 border-t border-slate-200">
@@ -1320,7 +1491,7 @@ function ConciliacionRutasContent() {
                 </div>
 
                 <div className="pt-2 border-t border-slate-200 flex justify-between font-bold text-sm">
-                  <span>Diferencia Final:</span>
+                  <span>Diferencia Caja Física:</span>
                   <span
                     className={cn(
                       'font-mono',
